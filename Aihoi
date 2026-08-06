@@ -3,7 +3,7 @@ local SaveManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/l
 local ThemeManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/lrexzyq/CreU/main/ThemeManager.lua'))()
 
 local Window = Library:CreateWindow({
-    Title = 'CreU UI | Ragebot + Underground',
+    Title = 'CreU UI | Ragebot + Underground + Aimbot',
     Center = true,
     AutoShow = true,
     TabPadding = 8,
@@ -24,628 +24,180 @@ local function safeRequire(obj)
 end
 
 -- ============================================================
--- TAB MAIN – Ragebot (bên phải) + Underground (bên trái)
+-- UNDERGROUND
 -- ============================================================
-local MainTab = Window:AddTab('Main')
+undergroundEnabled = false
+undergroundDepth = 2.2
+undergroundConn = nil
+undergroundRealCF = nil
+undergroundRealVel = nil
+undergroundRealAngVel = nil
+undergroundRenderConn = nil
 
--- === Bên trái: Underground (Anti-Aim) ===
-local LeftGroup = MainTab:AddLeftGroupbox('Underground (Anti-Aim)')
-
-LeftGroup:AddToggle('UndergroundToggle', {
-    Text = 'underground',
-    Default = false,
-    Callback = function(val) Underground:setEnabled(val) end
-})
-
-LeftGroup:AddSlider('UndergroundDepth', {
-    Text = 'depth',
-    Default = 2.2,
-    Min = 0.5,
-    Max = 10,
-    Rounding = 1,
-    Callback = function(val) Underground:setDepth(val) end
-})
-
--- === Bên phải: Ragebot (giống hệt file InstanceSource) ===
-local RightGroup = MainTab:AddRightTabbox()
-local ragebotTab = RightGroup:AddTab('ragebot')
-
--- Các biến điều khiển dependency (giống file instance)
-local attackUnderVisGate = { Type = "Toggle", Value = false }
-local attackCustomVisGate = { Type = "Toggle", Value = false }
-
-local function syncAtkDeps()
-    local mode = config.target.attackPosition or "default"
-    local custom = config.target.attackCustomEnabled == true
-    attackUnderVisGate.Value = (mode == "under" and not custom)
-    attackCustomVisGate.Value = custom
-    if attackUnderDep and attackUnderDep.Update then attackUnderDep:Update() end
-    if attackCustomDep and attackCustomDep.Update then attackCustomDep:Update() end
-end
-
--- Toggle chính
-ragebotTab:AddToggle('TargetOn', {
-    Text = 'enable',
-    Default = false,
-    Callback = function(val)
-        config.target.rageMasterOn = val
-        if config.target.auto then return end
-        if val then
-            local target = nearest()
-            if target then
-                config.target.manualkey = true
-                settarget(target)
-            end
-        else
-            cleartarget()
-        end
-    end
-}):AddKeyPicker('TargetKey', {
-    Text = 'Ragebot',
-    Default = 'None',
-    Mode = 'Toggle',
-    NoUI = true,
-    SyncToggleState = false,
-    Callback = function()
-        if config.target.auto then return end
-        if config.target.enabled and config.target.character then
-            cleartarget()
-        else
-            local target = nearest()
-            if target then
-                config.target.manualkey = true
-                settarget(target)
-            end
-        end
-    end
-})
-
-ragebotTab:AddToggle('AutoTarget', {
-    Text = 'auto target',
-    Default = false,
-    Callback = function(val) config.target.auto = val end
-})
-
--- Attack position
-ragebotTab:AddDropdown('AutoTargetAttackPos', {
-    Text = 'attack position',
-    Default = 'default',
-    Values = { 'default', 'under' },
-    Callback = function(val)
-        config.target.attackPosition = val
-        syncAtkDeps()
-        if config.state.csyncactive and refreshAtk then refreshAtk() end
-    end,
-})
-
-ragebotTab:AddToggle('AttackCustomOverride', {
-    Text = 'attack position',
-    Default = false,
-    Tooltip = 'overrides attack position dropdown when enabled',
-    Callback = function(val)
-        config.target.attackCustomEnabled = val
-        syncAtkDeps()
-        if config.state.csyncactive and refreshAtk then refreshAtk() end
-    end,
-})
-
--- Dependency box cho under offset
-local attackUnderDep = ragebotTab:AddDependencyBox()
-attackUnderDep:AddSlider('UnderAttackOffset', {
-    Text = 'under offset',
-    Default = 4,
-    Min = 1,
-    Max = 25,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(val)
-        config.target.underOffset = val
-        if config.target.attackPosition == "under" and not config.target.attackCustomEnabled and config.state.csyncactive and refreshAtk then
-            refreshAtk()
-        end
-    end,
-})
-attackUnderDep:SetupDependencies({ { attackUnderVisGate, true } })
-
--- Dependency box cho custom attack position
-local attackCustomDep = ragebotTab:AddDependencyBox()
-attackCustomDep:AddSlider('CustomAttackHeight', {
-    Text = 'orbit height',
-    Default = 2,
-    Min = -25,
-    Max = 30,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(val)
-        config.target.customHeight = val
-        if config.target.attackCustomEnabled and config.state.csyncactive and refreshAtk then refreshAtk() end
-    end,
-})
-attackCustomDep:AddSlider('CustomAttackFront', {
-    Text = 'front offset',
-    Default = 0,
-    Min = -20,
-    Max = 20,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(val)
-        config.target.customFront = val
-        if config.target.attackCustomEnabled and config.state.csyncactive and refreshAtk then refreshAtk() end
-    end,
-})
-attackCustomDep:AddSlider('CustomAttackSide', {
-    Text = 'side offset',
-    Default = 0,
-    Min = -20,
-    Max = 20,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(val)
-        config.target.customSide = val
-        if config.target.attackCustomEnabled and config.state.csyncactive and refreshAtk then refreshAtk() end
-    end,
-})
-attackCustomDep:AddSlider('CustomAttackVertical', {
-    Text = 'vertical offset',
-    Default = 0,
-    Min = -25,
-    Max = 30,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(val)
-        config.target.customVertical = val
-        if config.target.attackCustomEnabled and config.state.csyncactive and refreshAtk then refreshAtk() end
-    end,
-})
-attackCustomDep:AddSlider('CustomAttackRadius', {
-    Text = 'orbit radius',
-    Default = 0,
-    Min = 0,
-    Max = 25,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(val)
-        config.target.customRadius = val
-        if config.target.attackCustomEnabled and config.state.csyncactive and refreshAtk then refreshAtk() end
-    end,
-})
-attackCustomDep:SetupDependencies({ { attackCustomVisGate, true } })
-
-syncAtkDeps()
-task.defer(syncAtkDeps)
-
-ragebotTab:AddDivider()
-
--- Weapon pick
-ragebotTab:AddDropdown('RageWeaponPick', {
-    Text = 'weapon',
-    Default = 'primary',
-    Values = { 'primary', 'secondary', 'melee' },
-    Callback = function(val)
-        config.target.weaponPick = val
-        if config.state.csyncactive and refreshAtk then refreshAtk() end
-        if eqSlot then eqSlot() end
-    end,
-})
-
--- Hit part
-ragebotTab:AddDropdown('TargetPart', {
-    Text = 'hit part',
-    Default = 'Head',
-    Values = {'Head', 'HumanoidRootPart', 'Torso', 'UpperTorso', 'Closest', 'Random'},
-    Callback = function(val) config.target.hitpart = val end
-})
-
-ragebotTab:AddDivider()
-
--- Shoot attempts
-ragebotTab:AddSlider('ShootAttempts', {
-    Text = 'shoot attempts',
-    Default = 1,
-    Min = 1,
-    Max = 3,
-    Rounding = 0,
-    Suffix = 'x',
-    Callback = function(val)
-        config.target.shootAttempts = math.clamp(math.floor(tonumber(val) or 1), 1, 3)
-    end
-})
-
-ragebotTab:AddDivider()
-
--- Prediction
-ragebotTab:AddToggle('PredictT', {
-    Text = 'prediction',
-    Default = false,
-    Callback = function(val) config.prediction.enabled = val end
-})
-
-ragebotTab:AddSlider('PredictMul', {
-    Text = 'prediction mult',
-    Default = 1.2,
-    Min = 0.1,
-    Max = 3.0,
-    Rounding = 1,
-    Callback = function(val) config.prediction.multiplier = val end
-})
-
-ragebotTab:AddDivider()
-
--- Void spam
-ragebotTab:AddToggle('VoidSpam', {
-    Text = 'voidspam',
-    Default = false,
-    Callback = function(val)
-        config.voidspam.enabled = val
-        if val then
-            if config.target.immune then
-                config.voidspam.phase = nil
-                return
-            end
-            if isSling(getweapon()) then
-                config.voidspam.lastswitch = tick()
-                config.voidspam.phase = "shoot"
-                config.voidspam.currentduration = randVs(config.voidspam.shoot_min, config.voidspam.shoot_max)
+local function startUnderground()
+    if undergroundConn then return end
+    undergroundConn = RunService.Heartbeat:Connect(function()
+        if not undergroundEnabled then return end
+        pcall(function()
+            local char = lp.Character
+            if not char then return end
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if not hrp then return end
+            undergroundRealCF = hrp.CFrame
+            undergroundRealVel = hrp.AssemblyLinearVelocity
+            undergroundRealAngVel = hrp.AssemblyAngularVelocity
+            local depth = undergroundDepth or 2.2
+            local params = RaycastParams.new()
+            params.FilterDescendantsInstances = { char }
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            local result = Workspace:Raycast(hrp.Position, Vector3.new(0, -500, 0), params)
+            local fakeY
+            if result then
+                fakeY = result.Position.Y - depth
             else
-                config.voidspam.phase = nil
+                fakeY = -99999
             end
-        else
-            config.voidspam.phase = nil
-            if clrVoidSnap then clrVoidSnap() end
+            hrp.CFrame = CFrame.new(hrp.Position.X, fakeY, hrp.Position.Z)
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+        end)
+    end)
+    undergroundRenderConn = RunService:BindToRenderStep("UndergroundSync", Enum.RenderPriority.First.Value, function()
+        if undergroundEnabled and undergroundRealCF then
+            pcall(function()
+                local char = lp.Character
+                if not char then return end
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if not hrp then return end
+                hrp.CFrame = undergroundRealCF
+                hrp.AssemblyLinearVelocity = undergroundRealVel or Vector3.zero
+                hrp.AssemblyAngularVelocity = undergroundRealAngVel or Vector3.zero
+            end)
         end
-    end
-})
+    end)
+end
 
-ragebotTab:AddDualSlider('VoidShootTime', 'VoidHideTime', {
-    Text = 'attack',
-    Default = 1,
-    Min = 0.1,
-    Max = 2,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(val)
-        val = clampVs(val)
-        config.voidspam.shoot_min = val
-        config.voidspam.shoot_max = val
+local function stopUnderground()
+    if undergroundConn then
+        undergroundConn:Disconnect()
+        undergroundConn = nil
     end
-}, {
-    Text = 'hide',
-    Default = 1,
-    Min = 0.1,
-    Max = 2,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(val)
-        val = clampVs(val)
-        config.voidspam.hide_min = val
-        config.voidspam.hide_max = val
+    if undergroundRenderConn then
+        pcall(function() RunService:UnbindFromRenderStep("UndergroundSync") end)
+        undergroundRenderConn = nil
     end
-})
+    undergroundRealCF = nil
+    undergroundRealVel = nil
+    undergroundRealAngVel = nil
+end
 
 -- ============================================================
--- LOGIC – Underground
+-- AIMBOT
 -- ============================================================
-Underground = {
+Aimbot = {
     enabled = false,
-    depth = 2.2,
-    heartbeatConn = nil,
-    renderConn = nil,
-    realCF = nil,
-    realVel = nil,
-    realAngVel = nil,
+    visCheck = true,
+    teamCheck = true,
+    fov = 360,
+    maxDist = math.huge,
+    prediction = 0,
+    smoothing = 0,
+    cc = nil,
 
-    setEnabled = function(self, state)
-        self.enabled = state
-        if state then
-            if self.heartbeatConn then return end
-            self.heartbeatConn = RunService.Heartbeat:Connect(function()
-                if not self.enabled then return end
-                pcall(function()
-                    local char = lp.Character
-                    if not char then return end
-                    local hrp = char:FindFirstChild("HumanoidRootPart")
-                    if not hrp then return end
-                    self.realCF = hrp.CFrame
-                    self.realVel = hrp.AssemblyLinearVelocity
-                    self.realAngVel = hrp.AssemblyAngularVelocity
-                    local depth = self.depth or 2.2
-                    local params = RaycastParams.new()
-                    params.FilterDescendantsInstances = { char }
-                    params.FilterType = Enum.RaycastFilterType.Exclude
-                    local result = Workspace:Raycast(hrp.Position, Vector3.new(0, -500, 0), params)
-                    if result then
-                        local fakeY = result.Position.Y - depth
-                        hrp.CFrame = CFrame.new(hrp.Position.X, fakeY, hrp.Position.Z)
-                    else
-                        hrp.CFrame = CFrame.new(hrp.Position.X, -99999, hrp.Position.Z)
-                    end
-                    hrp.AssemblyLinearVelocity = Vector3.zero
-                    hrp.AssemblyAngularVelocity = Vector3.zero
-                end)
-            end)
-            self.renderConn = RunService:BindToRenderStep("UndergroundSync", Enum.RenderPriority.First.Value, function()
-                if self.enabled and self.realCF then
-                    pcall(function()
-                        local char = lp.Character
-                        if not char then return end
-                        local hrp = char:FindFirstChild("HumanoidRootPart")
-                        if not hrp then return end
-                        hrp.CFrame = self.realCF
-                        hrp.AssemblyLinearVelocity = self.realVel or Vector3.zero
-                        hrp.AssemblyAngularVelocity = self.realAngVel or Vector3.zero
-                    end)
-                end
-            end)
-        else
-            if self.heartbeatConn then self.heartbeatConn:Disconnect(); self.heartbeatConn = nil end
-            if self.renderConn then pcall(function() RunService:UnbindFromRenderStep("UndergroundSync") end); self.renderConn = nil end
-            self.realCF = nil; self.realVel = nil; self.realAngVel = nil
+    getCC = function(self)
+        if not self.cc then
+            self.cc = safeRequire(lp.PlayerScripts.Controllers.CameraController)
         end
+        return self.cc
     end,
 
-    setDepth = function(self, v) self.depth = v end
-}
+    setEnabled = function(self, state) self.enabled = state; if not state then self.cc = nil end end,
+    setVisibleCheck = function(self, v) self.visCheck = v end,
+    setTeamCheck = function(self, v) self.teamCheck = v end,
+    setFOV = function(self, v) self.fov = v end,
+    setMaxDist = function(self, v) self.maxDist = v end,
+    setPrediction = function(self, v) self.prediction = v end,
+    setSmoothing = function(self, v) self.smoothing = v end,
 
--- ============================================================
--- LOGIC – Ragebot (toàn bộ từ file InstanceSource)
--- ============================================================
--- Khởi tạo config và các biến cần thiết
-config = {
-    target = {
-        enabled = false,
-        character = nil,
-        auto = false,
-        autoshoot = true,
-        shootAttempts = 1,
-        hitpart = "Head",
-        lastchar = nil,
-        lastplayer = nil,
-        manualkey = false,
-        immune = false,
-        attackPosition = "default",
-        attackCustomEnabled = false,
-        weaponPick = "primary",
-        forceWeapon = true,
-        rageMasterOn = false,
-        meleeFeetDrop = 3.5,
-        underOffset = 4,
-        customHeight = 2,
-        customFront = 0,
-        customSide = 0,
-        customVertical = 0,
-        customRadius = 0,
-    },
-    prediction = {
-        enabled = false,
-        multiplier = 1.2,
-        velocity = Vector3.new(0, 0, 0),
-        acceleration = Vector3.new(0, 0, 0),
-        lastposition = nil,
-        lasttime = 0,
-        velbuffer = {},
-        posbuffer = {},
-        maxvelsamples = 15,
-        maxpossamples = 5
-    },
-    orbit = {
-        active = false,
-        angle = 0,
-        serverpos = nil,
-        connection = nil,
-        speed = 9000,
-        height = 1,
-        radius = 0,
-        originalpos = nil
-    },
-    state = {
-        reloading = false,
-        outofammo = false,
-        csyncactive = false,
-        reloadStartedAt = 0,
-    },
-    voidhide = {
-        enabled = true,
-        originalPosition = nil,
-        active = false,
-        connection = nil
-    },
-    voidspam = {
-        enabled = false,
-        shoot_min = 1,
-        shoot_max = 1,
-        hide_min = 1,
-        hide_max = 1,
-        phase = nil,
-        lastswitch = 0,
-        currentduration = 0
-    },
-    visualizer = {
-        enabled = true,
-        tracer = {
-            color = Color3.fromRGB(0, 186, 255),
-            thickness = 1,
-            transparency = 1,
-            start_point = "cursor",
-            outline = true,
-            outline_color = Color3.fromRGB(0, 0, 0),
-            outline_thickness = 1
-        },
-        indicator = {
-            display_options = {"name", "position", "hit reg"},
-            color = Color3.fromRGB(255, 255, 255),
-            accent_color = Color3.fromRGB(0, 186, 255)
-        }
-    },
-    hitNotifications = {
-        enabled = true,
-        color = Color3.fromRGB(235, 235, 235),
-        textSize = 14,
-        maxVisible = 8,
-        duration = 3,
-        stackGap = 6,
-        position = "Top Left",
-        offsetX = 12,
-        offsetY = 12,
-        inAnimation = "fade bounce",
-        outAnimation = "fade",
-        animInDuration = 0.52,
-        animOutDuration = 0.38,
-    },
-    ragestatus = {
-        enabled = false,
-        mode = "static",
-        color = Color3.fromRGB(235, 235, 235),
-        staticOffsetX = 0,
-        staticOffsetY = 40,
-        showAmmo = true,
-        hideOnReload = true,
-        textSize = 15,
-        lineGap = 15,
-        fontName = "gotham",
-    },
-}
+    update = function(self)
+        if not self.enabled then return end
+        local c = self:getCC()
+        if not c or not c._current_subject then return end
 
--- Các hàm helper (được định nghĩa trong file instance)
-local function valid(char)
-    if not char or not char.Parent then return false end
-    local humanoid = char:FindFirstChildOfClass("Humanoid")
-    if not humanoid or humanoid.Health <= 0 then return false end
-    if not char:FindFirstChild("HumanoidRootPart") then return false end
-    local targetplayer = Players:GetPlayerFromCharacter(char)
-    if not targetplayer or targetplayer:GetAttribute("TeamID") == lp:GetAttribute("TeamID") then return false end
-    return true
-end
+        local myEnv = lp:GetAttribute("EnvironmentID")
+        local myTeam = lp:GetAttribute("TeamID")
+        local cam = Workspace.CurrentCamera
+        local camPos = cam.CFrame.Position
+        local cx, cy = cam.ViewportSize.X/2, cam.ViewportSize.Y/2
 
-local function nearest()
-    local cursorpos = UserInputService:GetMouseLocation()
-    local besttarget, bestdistance = nil, math.huge
-    for _, targetplayer in Players:GetPlayers() do
-        if targetplayer ~= lp and targetplayer.Character then
-            local char = targetplayer.Character
-            if valid(char) then
-                local root = char:FindFirstChild("HumanoidRootPart")
-                if root then
-                    local screenpos, onscreen = Workspace.CurrentCamera:WorldToViewportPoint(root.Position)
-                    if onscreen and screenpos then
-                        local distance = (Vector2.new(screenpos.X, screenpos.Y) - cursorpos).Magnitude
-                        if distance < bestdistance then
-                            besttarget = char
-                            bestdistance = distance
-                        end
-                    end
+        local best, bestDist = nil, math.huge
+
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p == lp then continue end
+            if p:GetAttribute("EnvironmentID") ~= myEnv then continue end
+            if self.teamCheck and myTeam ~= nil and p:GetAttribute("TeamID") == myTeam then continue end
+
+            local char = p.Character
+            if not char then continue end
+
+            local head = char:FindFirstChild("Head")
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if not head or not hum or hum.Health <= 0 then continue end
+
+            local aimPos = head.Position
+            if self.prediction > 0 then
+                local vel = head.AssemblyLinearVelocity
+                if vel.Magnitude < 500 then
+                    aimPos = head.Position + vel * self.prediction
                 end
             end
-        end
-    end
-    return besttarget
-end
 
-local function hitpartfromname(character, partname)
-    if not character then return nil end
-    if partname == "Closest" then
-        local mypos = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
-        if not mypos then return character:FindFirstChild("Head") end
-        local closest, dist = nil, math.huge
-        for _, part in pairs(character:GetChildren()) do
-            if part:IsA("BasePart") then
-                local d = (part.Position - mypos.Position).Magnitude
-                if d < dist then dist = d; closest = part end
+            local dist = (aimPos - camPos).Magnitude
+            if dist > self.maxDist then continue end
+
+            local sp, vis = cam:WorldToViewportPoint(aimPos)
+            if not vis then continue end
+
+            if ((sp.X - cx)^2 + (sp.Y - cy)^2)^0.5 > self.fov then continue end
+
+            if self.visCheck then
+                local rp = RaycastParams.new()
+                rp.FilterDescendantsInstances = { lp.Character, head.Parent }
+                rp.FilterType = Enum.RaycastFilterType.Exclude
+                local result = Workspace:Raycast(camPos, (head.Position - camPos).Unit * 1000, rp)
+                if result and result:IsDescendantOf(head.Parent) then
+                    -- visible
+                else
+                    continue
+                end
+            end
+
+            if dist < bestDist then
+                bestDist = dist
+                best = { pos = aimPos, camPos = camPos, char = char }
             end
         end
-        return closest or character:FindFirstChild("Head")
-    elseif partname == "Random" then
-        local parts = {"Head", "HumanoidRootPart", "UpperTorso"}
-        return character:FindFirstChild(parts[math.random(#parts)]) or character:FindFirstChild("Head")
-    else
-        return character:FindFirstChild(partname) or character:FindFirstChild("Head")
-    end
-end
 
-local function getweapon()
-    local viewmodels = Workspace:FindFirstChild("ViewModels")
-    if not viewmodels then return nil end
-    local firstperson = viewmodels:FindFirstChild("FirstPerson")
-    if not firstperson then return nil end
-    for _, child in ipairs(firstperson:GetChildren()) do
-        local parts = {}
-        for part in child.Name:gmatch("[^-]+") do
-            table.insert(parts, part:match("^%s*(.-)%s*$"))
+        if best then
+            pcall(function()
+                c:MimicRotation(CFrame.lookAt(best.camPos, best.pos).Rotation)
+            end)
         end
-        if #parts >= 2 then return parts[2] end
     end
-    return nil
-end
+}
 
-local function isSling(weapon)
-    return weapon and weapon:lower():find("slingshot", 1, true) ~= nil
-end
+RunService.RenderStepped:Connect(function() Aimbot:update() end)
 
-local function clampVs(v)
-    return math.clamp(tonumber(v) or 1, 0.1, 2)
-end
-
-local function randVs(minT, maxT)
-    local a = clampVs(minT)
-    local b = clampVs(maxT)
-    if b < a then a, b = b, a end
-    if a == b then return a end
-    return a + math.random() * (b - a)
-end
-
-local function clrVoidSnap() end
-
-local function settarget(char)
-    if not char then return end
-    config.target.enabled = true
-    config.target.character = char
-end
-
-local function cleartarget()
-    config.target.enabled = false
-    config.target.character = nil
-end
-
-local function refreshAtk()
-    local weapon = getweapon()
-    if pickMelee() and not config.target.attackCustomEnabled then
-        config.orbit.height = 0
-        config.orbit.radius = 0
-        return
-    end
-    if config.target.attackCustomEnabled then
-        config.orbit.height = config.target.customHeight or 2
-        config.orbit.radius = config.target.customRadius or 0
-        return
-    end
-    local mode = config.target.attackPosition or "default"
-    if mode == "under" then
-        config.orbit.height = -(config.target.underOffset or 4)
-        config.orbit.radius = 0
-    else
-        config.orbit.height = (weapon and weapon:lower():find("sniper")) and 8 or 2
-        config.orbit.radius = 0
-    end
-end
-
-local function pickMelee()
-    return (config.target.weaponPick or "primary") == "melee"
-end
-
-local function eqSlot() end
-
--- Bây giờ là phần logic Ragebot chính (từ file InstanceSource)
--- Tôi sẽ đặt toàn bộ đoạn code `Ragebot = {} do ... end` vào đây,
--- nhưng đã được điều chỉnh để dùng các biến đã khai báo ở trên.
--- Vì đoạn code này rất dài, tôi sẽ chèn nó nguyên văn (đã thay thế `safeRequire` bằng `safeRequire` và đảm bảo các tham chiếu đúng).
-
--- [[ ==== BẮT ĐẦU LOGIC RAGEBOT (từ file InstanceSource) ==== ]]
+-- ============================================================
+-- RAGEBOT (toàn bộ)
+-- ============================================================
+Ragebot = {}
 do
     local replicatedstorage = cloneref(game:GetService("ReplicatedStorage"))
     local players = cloneref(game:GetService("Players"))
     local runsvc = cloneref(game:GetService("RunService"))
     local userinput = cloneref(game:GetService("UserInputService"))
     local workspace = cloneref(game:GetService("Workspace"))
-
     local player = players.LocalPlayer
     local camera = workspace.CurrentCamera
 
@@ -770,38 +322,86 @@ do
         return false
     end
 
-    local _instanceLobbyCache = { t = 0, v = true }
+    local _lobbyCache = { t = 0, v = true }
     local function lobbyCache()
         local now = os.clock()
-        if now - _instanceLobbyCache.t < 0.15 then
-            return _instanceLobbyCache.v
+        if now - _lobbyCache.t < 0.15 then
+            return _lobbyCache.v
         end
-        _instanceLobbyCache.t = now
-        _instanceLobbyCache.v = not liveMatch()
-        return _instanceLobbyCache.v
+        _lobbyCache.t = now
+        _lobbyCache.v = not liveMatch()
+        return _lobbyCache.v
     end
 
-    getgenv().InstanceIsInActiveMatch = liveMatch
-    getgenv().InstanceIsInLobby = lobbyCache
+    getgenv().IsInActiveMatch = liveMatch
+    getgenv().IsInLobby = lobbyCache
 
-    -- config đã được khai báo ở ngoài, nhưng để đảm bảo đồng bộ, ta gán lại
-    -- (không cần thiết vì đã dùng chung biến config)
+    local config = {
+        target = {
+            enabled = false,
+            character = nil,
+            auto = false,
+            autoshoot = true,
+            shootAttempts = 1,
+            hitpart = "Head",
+            lastchar = nil,
+            lastplayer = nil,
+            manualkey = false,
+            immune = false,
+            attackPosition = "default",
+            attackCustomEnabled = false,
+            weaponPick = "primary",
+            forceWeapon = true,
+            rageMasterOn = false,
+            meleeFeetDrop = 3.5,
+            underOffset = 4,
+            customHeight = 2,
+            customFront = 0,
+            customSide = 0,
+            customVertical = 0,
+            customRadius = 0,
+        },
+        prediction = {
+            enabled = false,
+            multiplier = 1.2,
+            velocity = Vector3.new(0, 0, 0),
+            acceleration = Vector3.new(0, 0, 0),
+            lastposition = nil,
+            lasttime = 0,
+        },
+        orbit = {
+            active = false,
+            angle = 0,
+            serverpos = nil,
+            connection = nil,
+            speed = 9000,
+            height = 1,
+            radius = 0,
+            savedpos = nil,
+        },
+        state = {
+            reloading = false,
+            outofammo = false,
+            csyncactive = false,
+            reloadStartedAt = 0,
+        },
+        voidspam = {
+            enabled = false,
+            shoot_min = 1,
+            shoot_max = 1,
+            hide_min = 1,
+            hide_max = 1,
+            phase = nil,
+            lastswitch = 0,
+            currentduration = 0,
+        },
+    }
 
     local ragePerf = {
         lastAttackTick = 0,
         hitPartByPlayer = {},
         lastHitAtByPlayer = {},
-        targetHudAt = 0,
-        rageStatusAt = 0,
-        restoreVisualAt = 0,
         killStartAt = nil,
-        rageStatusCacheAt = 0,
-        cachedRageStatusLine = "",
-        cachedRageStatusDetail = "",
-        lastRageStatusText = "",
-        lastRageDetailText = "",
-        lastRageAmmoText = "",
-        lastRageColor = nil,
     }
 
     local vhState = {
@@ -810,53 +410,58 @@ do
         mainConnection = nil,
         restoreConnection = nil,
         currentVoidPos = nil,
-        lastTeleportTime = 0
+        lastTeleportTime = 0,
     }
 
     local localfighter = modules.fighter.LocalFighter
     local oldpos
 
-    local indicator = Drawing.new("Circle")
-    indicator.Thickness = 1.5
-    indicator.NumSides = 36
-    indicator.Filled = false
-    indicator.Transparency = 1
-    indicator.Visible = false
-    indicator.Radius = 12
-    indicator.Color = Color3.fromRGB(255, 50, 50)
+    local vfrLim, vfrDead = 2147483646, 1147483646
+    local vfrSnap = { cf = nil, lv = nil, av = nil }
 
-    local indicatoroutline = Drawing.new("Circle")
-    indicatoroutline.Thickness = 4
-    indicatoroutline.NumSides = 36
-    indicatoroutline.Filled = false
-    indicatoroutline.Transparency = 1
-    indicatoroutline.Visible = false
-    indicatoroutline.Radius = 12
-    indicatoroutline.Color = Color3.fromRGB(0, 0, 0)
+    local function clrVoidSnap()
+        vfrSnap.cf, vfrSnap.lv, vfrSnap.av = nil, nil, nil
+    end
 
-    local tracerline = Drawing.new("Line")
-    tracerline.Visible = false
-    tracerline.Thickness = 2
-    tracerline.Transparency = 1
-    tracerline.Color = Color3.fromRGB(0, 186, 255)
+    local function voidHrp()
+        local char = player.Character
+        return char and char:FindFirstChild("HumanoidRootPart")
+    end
 
-    local traceroutline = Drawing.new("Line")
-    traceroutline.Visible = false
-    traceroutline.Thickness = 4
-    traceroutline.Transparency = 1
-    traceroutline.Color = Color3.fromRGB(0, 0, 0)
+    local function rndSkip(mi, ma, dmi, dma)
+        local val = math.random(mi, ma)
+        while val >= dmi and val <= dma do
+            val = math.random(mi, ma)
+        end
+        return val
+    end
 
-    local lastdamagetime = {}
+    local function snapVoid(hrp)
+        if not hrp then return end
+        if lobbyCache() then return end
+        vfrSnap.cf = hrp.CFrame
+        vfrSnap.lv = hrp.AssemblyLinearVelocity
+        vfrSnap.av = hrp.AssemblyAngularVelocity
+        local lim, dead = vfrLim, vfrDead
+        pcall(function()
+            local p = Vector3.new(rndSkip(-lim, lim, -dead, dead), rndSkip(-lim, lim, -dead, dead), rndSkip(-lim, lim, -dead, dead))
+            local v = Vector3.new(rndSkip(-lim, lim, -dead, dead), rndSkip(-lim, lim, -dead, dead), rndSkip(-lim, lim, -dead, dead))
+            hrp.CFrame = CFrame.new(p) * CFrame.Angles(math.pi, math.pi, math.pi)
+            hrp.AssemblyLinearVelocity = v
+            hrp.AssemblyAngularVelocity = v
+        end)
+    end
 
-    -- Các hàm getweapon, muzzlepos, ... đã được định nghĩa ở trên, nhưng cần khớp với file instance
-    -- Tôi sẽ dùng các hàm đã có ở trên, nhưng để đảm bảo, tôi sẽ gán lại từ các hàm đã định nghĩa.
-    -- Vì vậy, tôi sẽ không định nghĩa lại chúng.
-
-    -- Tuy nhiên, file instance có định nghĩa lại getweapon, muzzlepos, v.v. để dùng local variables.
-    -- Tôi sẽ dùng các hàm đã có ở ngoài, nhưng cần đảm bảo chúng hoạt động trong phạm vi này.
-    -- Thay vì copy toàn bộ, tôi sẽ sử dụng các hàm đã được định nghĩa ở trên.
-
-    -- Tôi sẽ tiếp tục với phần còn lại của logic từ file instance, nhưng tham chiếu đến các biến/hàm đã có.
+    runsvc:BindToRenderStep("vfr_csync", Enum.RenderPriority.First.Value, function()
+        if not vfrSnap.cf then return end
+        local hrp = voidHrp()
+        if not hrp then return end
+        pcall(function()
+            hrp.CFrame = vfrSnap.cf
+            hrp.AssemblyLinearVelocity = vfrSnap.lv
+            hrp.AssemblyAngularVelocity = vfrSnap.av
+        end)
+    end)
 
     local SLOTS = { primary = 1, secondary = 2, melee = 3 }
     local MELEE_NMS = {
@@ -868,6 +473,48 @@ do
         ["Energy Rifle"] = true,
         ["Energy Pistols"] = true,
     }
+
+    local function getweapon()
+        local viewmodels = workspace:FindFirstChild("ViewModels")
+        if not viewmodels then return nil end
+        local firstperson = viewmodels:FindFirstChild("FirstPerson")
+        if not firstperson then return nil end
+        for _, child in ipairs(firstperson:GetChildren()) do
+            local parts = {}
+            for part in child.Name:gmatch("[^-]+") do
+                table.insert(parts, part:match("^%s*(.-)%s*$"))
+            end
+            if #parts >= 2 then
+                return parts[2]
+            end
+        end
+        return nil
+    end
+
+    local function muzzlepos()
+        local viewModels = workspace:FindFirstChild("ViewModels")
+        if not viewModels then return nil end
+        local firstPerson = viewModels:FindFirstChild("FirstPerson")
+        if not firstPerson then return nil end
+        for _, model in pairs(firstPerson:GetChildren()) do
+            if model.Name:find(player.Name) then
+                local itemVisual = model:FindFirstChild("ItemVisual")
+                if itemVisual then
+                    local body = itemVisual:FindFirstChild("Body")
+                    if body then
+                        local bodyPrimary = body:FindFirstChild("BodyPrimary")
+                        if bodyPrimary then
+                            local muzzle = bodyPrimary:FindFirstChild("_muzzle")
+                            if muzzle then
+                                return muzzle.WorldPosition
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        return nil
+    end
 
     local function isInfiniteWeapon()
         local w = getweapon()
@@ -922,6 +569,10 @@ do
         if meleeNm(nm) then return true end
         local t = item:Get("ItemType") or item:Get("Type") or item:Get("Category")
         return type(t) == "string" and t:lower():find("melee", 1, true) ~= nil
+    end
+
+    local function isSling(weapon)
+        return weapon and weapon:lower():find("slingshot", 1, true) ~= nil
     end
 
     local function lfItems()
@@ -998,9 +649,6 @@ do
     end
 
     local function rageOn()
-        if Toggles and Toggles.TargetOn then
-            return Toggles.TargetOn.Value == true
-        end
         return config.target.rageMasterOn == true
     end
 
@@ -1094,7 +742,7 @@ do
     end
 
     local function reloadHide(sling)
-        if not (config.state.reloading and config.ragestatus.hideOnReload) then
+        if not (config.state.reloading and true) then
             return false
         end
         local hrp = voidHrp()
@@ -1118,54 +766,128 @@ do
         return player:GetAttribute("TeamID") == targetplayer:GetAttribute("TeamID")
     end
 
-    -- valid, nearest, hitpartfromname, getweapon, isSling, clampVs, randVs, clrVoidSnap, settarget, cleartarget, refreshAtk, pickMelee, eqSlot đã được định nghĩa ở ngoài
-
-    local vfrLim, vfrDead = 2147483646, 1147483646
-    local vfrSnap = { cf = nil, lv = nil, av = nil }
-
-    local function clrVoidSnap()
-        vfrSnap.cf, vfrSnap.lv, vfrSnap.av = nil, nil, nil
+    local function valid(char)
+        if not char or not char.Parent then return false end
+        local humanoid = char:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then return false end
+        if not char:FindFirstChild("HumanoidRootPart") then return false end
+        local targetplayer = players:GetPlayerFromCharacter(char)
+        if not targetplayer or isteammate(targetplayer) then return false end
+        return true
     end
 
-    local function voidHrp()
-        local char = player.Character
-        return char and char:FindFirstChild("HumanoidRootPart")
-    end
-
-    local function rndSkip(mi, ma, dmi, dma)
-        local val = math.random(mi, ma)
-        while val >= dmi and val <= dma do
-            val = math.random(mi, ma)
+    local function nearest()
+        local cursorpos = userinput:GetMouseLocation()
+        local besttarget = nil
+        local bestdistance = math.huge
+        for _, targetplayer in players:GetPlayers() do
+            if targetplayer ~= player and targetplayer.Character then
+                local char = targetplayer.Character
+                if valid(char) then
+                    local root = char:FindFirstChild("HumanoidRootPart")
+                    if root then
+                        local wts = getgenv().WorldToScreen or worldToScreen
+                        local screenpos, onscreen = wts(root.Position, camera)
+                        if onscreen and screenpos then
+                            local distance = (Vector2.new(screenpos.X, screenpos.Y) - cursorpos).Magnitude
+                            if distance < bestdistance then
+                                besttarget = char
+                                bestdistance = distance
+                            end
+                        end
+                    end
+                end
+            end
         end
-        return val
+        return besttarget
     end
 
-    local function snapVoid(hrp)
-        if not hrp then return end
-        if lobbyCache() then return end
-        vfrSnap.cf = hrp.CFrame
-        vfrSnap.lv = hrp.AssemblyLinearVelocity
-        vfrSnap.av = hrp.AssemblyAngularVelocity
-        local lim, dead = vfrLim, vfrDead
-        pcall(function()
-            local p = Vector3.new(rndSkip(-lim, lim, -dead, dead), rndSkip(-lim, lim, -dead, dead), rndSkip(-lim, lim, -dead, dead))
-            local v = Vector3.new(rndSkip(-lim, lim, -dead, dead), rndSkip(-lim, lim, -dead, dead), rndSkip(-lim, lim, -dead, dead))
-            hrp.CFrame = CFrame.new(p) * CFrame.Angles(math.pi, math.pi, math.pi)
-            hrp.AssemblyLinearVelocity = v
-            hrp.AssemblyAngularVelocity = v
-        end)
+    local function hitpartfromname(character, partname)
+        if not character then return nil end
+        if partname == "Closest" then
+            local mypos = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            if not mypos then return character:FindFirstChild("Head") end
+            local closest, dist = nil, math.huge
+            for _, part in pairs(character:GetChildren()) do
+                if part:IsA("BasePart") then
+                    local d = (part.Position - mypos.Position).Magnitude
+                    if d < dist then
+                        dist = d
+                        closest = part
+                    end
+                end
+            end
+            return closest or character:FindFirstChild("Head")
+        elseif partname == "Random" then
+            local parts = {"Head", "HumanoidRootPart", "UpperTorso"}
+            return character:FindFirstChild(parts[math.random(#parts)]) or character:FindFirstChild("Head")
+        else
+            return character:FindFirstChild(partname) or character:FindFirstChild("Head")
+        end
     end
 
-    runsvc:BindToRenderStep("vfr_csync", Enum.RenderPriority.First.Value, function()
-        if not vfrSnap.cf then return end
-        local hrp = voidHrp()
-        if not hrp then return end
+    local function updatevel()
+        if not config.target.character or not config.prediction.enabled then
+            config.prediction.velocity = Vector3.new(0, 0, 0)
+            config.prediction.lastposition = nil
+            return
+        end
+        local root = config.target.character:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+        local now = tick()
+        local dt = now - config.prediction.lasttime
+        if dt > 0 and dt < 0.1 then
+            local currentpos = root.Position
+            if config.prediction.lastposition then
+                local instantvel = (currentpos - config.prediction.lastposition) / dt
+                config.prediction.velocity = config.prediction.velocity:Lerp(instantvel, 0.6)
+            end
+            config.prediction.lastposition = currentpos
+            config.prediction.lasttime = now
+        end
+    end
+
+    local function predict(targetpart, origin)
+        if not config.prediction.enabled or not targetpart then
+            return targetpart and targetpart.Position or Vector3.new()
+        end
+        local basepos = targetpart.Position
+        local distance = (basepos - origin).Magnitude
+        local ping = 0
         pcall(function()
-            hrp.CFrame = vfrSnap.cf
-            hrp.AssemblyLinearVelocity = vfrSnap.lv
-            hrp.AssemblyAngularVelocity = vfrSnap.av
+            ping = game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
         end)
-    end)
+        local traveltime = distance / 3000
+        local totaltime = (traveltime + ping) * config.prediction.multiplier
+        return basepos + (config.prediction.velocity * totaltime)
+    end
+
+    local function canuse()
+        local char = player.Character
+        if not char then return false end
+        local humanoid = char:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then return false end
+        if isInfiniteWeapon() then return true end
+        local current, _, melee = getammo()
+        if current == nil then return true end
+        return current > 0 or melee
+    end
+
+    local function clampVs(v)
+        return math.clamp(tonumber(v) or 1, 0.1, 2)
+    end
+
+    local function randVs(minT, maxT)
+        local a = clampVs(minT)
+        local b = clampVs(maxT)
+        if b < a then
+            a, b = b, a
+        end
+        if a == b then
+            return a
+        end
+        return a + math.random() * (b - a)
+    end
 
     local function atkCfg()
         if pickMelee() and not config.target.attackCustomEnabled then
@@ -1246,11 +968,9 @@ do
         config.orbit.active = false
         clrVoidSnap()
         config.voidspam.phase = nil
-        if config.orbit.savedpos and localfighter and localfighter.Entity and localfighter.Entity.RootPart and not getgenv().InstanceUndergroundEnabled then
+        if config.orbit.savedpos and localfighter and localfighter.Entity and localfighter.Entity.RootPart and not getgenv().UndergroundEnabled then
             local ok, pos = pcall(function() return config.orbit.savedpos end)
             if ok and pos then
-                local currentPos = localfighter.Entity.RootPart.CFrame
-                local distance = (currentPos.Position - pos.Position).Magnitude
                 pcall(function()
                     localfighter.Entity.RootPart.CFrame = pos
                 end)
@@ -1289,80 +1009,6 @@ do
         end
     end
 
-    local function voidOk(sling)
-        if not sling then return false end
-        return config.voidspam.enabled or config.state.outofammo
-    end
-
-    local function tickVoid(sling, root)
-        if sling then
-            clrVoidSnap()
-            return false
-        end
-        if not voidOk(sling) then
-            clrVoidSnap()
-            return false
-        end
-        local isHiding = config.state.outofammo or (config.voidspam.enabled and config.voidspam.phase == "hide")
-        if isHiding then
-            if config.voidspam.enabled and config.voidspam.phase == "hide" and not config.state.outofammo then
-                local elapsed = tick() - config.voidspam.lastswitch
-                if elapsed >= config.voidspam.currentduration then
-                    config.voidspam.phase = "shoot"
-                    config.voidspam.currentduration = randVs(config.voidspam.shoot_min, config.voidspam.shoot_max)
-                    config.voidspam.lastswitch = tick()
-                    clrVoidSnap()
-                    return false
-                end
-            end
-            clrVoidSnap()
-            local hrp = voidHrp()
-            if hrp then
-                snapVoid(hrp)
-            else
-                if config.state.csyncactive then
-                    return true
-                end
-                local randomX = math.random(-10000, 10000)
-                local randomZ = math.random(-10000, 10000)
-                config.orbit.serverpos = Vector3.new(randomX, -99999999999, randomZ)
-            end
-            return true
-        end
-        if config.voidspam.enabled and config.voidspam.phase == "shoot" then
-            local elapsed = tick() - config.voidspam.lastswitch
-            if elapsed >= config.voidspam.currentduration then
-                config.voidspam.phase = "hide"
-                config.voidspam.currentduration = randVs(config.voidspam.hide_min, config.voidspam.hide_max)
-                config.voidspam.lastswitch = tick()
-            end
-        end
-        clrVoidSnap()
-        return false
-    end
-
-    local function hideShot()
-        if not config.voidspam.enabled then return end
-        if isSling(getweapon()) then return end
-    end
-
-    local function voidhide()
-        if vhState.active then return end
-        vhState.active = true
-        if not config.state.csyncactive then
-            startsync()
-        end
-    end
-
-    local stopvoid = function()
-        vhState.active = false
-        vhState.currentVoidPos = nil
-        if vhState.mainConnection then
-            vhState.mainConnection:Disconnect()
-            vhState.mainConnection = nil
-        end
-    end
-
     local function startsync()
         if config.state.csyncactive then return end
         if config.target.immune then return end
@@ -1383,8 +1029,6 @@ do
             if config.target.immune then stopsync() return end
             if not config.target.character or not valid(config.target.character) then stopsync() return end
             if not localfighter or not localfighter.Entity or not localfighter.Entity.RootPart then stopsync() return end
-
-            if config.target.immune then stopsync() return end
 
             setOrbR()
             oldpos = localfighter.Entity.RootPart.CFrame
@@ -1467,7 +1111,7 @@ do
             )
             config.orbit.serverpos = targetpos + offset
 
-            if not getgenv().InstanceUndergroundEnabled then
+            if not getgenv().UndergroundEnabled then
                 if localfighter and localfighter.Entity and localfighter.Entity.RootPart then
                     local currentPos = localfighter.Entity.RootPart.CFrame
                     local newPos = CFrame.new(config.orbit.serverpos)
@@ -1540,13 +1184,12 @@ do
                     )
                 end)
             end
-            hideShot()
         end
     end
 
     local oldcamupdate = modules.camcontrol.Update
     modules.camcontrol.Update = function(...)
-        if getgenv().InstanceUndergroundEnabled then
+        if getgenv().UndergroundEnabled then
             return oldcamupdate(...)
         elseif config.state.csyncactive and localfighter and localfighter.Entity and localfighter.Entity.RootPart and oldpos then
             localfighter.Entity.RootPart.CFrame = oldpos
@@ -1587,7 +1230,6 @@ do
             config.target.immune = true
             config.voidspam.phase = nil
             clrVoidSnap()
-            indicator.Color = Color3.fromRGB(180, 0, 255)
             stopsync()
         end
     end)
@@ -1595,7 +1237,6 @@ do
     bindvulnerable(function(plr)
         if config.target.lastplayer == plr then
             config.target.immune = false
-            indicator.Color = Color3.fromRGB(255, 50, 50)
             if config.target.enabled and config.target.character and valid(config.target.character) then
                 startsync()
             end
@@ -1610,7 +1251,6 @@ do
         config.target.lastplayer = nil
         config.target.manualkey = false
         config.target.immune = false
-        indicator.Color = Color3.fromRGB(255, 50, 50)
     end
 
     local function settarget(char)
@@ -1621,11 +1261,9 @@ do
         config.target.lastchar = char
         config.target.lastplayer = targetplr
         config.target.immune = false
-        indicator.Color = Color3.fromRGB(255, 50, 50)
         local root = char:FindFirstChild("HumanoidRootPart")
         if root and root:FindFirstChild("Attachment") then
             config.target.immune = true
-            indicator.Color = Color3.fromRGB(180, 0, 255)
         else
             eqSlot()
             startsync()
@@ -1693,12 +1331,6 @@ do
         end
     end
 
-    local function targetpos()
-        if not config.target.character then return nil end
-        local root = config.target.character:FindFirstChild("HumanoidRootPart")
-        return root and root.Position
-    end
-
     local function updatesling()
         local slingon = checksling()
         local hastarget = config.target.enabled and config.target.character ~= nil
@@ -1707,8 +1339,8 @@ do
                 sling.enabled = true
                 slingshotTP()
             end
-            if getgenv().InstanceSetUnderground then
-                getgenv().InstanceSetUnderground(true)
+            if getgenv().SetUnderground then
+                getgenv().SetUnderground(true)
             end
             vhState.active = hastarget
             if hastarget and not config.state.csyncactive then
@@ -1721,10 +1353,8 @@ do
                 sling.enabled = false
                 stopslingTP()
             end
-            if not Toggles.AntiAimUnderground.Value then
-                if getgenv().InstanceSetUnderground then
-                    getgenv().InstanceSetUnderground(false)
-                end
+            if getgenv().SetUnderground then
+                getgenv().SetUnderground(false)
             end
             vhState.active = false
         end
@@ -1743,43 +1373,6 @@ do
             end)
         end
     end
-
-    local targetHudAnimLast = tick()
-    runsvc.RenderStepped:Connect(function()
-        local inLobby = getgenv().InstanceIsInLobby and getgenv().InstanceIsInLobby()
-        local hudNeeded = config.visualizer.enabled
-            or (config.ragestatus and config.ragestatus.enabled)
-            or (config.hitNotifications and config.hitNotifications.enabled)
-            or (config.target.enabled and config.target.character and config.prediction.enabled)
-        if inLobby and not hudNeeded then
-            return
-        end
-        if shouldSuppressGameplayOverlays() then
-            tracerline.Visible = false
-            traceroutline.Visible = false
-            if ragebot.hideRageStatus then
-                ragebot.hideRageStatus()
-            end
-            if ragebot.updateHitNotifications then
-                ragebot.updateHitNotifications(0)
-            end
-            return
-        end
-        local now = tick()
-        local hudDt = math.clamp(now - targetHudAnimLast, 0, 0.05)
-        targetHudAnimLast = now
-        if config.ragestatus and config.ragestatus.enabled and ragebot.drawStatus then
-            ragebot.drawStatus()
-        elseif ragebot.hideRageStatus then
-            ragebot.hideRageStatus()
-        end
-        if ragebot.updateHitNotifications then
-            ragebot.updateHitNotifications(hudDt)
-        end
-        if config.target.enabled and config.target.character and config.prediction.enabled then
-            updatevel()
-        end
-    end)
 
     runsvc.Heartbeat:Connect(function()
         fflag()
@@ -1810,41 +1403,342 @@ do
         end
     end)
 
-    -- Gán các hàm vào RagebotNormal để UI có thể gọi
-    RagebotNormal = RagebotNormal or {}
-    RagebotNormal.config = config
-    RagebotNormal.nearest = nearest
-    RagebotNormal.settarget = settarget
-    RagebotNormal.cleartarget = cleartarget
-    RagebotNormal.stopvoid = stopvoid
-    RagebotNormal.vhState = vhState
-    RagebotNormal.ragePerf = ragePerf
-    RagebotNormal.getammo = getammo
-    RagebotNormal.muzzlepos = muzzlepos
-    RagebotNormal.valid = valid
-    RagebotNormal.player = player
-    RagebotNormal.eqSlot = eqSlot
-    RagebotNormal.refreshAtk = refreshAtk
-    RagebotNormal.enabled = false
-    RagebotNormal.drawStatus = function() end
-    RagebotNormal.hideRageStatus = function() end
-    RagebotNormal.clrVoidSnap = clrVoidSnap
-    RagebotNormal.updateHitNotifications = function() end
-    RagebotNormal.clearHitNotifications = function() end
-
-    -- Đồng bộ các hàm cần thiết cho UI
-    nearest = RagebotNormal.nearest
-    settarget = RagebotNormal.settarget
-    cleartarget = RagebotNormal.cleartarget
-    refreshAtk = RagebotNormal.refreshAtk
-    eqSlot = RagebotNormal.eqSlot
-    clrVoidSnap = RagebotNormal.clrVoidSnap
-    getweapon = getweapon -- đã có
-    isSling = isSling -- đã có
-    clampVs = clampVs -- đã có
-    randVs = randVs -- đã có
+    -- Public API
+    Ragebot.config = config
+    Ragebot.nearest = nearest
+    Ragebot.settarget = settarget
+    Ragebot.cleartarget = cleartarget
+    Ragebot.stopsync = stopsync
+    Ragebot.vhState = vhState
+    Ragebot.ragePerf = ragePerf
+    Ragebot.getammo = getammo
+    Ragebot.valid = valid
+    Ragebot.player = player
+    Ragebot.eqSlot = eqSlot
+    Ragebot.refreshAtk = refreshAtk
+    Ragebot.clrVoidSnap = clrVoidSnap
+    Ragebot.enabled = false
 end
--- [[ ==== KẾT THÚC LOGIC RAGEBOT ==== ]]
+
+-- ============================================================
+-- UI
+-- ============================================================
+local MainTab = Window:AddTab('Main')
+
+-- Aimbot Group (Left)
+local AimbotGroup = MainTab:AddLeftGroupbox('Aimbot')
+AimbotGroup:AddToggle('AimbotEnabled', {
+    Text = 'Enable Aimbot',
+    Default = false,
+    Callback = function(v) Aimbot:setEnabled(v) end
+})
+AimbotGroup:AddToggle('AimbotVisCheck', {
+    Text = 'Visible Check',
+    Default = true,
+    Callback = function(v) Aimbot:setVisibleCheck(v) end
+})
+AimbotGroup:AddToggle('AimbotTeamCheck', {
+    Text = 'Team Check',
+    Default = true,
+    Callback = function(v) Aimbot:setTeamCheck(v) end
+})
+AimbotGroup:AddSlider('AimbotFOV', {
+    Text = 'FOV',
+    Default = 360,
+    Min = 10,
+    Max = 500,
+    Rounding = 0,
+    Callback = function(v) Aimbot:setFOV(v) end
+})
+AimbotGroup:AddSlider('AimbotMaxDist', {
+    Text = 'Max Distance',
+    Default = 9999,
+    Min = 100,
+    Max = 99999,
+    Rounding = 0,
+    Callback = function(v) Aimbot:setMaxDist(v) end
+})
+AimbotGroup:AddSlider('AimbotPrediction', {
+    Text = 'Prediction',
+    Default = 0,
+    Min = 0,
+    Max = 5,
+    Rounding = 1,
+    Callback = function(v) Aimbot:setPrediction(v) end
+})
+AimbotGroup:AddSlider('AimbotSmoothing', {
+    Text = 'Smoothing',
+    Default = 0,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Callback = function(v) Aimbot:setSmoothing(v) end
+})
+
+-- Underground Group (Right)
+local UndergroundGroup = MainTab:AddRightGroupbox('Underground (Anti-Aim)')
+UndergroundGroup:AddToggle('UndergroundToggle', {
+    Text = 'Underground',
+    Default = false,
+    Callback = function(v)
+        undergroundEnabled = v
+        if v then startUnderground() else stopUnderground() end
+    end
+})
+UndergroundGroup:AddSlider('UndergroundDepth', {
+    Text = 'Depth',
+    Default = 2.2,
+    Min = 0.5,
+    Max = 10,
+    Rounding = 1,
+    Callback = function(v) undergroundDepth = v end
+})
+
+-- Ragebot Tabbox (Right)
+local RightGroup = MainTab:AddRightTabbox()
+local ragebotTab = RightGroup:AddTab('Ragebot')
+
+ragebotTab:AddToggle('TargetOn', {
+    Text = 'Enable',
+    Default = false,
+    Callback = function(val)
+        Ragebot.config.target.rageMasterOn = val
+        if Ragebot.config.target.auto then return end
+        if val then
+            local target = Ragebot.nearest()
+            if target then
+                Ragebot.config.target.manualkey = true
+                Ragebot.settarget(target)
+            end
+        else
+            Ragebot.cleartarget()
+        end
+    end
+}):AddKeyPicker('TargetKey', {
+    Text = 'Ragebot Key',
+    Default = 'None',
+    Mode = 'Toggle',
+    NoUI = true,
+    SyncToggleState = false,
+    Callback = function()
+        if Ragebot.config.target.auto then return end
+        if Ragebot.config.target.enabled and Ragebot.config.target.character then
+            Ragebot.cleartarget()
+        else
+            local target = Ragebot.nearest()
+            if target then
+                Ragebot.config.target.manualkey = true
+                Ragebot.settarget(target)
+            end
+        end
+    end
+})
+
+ragebotTab:AddToggle('AutoTarget', {
+    Text = 'Auto Target',
+    Default = false,
+    Callback = function(val) Ragebot.config.target.auto = val end
+})
+
+ragebotTab:AddDivider()
+
+ragebotTab:AddDropdown('AutoTargetAttackPos', {
+    Text = 'Attack Position',
+    Default = 'default',
+    Values = { 'default', 'under' },
+    Callback = function(val)
+        Ragebot.config.target.attackPosition = val
+        if Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
+    end,
+})
+
+ragebotTab:AddSlider('UnderAttackOffset', {
+    Text = 'Under Offset',
+    Default = 4,
+    Min = 1,
+    Max = 25,
+    Rounding = 1,
+    Compact = true,
+    Callback = function(val)
+        Ragebot.config.target.underOffset = val
+        if Ragebot.config.target.attackPosition == "under" and Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
+    end,
+})
+
+ragebotTab:AddDivider()
+
+ragebotTab:AddToggle('AttackCustomOverride', {
+    Text = 'Custom Attack Override',
+    Default = false,
+    Callback = function(val)
+        Ragebot.config.target.attackCustomEnabled = val
+        if Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
+    end,
+})
+
+ragebotTab:AddSlider('CustomAttackHeight', {
+    Text = 'Orbit Height',
+    Default = 2,
+    Min = -25,
+    Max = 30,
+    Rounding = 1,
+    Compact = true,
+    Callback = function(val)
+        Ragebot.config.target.customHeight = val
+        if Ragebot.config.target.attackCustomEnabled and Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
+    end,
+})
+ragebotTab:AddSlider('CustomAttackFront', {
+    Text = 'Front Offset',
+    Default = 0,
+    Min = -20,
+    Max = 20,
+    Rounding = 1,
+    Compact = true,
+    Callback = function(val)
+        Ragebot.config.target.customFront = val
+        if Ragebot.config.target.attackCustomEnabled and Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
+    end,
+})
+ragebotTab:AddSlider('CustomAttackSide', {
+    Text = 'Side Offset',
+    Default = 0,
+    Min = -20,
+    Max = 20,
+    Rounding = 1,
+    Compact = true,
+    Callback = function(val)
+        Ragebot.config.target.customSide = val
+        if Ragebot.config.target.attackCustomEnabled and Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
+    end,
+})
+ragebotTab:AddSlider('CustomAttackVertical', {
+    Text = 'Vertical Offset',
+    Default = 0,
+    Min = -25,
+    Max = 30,
+    Rounding = 1,
+    Compact = true,
+    Callback = function(val)
+        Ragebot.config.target.customVertical = val
+        if Ragebot.config.target.attackCustomEnabled and Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
+    end,
+})
+ragebotTab:AddSlider('CustomAttackRadius', {
+    Text = 'Orbit Radius',
+    Default = 0,
+    Min = 0,
+    Max = 25,
+    Rounding = 1,
+    Compact = true,
+    Callback = function(val)
+        Ragebot.config.target.customRadius = val
+        if Ragebot.config.target.attackCustomEnabled and Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
+    end,
+})
+
+ragebotTab:AddDivider()
+
+ragebotTab:AddDropdown('RageWeaponPick', {
+    Text = 'Weapon Slot',
+    Default = 'primary',
+    Values = { 'primary', 'secondary', 'melee' },
+    Callback = function(val)
+        Ragebot.config.target.weaponPick = val
+        if Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
+        if Ragebot.eqSlot then Ragebot.eqSlot() end
+    end,
+})
+
+ragebotTab:AddDropdown('TargetPart', {
+    Text = 'Hit Part',
+    Default = 'Head',
+    Values = {'Head', 'HumanoidRootPart', 'Torso', 'UpperTorso', 'Closest', 'Random'},
+    Callback = function(val) Ragebot.config.target.hitpart = val end
+})
+
+ragebotTab:AddDivider()
+
+ragebotTab:AddSlider('ShootAttempts', {
+    Text = 'Shoot Attempts',
+    Default = 1,
+    Min = 1,
+    Max = 3,
+    Rounding = 0,
+    Suffix = 'x',
+    Callback = function(val)
+        Ragebot.config.target.shootAttempts = math.clamp(math.floor(tonumber(val) or 1), 1, 3)
+    end
+})
+
+ragebotTab:AddDivider()
+
+ragebotTab:AddToggle('PredictT', {
+    Text = 'Prediction',
+    Default = false,
+    Callback = function(val) Ragebot.config.prediction.enabled = val end
+})
+
+ragebotTab:AddSlider('PredictMul', {
+    Text = 'Prediction Multiplier',
+    Default = 1.2,
+    Min = 0.1,
+    Max = 3.0,
+    Rounding = 1,
+    Callback = function(val) Ragebot.config.prediction.multiplier = val end
+})
+
+ragebotTab:AddDivider()
+
+ragebotTab:AddToggle('VoidSpam', {
+    Text = 'Void Spam',
+    Default = false,
+    Callback = function(val)
+        Ragebot.config.voidspam.enabled = val
+        if val then
+            if Ragebot.config.target.immune then
+                Ragebot.config.voidspam.phase = nil
+                return
+            end
+            if Ragebot.isSling(Ragebot.getweapon()) then
+                Ragebot.config.voidspam.lastswitch = tick()
+                Ragebot.config.voidspam.phase = "shoot"
+                Ragebot.config.voidspam.currentduration = Ragebot.randVs(Ragebot.config.voidspam.shoot_min, Ragebot.config.voidspam.shoot_max)
+            else
+                Ragebot.config.voidspam.phase = nil
+            end
+        else
+            Ragebot.config.voidspam.phase = nil
+            if Ragebot.clrVoidSnap then Ragebot.clrVoidSnap() end
+        end
+    end
+})
+
+ragebotTab:AddDualSlider('VoidShootTime', 'VoidHideTime', {
+    Text = 'Attack Time',
+    Default = 1,
+    Min = 0.1,
+    Max = 2,
+    Rounding = 1,
+    Compact = true,
+    Callback = function(val)
+        val = Ragebot.clampVs(val)
+        Ragebot.config.voidspam.shoot_min = val
+        Ragebot.config.voidspam.shoot_max = val
+    end
+}, {
+    Text = 'Hide Time',
+    Default = 1,
+    Min = 0.1,
+    Max = 2,
+    Rounding = 1,
+    Compact = true,
+    Callback = function(val)
+        val = Ragebot.clampVs(val)
+        Ragebot.config.voidspam.hide_min = val
+        Ragebot.config.voidspam.hide_max = val
+    end
+})
 
 -- ============================================================
 -- SETTINGS
