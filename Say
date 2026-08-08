@@ -266,7 +266,7 @@ local function stopUnderground()
 end
 
 local voidSpamEnabled = false
-local voidRange = math.huge
+local range = math.huge
 local voidHrp = nil
 local voidClientc, voidClientv, voidClientva = nil, nil, nil
 local voidHeartbeatConn, voidRenderConn = nil, nil
@@ -835,7 +835,6 @@ local config = {
         rageMasterOn = false,
         meleeFeetDrop = 3.5,
         underOffset = 4,
-        freezePlayer = false,
     },
     state = {
         reloading = false,
@@ -845,10 +844,10 @@ local config = {
     },
     voidspam = {
         enabled = false,
-        shoot_min = 1,
-        shoot_max = 1,
-        hide_min = 1,
-        hide_max = 1,
+        shoot_min = 0.5,
+        shoot_max = 0.5,
+        hide_min = 0.5,
+        hide_max = 0.5,
         phase = nil,
         lastswitch = 0,
         currentduration = 0,
@@ -1186,15 +1185,7 @@ local function reloadHide(sling)
         snapVoid(hrp)
         return true
     end
-    local randomX = math.random(-10000, 10000)
-    local randomZ = math.random(-10000, 10000)
-    config.orbit.serverpos = Vector3.new(randomX, -99999999999, randomZ)
-    if sling and localfighter and localfighter.Entity and localfighter.Entity.RootPart then
-        pcall(function()
-            localfighter.Entity.RootPart.CFrame = CFrame.new(config.orbit.serverpos)
-        end)
-    end
-    return true
+    return false
 end
 
 local function isteammate(targetplayer)
@@ -1348,30 +1339,6 @@ local function refreshAtk()
     setOrbR()
 end
 
-local function stopsync()
-    if not config.state.csyncactive then return end
-    if config.orbit.connection then
-        config.orbit.connection:Disconnect()
-        config.orbit.connection = nil
-    end
-    config.state.csyncactive = false
-    config.orbit.active = false
-    clrVoidSnap()
-    config.voidspam.phase = nil
-    if config.orbit.savedpos and localfighter and localfighter.Entity and localfighter.Entity.RootPart then
-        local ok, pos = pcall(function() return config.orbit.savedpos end)
-        if ok and pos then
-            pcall(function()
-                localfighter.Entity.RootPart.CFrame = pos
-            end)
-        end
-    end
-    config.orbit.serverpos = nil
-    config.orbit.savedpos = nil
-    config.voidspam.phase = nil
-    oldpos = nil
-end
-
 local function isHidingPhase()
     return config.voidspam.enabled and config.voidspam.phase == "hide"
 end
@@ -1416,29 +1383,56 @@ local function startsync()
     end
     config.orbit.connection = runsvc.Heartbeat:Connect(function(dt)
         if not config.state.csyncactive then return end
-        if config.target.immune then stopsync() return end
-        if not config.target.character or not valid(config.target.character) then stopsync() return end
-        if not localfighter or not localfighter.Entity or not localfighter.Entity.RootPart then stopsync() return end
+        if config.target.immune then
+            stopsync()
+            return
+        end
+        if not config.target.character or not valid(config.target.character) then
+            stopsync()
+            return
+        end
+        if not localfighter or not localfighter.Entity or not localfighter.Entity.RootPart then
+            stopsync()
+            return
+        end
 
         setOrbR()
         oldpos = localfighter.Entity.RootPart.CFrame
 
         eqSlot()
 
-        if reloadHide() then return end
+        local slingWeapon = isSling(getweapon())
 
-        if not config.target.character then stopsync() return end
+        if reloadHide(slingWeapon) then return end
+
+        if not config.target.character then
+            stopsync()
+            return
+        end
         local root = config.target.character:FindFirstChild("HumanoidRootPart")
-        if not root then stopsync() return end
+        if not root then
+            stopsync()
+            return
+        end
 
-        if config.target.freezePlayer then
-            if localfighter and localfighter.Entity and localfighter.Entity.RootPart then
-                localfighter.Entity.RootPart.CFrame = config.orbit.savedpos or localfighter.Entity.RootPart.CFrame
+        if config.state.outofammo and not isInfiniteWeapon() then
+            local hrp = voidHrp()
+            if hrp then
+                snapVoid(hrp)
+            else
+                local randomX = math.random(-10000, 10000)
+                local randomZ = math.random(-10000, 10000)
+                config.orbit.serverpos = Vector3.new(randomX, -99999999999, randomZ)
+                pcall(function()
+                    localfighter.Entity.RootPart.CFrame = CFrame.new(config.orbit.serverpos)
+                end)
             end
             return
         end
 
-        if config.state.outofammo and weapon and not isInfiniteWeapon() then
+        tickVoidSpam()
+
+        if isHidingPhase() then
             local hrp = voidHrp()
             if hrp then
                 snapVoid(hrp)
@@ -1472,6 +1466,30 @@ local function startsync()
             end
         end
     end)
+end
+
+local function stopsync()
+    if not config.state.csyncactive then return end
+    if config.orbit.connection then
+        config.orbit.connection:Disconnect()
+        config.orbit.connection = nil
+    end
+    config.state.csyncactive = false
+    config.orbit.active = false
+    clrVoidSnap()
+    config.voidspam.phase = nil
+    if config.orbit.savedpos and localfighter and localfighter.Entity and localfighter.Entity.RootPart then
+        local ok, pos = pcall(function() return config.orbit.savedpos end)
+        if ok and pos then
+            pcall(function()
+                localfighter.Entity.RootPart.CFrame = pos
+            end)
+        end
+    end
+    config.orbit.serverpos = nil
+    config.orbit.savedpos = nil
+    config.voidspam.phase = nil
+    oldpos = nil
 end
 
 local function autoshoot()
@@ -1813,19 +1831,12 @@ RageGroupBox:AddDropdown("RagebotWeapon", {
         Ragebot.config.target.weaponPick = v
     end
 })
-RageGroupBox:AddToggle("RagebotFreeze", {
-    Text = "Freeze Player",
-    Default = false,
-    Callback = function(v)
-        Ragebot.config.target.freezePlayer = v
-    end
-})
 RageGroupBox:AddSlider("RagebotHide", {
     Text = "Hide",
-    Default = 0.3,
+    Default = 0.5,
     Min = 0,
     Max = 1,
-    Rounding = 0.25,
+    Rounding = 0.1,
     Callback = function(v)
         if v == 0 then
             Ragebot.config.voidspam.hide_min = 0.1
@@ -1839,10 +1850,10 @@ RageGroupBox:AddSlider("RagebotHide", {
 })
 RageGroupBox:AddSlider("RagebotAttack", {
     Text = "Attack",
-    Default = 1,
+    Default = 0.5,
     Min = 0,
     Max = 2,
-    Rounding = 0.25,
+    Rounding = 0.1,
     Callback = function(v)
         if v == 0 then
             Ragebot.config.voidspam.shoot_min = 0.1
