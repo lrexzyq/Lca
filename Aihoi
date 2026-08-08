@@ -1,607 +1,13 @@
-
-pcall(LPH_NO_VIRTUALIZE(function()
-    local bypassed = false
-
-    local kKickNames = {
-        "Kick",
-        "kick"
-    }
-
-    local kProtectedProperties = {
-        Enabled = true,
-        Disabled = false
-    }
-
-    local kSlotMap = {
-        [69]  = 2,
-        [138] = 3,
-        [207] = 4,
-        [276] = 5,
-        [345] = 6,
-        [414] = 7,
-    }
-
-    local kFilledSub = {
-        1,
-        2,
-        3,
-        4,
-        5
-    }
-
-    local Players = cloneref(game:GetService("Players"))
-    local ReplicatedFirst = cloneref(game:GetService("ReplicatedFirst"))
-    local ReplicatedStorage = cloneref(game:GetService("ReplicatedStorage"))
-    local ScriptContext = cloneref(game:GetService("ScriptContext"))
-
-    local LocalPlayer = Players.LocalPlayer
-
-    local ac_script = ReplicatedFirst:WaitForChild("LocalScript3")
-    local ac_event = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("RemoteEvent")
-
-    local last = nil
-    local first_seen = false
-    local hijack_ready = false
-    local client_id
-    local expected_interval = 0.6
-    local min_interval = 0.25
-    local ema_alpha = 0.5
-    local samples = 0
-    local hidden_fn = {}
-    local max_stack_depth = 128
-    if not setstackhidden then
-        local function ValidTraceback(s)
-            local dotPos = string.find(s, "%.")
-            local colonPos = string.find(s, ":")
-
-            if not dotPos then
-                return false
-            end
-
-            if not colonPos then
-                return true
-            end
-
-            return dotPos < colonPos
-        end
-
-        local function TracebackLines(str, lvl)
-            local pos = lvl
-            return function()
-                if not pos then
-                    return nil
-                end
-                local p1, p2 = string.find(str, "\r?\n", pos)
-                local line
-                if p1 then
-                    line = str:sub(pos, p1 - 1)
-                    pos = p2 + 1
-                else
-                    line = str:sub(pos)
-                    pos = nil
-                end
-                return line
-            end
-        end
-
-        local old_dbg_traceback;
-        old_dbg_traceback = hookfunction(getrenv().debug.traceback, function(...)
-            if checkcaller() or not (pcall(old_dbg_traceback, ...)) then
-                return old_dbg_traceback(...)
-            end
-
-            local StartingString, StackLevel = ...
-            local Traceback = old_dbg_traceback(...)
-            local NewTraceback = {}
-
-            if typeof(StartingString) == "string" or typeof(StartingString) == "number" then
-                table.insert(NewTraceback, tostring(StartingString))
-            end
-
-            if typeof(StackLevel) ~= "number" or not tonumber(StackLevel) then
-                StackLevel = 1
-            else
-                StackLevel = math.floor(tonumber(StackLevel))
-            end
-
-            for Line in TracebackLines(Traceback, StackLevel) do
-                if not ValidTraceback(Line) then
-                    continue
-                end
-
-                table.insert(NewTraceback, Line)
-            end
-
-            return table.concat(NewTraceback, "\n") .. "\n"
-        end)
-
-        local old_dbg_info;
-        old_dbg_info = hookfunction(getrenv().debug.info, function(...)
-            local ToInspect, LevelOrInfo, _ThreadInfo = ...
-
-            if
-                checkcaller()
-                or typeof(ToInspect) == "function"
-                or typeof(ToInspect) == "thread"
-                or not pcall(function(LevelOrInfo)
-                    old_dbg_info(function() end, LevelOrInfo)
-                end, LevelOrInfo)
-            then
-                return old_dbg_info(...)
-            end
-
-            ToInspect = math.floor(ToInspect)
-
-            local ReconstructedConstructedStack = {}
-            for Level = 2, max_stack_depth do
-                local Function, Source, Line, Name, NumberOfArgs, Varargs = old_dbg_info(Level, "fslna")
-
-                if not Function or not Source or not Line or not Name then
-                    break
-                end
-
-                if isexecutorclosure(Function) and not hidden_fn[Function] then
-                    continue
-                end
-
-                table.insert(ReconstructedConstructedStack, {
-                    f = Function,
-                    s = Source,
-                    l = Line,
-                    n = Name,
-                    a = { NumberOfArgs, Varargs },
-                })
-            end
-
-            local InfoLevel = ReconstructedConstructedStack[ToInspect + 1]
-
-            if not InfoLevel then
-                return old_dbg_info(3e4, LevelOrInfo)
-            end
-
-            local ReturnResult = {}
-            for idx, info in string.split(LevelOrInfo, "") do
-                local Value = InfoLevel[info]
-
-                if typeof(Value) == "table" then
-                    for _, v in Value do
-                        table.insert(ReturnResult, v)
-                    end
-
-                    continue
-                end
-
-                table.insert(ReturnResult, Value)
-            end
-
-            return table.unpack(ReturnResult, 1, #ReturnResult)
-        end)
-
-        local old_getfenv;
-        old_getfenv = hookfunction(getrenv().getfenv, function(...)
-            if checkcaller() then
-                return old_getfenv(...)
-            end
-
-            local ToInspect: (...any) -> (...any) | number = ...
-
-            local Success, ResultingEnv = pcall(function()
-                if typeof(ToInspect) == "number" and ToInspect >= 0 then
-                    return old_getfenv(ToInspect + 3)
-                end
-
-                return old_getfenv(ToInspect)
-            end)
-
-            if not Success then
-                if typeof(ToInspect) == "number" and ToInspect >= 0 then
-                    return old_getfenv(ToInspect + 3)
-                end
-
-                return old_getfenv(ToInspect)
-            end
-
-            if ToInspect == nil or typeof(ToInspect) == "function" then
-                return ResultingEnv
-            end
-
-            ToInspect = math.floor(ToInspect)
-
-            local ReconstructedConstructedStack = {}
-            for Level = 1, max_stack_depth do
-                local StackInfoSuccess, Data = pcall(function()
-                    return {
-                        Environement = old_getfenv(Level + 3),
-                        Function = old_dbg_info(Level + 3, "f"),
-                    }
-                end)
-
-                if not StackInfoSuccess or not Data then
-                    break
-                end
-
-                local Environement = Data.Environement
-                local Function = Data.Function
-
-                if typeof(Environement["getgenv"]) == "function" and isexecutorclosure(Environement["getgenv"]) then
-                    if shared.Hooking.IncludeInStackFunctions[Function] then
-                        Environement = setmetatable(ResultingEnv, {
-                            __index = getrenv()
-                        })
-                    else
-                        continue
-                    end
-                end
-
-                table.insert(ReconstructedConstructedStack, Environement)
-            end
-
-            local InfoLevel = ReconstructedConstructedStack[ToInspect + 1]
-
-            if not InfoLevel then
-                return old_getfenv(3e4)
-            end
-
-            return InfoLevel
-        end)
-    end
-
-    setstackhidden = setstackhidden or function(fn_or_level, hidden)
-        assert(typeof(hidden) == "boolean", "hidden must be boolean")
-
-        local ok, fn = pcall(function()
-            if typeof(fn_or_level) == "number" then
-                return debug.info(fn_or_level + 2, "f")
-            end
-            return fn_or_level
-        end)
-
-        assert(ok and fn, "invalid argument #1 to 'setstackhidden'")
-        hidden_fn[fn] = not hidden
-    end
-
-    local TrustedFunctions = setmetatable({}, {
-        __mode = "k"
-    })
-
-    local function TrustFunction(fn)
-        if type(fn) == "function" then
-            TrustedFunctions[fn] = true
-        end
-
-        return fn
-    end
-
-    local function IsTrustedFunction(fn)
-        return TrustedFunctions[fn] == true
-    end
-
-    local SafeHook = function(hookfn, ...)
-        local args = {...}
-        local func, inst, metamethod, detour
-
-        if hookfn == hookmetamethod then
-            inst = args[1]
-            metamethod = args[2]
-            detour = args[3]
-        else
-            func = args[1]
-            detour = args[2]
-        end
-
-        local original_func
-
-        if hookfn == hookfunction and iscclosure(func) then
-            detour = newcclosure(detour)
-        end
-
-        if not iscclosure(detour) then
-            detour = newcclosure(detour)
-        end
-
-        setstackhidden(detour, true)
-
-        local ok, _ = pcall(function()
-            TrustFunction(detour)
-                    
-            if hookfn == hookmetamethod then
-                original_func = hookfn(inst, metamethod, detour)
-            else
-                original_func = hookfn(func, detour)
-            end
-        end)
-
-        if not ok then
-            LocalPlayer:Kick("[AethSec]: Bypass failed! n1")
-        end
-
-        return original_func
-    end
-
-    local SafeCall = function(func, ...)
-        if checkcaller() then
-            return func(...)
-        end
-
-        local old = getthreadidentity()
-        if old ~= 2 then
-            setthreadidentity(2)
-        end
-
-        local result = {func(...)}
-
-        if old ~= 2 then
-            setthreadidentity(old)
-        end
-
-        return table.unpack(result)
-    end
-
-    local monitor_conn = ScriptContext.Error:Connect(TrustFunction(function(message, stack, _)
-        message = tostring(message)
-        stack = tostring(stack)
-        if stack:find("PlayerScripts.Controllers.MiscellaneousController") and message:find("attempt to index number with number") then
-            LocalPlayer:Kick("[AethSec]: Bypass failed! n2")
-        end
-    end))
-
-    local oldindex; oldindex = SafeHook(hookmetamethod, ac_script, "__index", function(t, k)
-        local is_caller = not bypassed and checkcaller()
-        if t == ac_script and not is_caller and kProtectedProperties[k] ~= nil then
-            return kProtectedProperties[k]
-        end
-        if checkcaller() then
-            return oldindex(t, k)
-        end
-        return SafeCall(oldindex, t, k)
-    end)
-
-    local oldnewindex; oldnewindex = SafeHook(hookmetamethod, ac_script, "__newindex", function(t, k, v)
-        local is_caller = not bypassed and checkcaller()
-        if t == ac_script and not is_caller and kProtectedProperties[k] ~= nil then
-            kProtectedProperties[k] = v
-            if k == "Enabled" then
-                kProtectedProperties["Disabled"] = not v
-            end
-
-            if k == "Disabled" then
-                kProtectedProperties["Enabled"] = not v
-            end
-            return
-        end
-        if checkcaller() then
-            return oldnewindex(t, k, v)
-        end
-        return SafeCall(oldnewindex, t, k, v)
-    end)
-
-    client_id = ""
-    last = tick()
-
-    local oldfireserver; oldfireserver = SafeHook(hookfunction, ac_event.FireServer, function(self, ...)
-        local now = tick()
-        local args = {...}
-
-        if not first_seen then
-            first_seen = true
-            local first_arg = args[1]
-
-            if type(first_arg) == "table" and #first_arg >= 1 and (type(first_arg[1]) == "string" or type(first_arg[1]) == "number") then
-                client_id = tostring(first_arg[1])
-            else
-                client_id = client_id or ""
-            end
-
-            last = tick()
-            samples = 1
-            hijack_ready = true
-
-            local res = SafeCall(oldfireserver, self, ...)
-            return res
-        end
-
-        local interval = now - (last or now)
-
-        if interval > 0 then
-            if samples == 0 then
-                expected_interval = interval
-            else
-                expected_interval = ema_alpha * interval + (1 - ema_alpha) * expected_interval
-            end
-
-            samples = samples + 1
-
-            if expected_interval < min_interval then
-                expected_interval = min_interval
-            end
-        end
-
-        local res = SafeCall(oldfireserver, self, ...)
-        last = tick()
-
-        return res
-    end)
-
-    local BuildSubTable = function()
-        local num_empty = math.random(1, 5)
-        local empty_map = {}
-        local empty_slots = {7}
-        empty_map[7] = true
-
-        while #empty_slots < num_empty do
-            local slot = math.random(1, 6)
-            if not empty_map[slot] then
-                empty_map[slot] = true
-                table.insert(empty_slots, slot)
-            end
-        end
-
-        table.sort(empty_slots)
-
-        local result = {}
-        for i = 1, 7 do
-            if empty_map[i] then
-                result[i] = {}
-            else
-                result[i] = kFilledSub
-            end
-        end
-
-        return result, empty_slots
-    end
-
-    local ApplyTransforms = function(t, mask, empty_slots)
-        local payload = t[1]
-        local outer_index = #payload
-        local inner_index = empty_slots[math.random(1, #empty_slots)]
-        local derived
-        local outer_val = payload[outer_index]
-
-        if type(outer_val) == "table" and type(inner_index) == "number" then
-            derived = outer_val[inner_index]
-        else
-            for i = outer_index, 1, -1 do
-                if type(payload[i]) ~= "table" then
-                    continue
-                end
-
-                local candidate = payload[i]
-
-                if type(inner_index) == "number" and candidate[inner_index] ~= nil then
-                    derived = candidate[inner_index]
-                    break
-                else
-                    derived = candidate
-                    break
-                end
-            end
-
-            if derived == nil then
-                derived = {}
-            end
-        end
-
-        local written = {}
-        local kSlotMapRef = kSlotMap
-
-        for _, value in ipairs(mask) do
-            local slot = kSlotMapRef[value]
-            if slot and not written[slot] then
-                t[slot] = derived
-                written[slot] = true
-            end
-        end
-
-        return t
-    end
-
-    local BuildPayload = function(challenge, mask)
-        local sub_table, empty_slots = BuildSubTable()
-        local total_idx = math.random(1, 8)
-        local payload = {client_id, buffer.tostring(challenge)}
-        local extra_strings = math.random(0, 2)
-
-        for _ = 1, extra_strings do
-            payload[#payload + 1] = ""
-        end
-
-        while #payload < (total_idx - 1) do
-            payload[#payload + 1] = math.random(5, 100000)
-        end
-
-        payload[#payload + 1] = sub_table
-
-        local t = {
-            payload,
-            {},
-            nil,
-            nil,
-            nil,
-            nil,
-            nil
-        }
-        return ApplyTransforms(t, mask, empty_slots)
-    end
-
-    task.spawn(function()
-        getfenv().script = ac_script
-        while not hijack_ready do
-            task.wait()
-        end
-
-        ac_script.Enabled = false
-
-        ac_event.OnClientEvent:Connect(function(...)
-            last = tick()
-
-            local remote = Instance.new("RemoteEvent", nil)
-            remote:FireServer()
-
-            local t = {...}
-            local challenge = t[1]
-            local index = t[2]
-            local mask = t[3]
-
-            if typeof(challenge) ~= "buffer" or type(index) ~= "number" or type(mask) ~= "table" then
-                LocalPlayer:Kick("[AethSec]: Bypass failed! n3")
-            end
-
-            local payload = BuildPayload(challenge, mask)
-            task.defer(function()
-                local since_last = tick() - (last or 0)
-                local desired_wait = expected_interval - since_last
-                
-                if desired_wait > 0 then
-                    task.wait(desired_wait)
-                end
-                ac_event:FireServer(table.unpack(payload, 1, 5))
-                last = tick()
-                remote:Destroy()
-            end)
-        end)
-            
-        bypassed = true
-        monitor_conn:Disconnect()
-    end)
-
-    for _, name in ipairs(kKickNames) do
-        local func = LocalPlayer[name]
-        if type(func) ~= "function" then return end
-            
-        local oldfunc; oldfunc = SafeHook(hookfunction, func, function(self, ...)
-            if self == LocalPlayer and not checkcaller() then
-                return nil
-            end
-            return oldfunc(self, ...)
-        end)
-    end
-
-    for _, conn in ipairs(getconnections(ScriptContext.Error)) do
-        if not conn.Function then continue end
-        if IsTrustedFunction(conn.Function) then continue end
-        SafeHook(hookfunction, conn.Function, function(...)
-            return nil
-        end)
-    end
-
-    SafeHook(hookfunction, ScriptContext.Error.Connect, function(...)
-        return nil
-    end)
-
-    while not bypassed do
-        task.wait(0.5)
-    end
-    task.wait(1)
-end))
-==acbypass==
-print("bypassed!")
+-- ===== RIVALS SCRIPT (CREU UI) =====
+-- Bao gồm: Aimbot + Ragebot (UnnamedFeatures) + Underground + tất cả mod (trừ Unlock All)
+-- Device Spoof có dropdown: VR, Touch, Gamepad, MouseKeyboard
 
 local Library = loadstring(game:HttpGet('https://raw.githubusercontent.com/lrexzyq/CreU/main/Library.lua'))()
 local SaveManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/lrexzyq/CreU/main/SaveManager.lua'))()
 local ThemeManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/lrexzyq/CreU/main/ThemeManager.lua'))()
 
 local Window = Library:CreateWindow({
-    Title = 'CreU UI | Ragebot + Underground + Aimbot',
+    Title = 'Rivals Script',
     Center = true,
     AutoShow = true,
     TabPadding = 8,
@@ -609,12 +15,13 @@ local Window = Library:CreateWindow({
 })
 
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local lp = Players.LocalPlayer
 
+-- Hàm safeRequire
 local function safeRequire(obj)
     local success, res = pcall(require, obj)
     if success then return res end
@@ -622,81 +29,7 @@ local function safeRequire(obj)
 end
 
 -- ============================================================
--- UNDERGROUND
--- ============================================================
-undergroundEnabled = false
-undergroundDepth = 2.2
-undergroundConn = nil
-undergroundRealCF = nil
-undergroundRealVel = nil
-undergroundRealAngVel = nil
-undergroundRenderConn = nil
-
-local function startUnderground()
-    if undergroundConn then return end
-    undergroundConn = RunService.Heartbeat:Connect(function()
-        if not undergroundEnabled then return end
-        pcall(function()
-            local char = lp.Character
-            if not char then return end
-            local hrp = char:FindFirstChild("HumanoidRootPart")
-            if not hrp then return end
-            undergroundRealCF = hrp.CFrame
-            undergroundRealVel = hrp.AssemblyLinearVelocity
-            undergroundRealAngVel = hrp.AssemblyAngularVelocity
-            local depth = undergroundDepth or 2.2
-            local params = RaycastParams.new()
-            params.FilterDescendantsInstances = { char }
-            params.FilterType = Enum.RaycastFilterType.Exclude
-            local result = Workspace:Raycast(hrp.Position, Vector3.new(0, -500, 0), params)
-            local fakeY
-            if result then
-                fakeY = result.Position.Y - depth
-            else
-                fakeY = -99999
-            end
-            hrp.CFrame = CFrame.new(hrp.Position.X, fakeY, hrp.Position.Z)
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.AssemblyAngularVelocity = Vector3.zero
-        end)
-    end)
-    undergroundRenderConn = RunService:BindToRenderStep("UndergroundSync", Enum.RenderPriority.First.Value, function()
-        if undergroundEnabled and undergroundRealCF then
-            pcall(function()
-                local char = lp.Character
-                if not char then return end
-                local hrp = char:FindFirstChild("HumanoidRootPart")
-                if not hrp then return end
-                hrp.CFrame = undergroundRealCF
-                hrp.AssemblyLinearVelocity = undergroundRealVel or Vector3.zero
-                hrp.AssemblyAngularVelocity = undergroundRealAngVel or Vector3.zero
-            end)
-        end
-    end)
-end
-
-local function stopUnderground()
-    if undergroundConn then
-        undergroundConn:Disconnect()
-        undergroundConn = nil
-    end
-    if undergroundRenderConn then
-        pcall(function() RunService:UnbindFromRenderStep("UndergroundSync") end)
-        undergroundRenderConn = nil
-    end
-    undergroundRealCF = nil
-    undergroundRealVel = nil
-    undergroundRealAngVel = nil
-end
-
-getgenv().SetUnderground = function(val)
-    undergroundEnabled = val
-    if val then startUnderground() else stopUnderground() end
-end
-getgenv().UndergroundEnabled = false
-
--- ============================================================
--- AIMBOT
+-- AIMBOT LOGIC
 -- ============================================================
 Aimbot = {
     enabled = false,
@@ -769,11 +102,7 @@ Aimbot = {
                 rp.FilterDescendantsInstances = { lp.Character, head.Parent }
                 rp.FilterType = Enum.RaycastFilterType.Exclude
                 local result = Workspace:Raycast(camPos, (head.Position - camPos).Unit * 1000, rp)
-                if result and result:IsDescendantOf(head.Parent) then
-                    -- visible
-                else
-                    continue
-                end
+                if result and not result.Instance:IsDescendantOf(head.Parent) then continue end
             end
 
             if dist < bestDist then
@@ -793,9 +122,9 @@ Aimbot = {
 RunService.RenderStepped:Connect(function() Aimbot:update() end)
 
 -- ============================================================
--- RAGEBOT
+-- RAGEBOT (UnnamedFeatures)
 -- ============================================================
-local Ragebot = {}
+Ragebot = {}
 do
 
 local replicatedstorage = cloneref(game:GetService("ReplicatedStorage"))
@@ -973,10 +302,6 @@ local config = {
         acceleration = Vector3.new(0, 0, 0),
         lastposition = nil,
         lasttime = 0,
-        velbuffer = {},
-        posbuffer = {},
-        maxvelsamples = 15,
-        maxpossamples = 5
     },
     orbit = {
         active = false,
@@ -986,19 +311,13 @@ local config = {
         speed = 9000,
         height = 1,
         radius = 0,
-        originalpos = nil
+        savedpos = nil,
     },
     state = {
         reloading = false,
         outofammo = false,
         csyncactive = false,
         reloadStartedAt = 0,
-    },
-    voidhide = {
-        enabled = true,
-        originalPosition = nil,
-        active = false,
-        connection = nil
     },
     voidspam = {
         enabled = false,
@@ -1008,51 +327,7 @@ local config = {
         hide_max = 1,
         phase = nil,
         lastswitch = 0,
-        currentduration = 0
-    },
-    visualizer = {
-        enabled = true,
-        tracer = {
-            color = Color3.fromRGB(0, 186, 255),
-            thickness = 1,
-            transparency = 1,
-            start_point = "cursor",
-            outline = true,
-            outline_color = Color3.fromRGB(0, 0, 0),
-            outline_thickness = 1
-        },
-        indicator = {
-            display_options = {"name", "position", "hit reg"},
-            color = Color3.fromRGB(255, 255, 255),
-            accent_color = Color3.fromRGB(0, 186, 255)
-        }
-    },
-    hitNotifications = {
-        enabled = true,
-        color = Color3.fromRGB(235, 235, 235),
-        textSize = 14,
-        maxVisible = 8,
-        duration = 3,
-        stackGap = 6,
-        position = "Top Left",
-        offsetX = 12,
-        offsetY = 12,
-        inAnimation = "fade bounce",
-        outAnimation = "fade",
-        animInDuration = 0.52,
-        animOutDuration = 0.38,
-    },
-    ragestatus = {
-        enabled = false,
-        mode = "static",
-        color = Color3.fromRGB(235, 235, 235),
-        staticOffsetX = 0,
-        staticOffsetY = 40,
-        showAmmo = true,
-        hideOnReload = true,
-        textSize = 15,
-        lineGap = 15,
-        fontName = "gotham",
+        currentduration = 0,
     },
 }
 
@@ -1060,17 +335,7 @@ local ragePerf = {
     lastAttackTick = 0,
     hitPartByPlayer = {},
     lastHitAtByPlayer = {},
-    targetHudAt = 0,
-    rageStatusAt = 0,
-    restoreVisualAt = 0,
     killStartAt = nil,
-    rageStatusCacheAt = 0,
-    cachedRageStatusLine = "",
-    cachedRageStatusDetail = "",
-    lastRageStatusText = "",
-    lastRageDetailText = "",
-    lastRageAmmoText = "",
-    lastRageColor = nil,
 }
 
 local vhState = {
@@ -1079,43 +344,69 @@ local vhState = {
     mainConnection = nil,
     restoreConnection = nil,
     currentVoidPos = nil,
-    lastTeleportTime = 0
+    lastTeleportTime = 0,
 }
 
 local localfighter = modules.fighter.LocalFighter
 local oldpos
 
-local indicator = Drawing.new("Circle")
-indicator.Thickness = 1.5
-indicator.NumSides = 36
-indicator.Filled = false
-indicator.Transparency = 1
-indicator.Visible = false
-indicator.Radius = 12
-indicator.Color = Color3.fromRGB(255, 50, 50)
+local vfrLim, vfrDead = 2147483646, 1147483646
+local vfrSnap = { cf = nil, lv = nil, av = nil }
 
-local indicatoroutline = Drawing.new("Circle")
-indicatoroutline.Thickness = 4
-indicatoroutline.NumSides = 36
-indicatoroutline.Filled = false
-indicatoroutline.Transparency = 1
-indicatoroutline.Visible = false
-indicatoroutline.Radius = 12
-indicatoroutline.Color = Color3.fromRGB(0, 0, 0)
+local function clrVoidSnap()
+    vfrSnap.cf, vfrSnap.lv, vfrSnap.av = nil, nil, nil
+end
 
-local tracerline = Drawing.new("Line")
-tracerline.Visible = false
-tracerline.Thickness = 2
-tracerline.Transparency = 1
-tracerline.Color = Color3.fromRGB(0, 186, 255)
+local function voidHrp()
+    local char = player.Character
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
 
-local traceroutline = Drawing.new("Line")
-traceroutline.Visible = false
-traceroutline.Thickness = 4
-traceroutline.Transparency = 1
-traceroutline.Color = Color3.fromRGB(0, 0, 0)
+local function rndSkip(mi, ma, dmi, dma)
+    local val = math.random(mi, ma)
+    while val >= dmi and val <= dma do
+        val = math.random(mi, ma)
+    end
+    return val
+end
 
-local lastdamagetime = {}
+local function snapVoid(hrp)
+    if not hrp then return end
+    if lobbyCache() then return end
+    vfrSnap.cf = hrp.CFrame
+    vfrSnap.lv = hrp.AssemblyLinearVelocity
+    vfrSnap.av = hrp.AssemblyAngularVelocity
+    local lim, dead = vfrLim, vfrDead
+    pcall(function()
+        local p = Vector3.new(rndSkip(-lim, lim, -dead, dead), rndSkip(-lim, lim, -dead, dead), rndSkip(-lim, lim, -dead, dead))
+        local v = Vector3.new(rndSkip(-lim, lim, -dead, dead), rndSkip(-lim, lim, -dead, dead), rndSkip(-lim, lim, -dead, dead))
+        hrp.CFrame = CFrame.new(p) * CFrame.Angles(math.pi, math.pi, math.pi)
+        hrp.AssemblyLinearVelocity = v
+        hrp.AssemblyAngularVelocity = v
+    end)
+end
+
+runsvc:BindToRenderStep("vfr_csync", Enum.RenderPriority.First.Value, function()
+    if not vfrSnap.cf then return end
+    local hrp = voidHrp()
+    if not hrp then return end
+    pcall(function()
+        hrp.CFrame = vfrSnap.cf
+        hrp.AssemblyLinearVelocity = vfrSnap.lv
+        hrp.AssemblyAngularVelocity = vfrSnap.av
+    end)
+end)
+
+local SLOTS = { primary = 1, secondary = 2, melee = 3 }
+local MELEE_NMS = {
+    ["Battle Axe"] = true, ["Chainsaw"] = true, ["Daggers"] = true, ["Fists"] = true,
+    ["Gunblade"] = true, ["Katana"] = true, ["Knife"] = true,
+    ["Scythe"] = true, ["Trowel"] = true,
+}
+local INFINITE_AMMO_WEAPONS = {
+    ["Energy Rifle"] = true,
+    ["Energy Pistols"] = true,
+}
 
 local function getweapon()
     local viewmodels = workspace:FindFirstChild("ViewModels")
@@ -1133,42 +424,6 @@ local function getweapon()
     end
     return nil
 end
-
-local function muzzlepos()
-    local viewModels = workspace:FindFirstChild("ViewModels")
-    if not viewModels then return nil end
-    local firstPerson = viewModels:FindFirstChild("FirstPerson")
-    if not firstPerson then return nil end
-    for _, model in pairs(firstPerson:GetChildren()) do
-        if model.Name:find(player.Name) then
-            local itemVisual = model:FindFirstChild("ItemVisual")
-            if itemVisual then
-                local body = itemVisual:FindFirstChild("Body")
-                if body then
-                    local bodyPrimary = body:FindFirstChild("BodyPrimary")
-                    if bodyPrimary then
-                        local muzzle = bodyPrimary:FindFirstChild("_muzzle")
-                        if muzzle then
-                            return muzzle.WorldPosition
-                        end
-                    end
-                end
-            end
-        end
-    end
-    return nil
-end
-
-local SLOTS = { primary = 1, secondary = 2, melee = 3 }
-local MELEE_NMS = {
-    ["Battle Axe"] = true, ["Chainsaw"] = true, ["Daggers"] = true, ["Fists"] = true,
-    ["Gunblade"] = true, ["Katana"] = true, ["Knife"] = true,
-    ["Scythe"] = true, ["Trowel"] = true,
-}
-local INFINITE_AMMO_WEAPONS = {
-    ["Energy Rifle"] = true,
-    ["Energy Pistols"] = true,
-}
 
 local function isInfiniteWeapon()
     local w = getweapon()
@@ -1303,9 +558,6 @@ local function pressSlot(slotIdx)
 end
 
 local function rageOn()
-    if Toggles and Toggles.TargetOn then
-        return Toggles.TargetOn.Value == true
-    end
     return config.target.rageMasterOn == true
 end
 
@@ -1399,7 +651,7 @@ local function tickAmmo()
 end
 
 local function reloadHide(sling)
-    if not (config.state.reloading and config.ragestatus.hideOnReload) then
+    if not (config.state.reloading and true) then
         return false
     end
     local hrp = voidHrp()
@@ -1546,53 +798,6 @@ local function randVs(minT, maxT)
     return a + math.random() * (b - a)
 end
 
-local vfrLim, vfrDead = 2147483646, 1147483646
-local vfrSnap = { cf = nil, lv = nil, av = nil }
-
-local function clrVoidSnap()
-    vfrSnap.cf, vfrSnap.lv, vfrSnap.av = nil, nil, nil
-end
-
-local function voidHrp()
-    local char = player.Character
-    return char and char:FindFirstChild("HumanoidRootPart")
-end
-
-local function rndSkip(mi, ma, dmi, dma)
-    local val = math.random(mi, ma)
-    while val >= dmi and val <= dma do
-        val = math.random(mi, ma)
-    end
-    return val
-end
-
-local function snapVoid(hrp)
-    if not hrp then return end
-    if lobbyCache() then return end
-    vfrSnap.cf = hrp.CFrame
-    vfrSnap.lv = hrp.AssemblyLinearVelocity
-    vfrSnap.av = hrp.AssemblyAngularVelocity
-    local lim, dead = vfrLim, vfrDead
-    pcall(function()
-        local p = Vector3.new(rndSkip(-lim, lim, -dead, dead), rndSkip(-lim, lim, -dead, dead), rndSkip(-lim, lim, -dead, dead))
-        local v = Vector3.new(rndSkip(-lim, lim, -dead, dead), rndSkip(-lim, lim, -dead, dead), rndSkip(-lim, lim, -dead, dead))
-        hrp.CFrame = CFrame.new(p) * CFrame.Angles(math.pi, math.pi, math.pi)
-        hrp.AssemblyLinearVelocity = v
-        hrp.AssemblyAngularVelocity = v
-    end)
-end
-
-runsvc:BindToRenderStep("vfr_csync", Enum.RenderPriority.First.Value, function()
-    if not vfrSnap.cf then return end
-    local hrp = voidHrp()
-    if not hrp then return end
-    pcall(function()
-        hrp.CFrame = vfrSnap.cf
-        hrp.AssemblyLinearVelocity = vfrSnap.lv
-        hrp.AssemblyAngularVelocity = vfrSnap.av
-    end)
-end)
-
 local function atkCfg()
     if pickMelee() and not config.target.attackCustomEnabled then
         local drop = tonumber(config.target.meleeFeetDrop) or 3.5
@@ -1675,13 +880,10 @@ local function stopsync()
     if config.orbit.savedpos and localfighter and localfighter.Entity and localfighter.Entity.RootPart and not getgenv().UndergroundEnabled then
         local ok, pos = pcall(function() return config.orbit.savedpos end)
         if ok and pos then
-            local currentPos = localfighter.Entity.RootPart.CFrame
-            local distance = (currentPos.Position - pos.Position).Magnitude
             pcall(function()
                 localfighter.Entity.RootPart.CFrame = pos
             end)
-        end
-    end
+        end    end
     config.orbit.serverpos = nil
     config.orbit.savedpos = nil
     config.voidspam.phase = nil
@@ -1715,80 +917,6 @@ local function tickVoidSpam()
     end
 end
 
-local function voidOk(sling)
-    if not sling then return false end
-    return config.voidspam.enabled or config.state.outofammo
-end
-
-local function tickVoid(sling, root)
-    if sling then
-        clrVoidSnap()
-        return false
-    end
-    if not voidOk(sling) then
-        clrVoidSnap()
-        return false
-    end
-    local isHiding = config.state.outofammo or (config.voidspam.enabled and config.voidspam.phase == "hide")
-    if isHiding then
-        if config.voidspam.enabled and config.voidspam.phase == "hide" and not config.state.outofammo then
-            local elapsed = tick() - config.voidspam.lastswitch
-            if elapsed >= config.voidspam.currentduration then
-                config.voidspam.phase = "shoot"
-                config.voidspam.currentduration = randVs(config.voidspam.shoot_min, config.voidspam.shoot_max)
-                config.voidspam.lastswitch = tick()
-                clrVoidSnap()
-                return false
-            end
-        end
-        clrVoidSnap()
-        local hrp = voidHrp()
-        if hrp then
-            snapVoid(hrp)
-        else
-            if config.state.csyncactive then
-                return true
-            end
-            local randomX = math.random(-10000, 10000)
-            local randomZ = math.random(-10000, 10000)
-            config.orbit.serverpos = Vector3.new(randomX, -99999999999, randomZ)
-        end
-        return true
-    end
-    if config.voidspam.enabled and config.voidspam.phase == "shoot" then
-        local elapsed = tick() - config.voidspam.lastswitch
-        if elapsed >= config.voidspam.currentduration then
-            config.voidspam.phase = "hide"
-            config.voidspam.currentduration = randVs(config.voidspam.hide_min, config.voidspam.hide_max)
-            config.voidspam.lastswitch = tick()
-        end
-    end
-    clrVoidSnap()
-    return false
-end
-
-local function hideShot()
-    if not config.voidspam.enabled then return end
-    if isSling(getweapon()) then return end
-end
-
-local function voidhide()
-    if vhState.active then return end
-    vhState.active = true
-    if not config.state.csyncactive then
-        startsync()
-    end
-end
-
-local stopvoid = function()
-    vhState.active = false
-    vhState.currentVoidPos = nil
-    if vhState.mainConnection then
-        vhState.mainConnection:Disconnect()
-        vhState.mainConnection = nil
-    end
-end
-
 local function startsync()
     if config.state.csyncactive then return end
     if config.target.immune then return end
@@ -1809,8 +937,6 @@ local function startsync()
         if config.target.immune then stopsync() return end
         if not config.target.character or not valid(config.target.character) then stopsync() return end
         if not localfighter or not localfighter.Entity or not localfighter.Entity.RootPart then stopsync() return end
-
-        if config.target.immune then stopsync() return end
 
         setOrbR()
         oldpos = localfighter.Entity.RootPart.CFrame
@@ -1966,7 +1092,6 @@ local function autoshoot()
                 )
             end)
         end
-        hideShot()
     end
 end
 
@@ -2013,7 +1138,6 @@ bindimmune(function(plr)
         config.target.immune = true
         config.voidspam.phase = nil
         clrVoidSnap()
-        indicator.Color = Color3.fromRGB(180, 0, 255)
         stopsync()
     end
 end)
@@ -2021,7 +1145,6 @@ end)
 bindvulnerable(function(plr)
     if config.target.lastplayer == plr then
         config.target.immune = false
-        indicator.Color = Color3.fromRGB(255, 50, 50)
         if config.target.enabled and config.target.character and valid(config.target.character) then
             startsync()
         end
@@ -2036,7 +1159,6 @@ local function cleartarget()
     config.target.lastplayer = nil
     config.target.manualkey = false
     config.target.immune = false
-    indicator.Color = Color3.fromRGB(255, 50, 50)
 end
 
 local function settarget(char)
@@ -2047,11 +1169,9 @@ local function settarget(char)
     config.target.lastchar = char
     config.target.lastplayer = targetplr
     config.target.immune = false
-    indicator.Color = Color3.fromRGB(255, 50, 50)
     local root = char:FindFirstChild("HumanoidRootPart")
     if root and root:FindFirstChild("Attachment") then
         config.target.immune = true
-        indicator.Color = Color3.fromRGB(180, 0, 255)
     else
         eqSlot()
         startsync()
@@ -2119,12 +1239,6 @@ local function stopslingTP()
     end
 end
 
-local function targetpos()
-    if not config.target.character then return nil end
-    local root = config.target.character:FindFirstChild("HumanoidRootPart")
-    return root and root.Position
-end
-
 local function updatesling()
     local slingon = checksling()
     local hastarget = config.target.enabled and config.target.character ~= nil
@@ -2147,10 +1261,8 @@ local function updatesling()
             sling.enabled = false
             stopslingTP()
         end
-        if not Toggles.AntiAimUnderground.Value then
-            if getgenv().SetUnderground then
-                getgenv().SetUnderground(false)
-            end
+        if getgenv().SetUnderground then
+            getgenv().SetUnderground(false)
         end
         vhState.active = false
     end
@@ -2169,43 +1281,6 @@ local function fflag()
         end)
     end
 end
-
-local targetHudAnimLast = tick()
-runsvc.RenderStepped:Connect(function()
-    local inLobby = getgenv().IsInLobby and getgenv().IsInLobby()
-    local hudNeeded = config.visualizer.enabled
-        or (config.ragestatus and config.ragestatus.enabled)
-        or (config.hitNotifications and config.hitNotifications.enabled)
-        or (config.target.enabled and config.target.character and config.prediction.enabled)
-    if inLobby and not hudNeeded then
-        return
-    end
-    if shouldSuppressGameplayOverlays() then
-        tracerline.Visible = false
-        traceroutline.Visible = false
-        if ragebot.hideRageStatus then
-            ragebot.hideRageStatus()
-        end
-        if ragebot.updateHitNotifications then
-            ragebot.updateHitNotifications(0)
-        end
-        return
-    end
-    local now = tick()
-    local hudDt = math.clamp(now - targetHudAnimLast, 0, 0.05)
-    targetHudAnimLast = now
-    if config.ragestatus and config.ragestatus.enabled and ragebot.drawStatus then
-        ragebot.drawStatus()
-    elseif ragebot.hideRageStatus then
-        ragebot.hideRageStatus()
-    end
-    if ragebot.updateHitNotifications then
-        ragebot.updateHitNotifications(hudDt)
-    end
-    if config.target.enabled and config.target.character and config.prediction.enabled then
-        updatevel()
-    end
-end)
 
 runsvc.Heartbeat:Connect(function()
     fflag()
@@ -2240,296 +1315,397 @@ Ragebot.config = config
 Ragebot.nearest = nearest
 Ragebot.settarget = settarget
 Ragebot.cleartarget = cleartarget
-Ragebot.stopvoid = stopvoid
+Ragebot.stopsync = stopsync
 Ragebot.vhState = vhState
 Ragebot.ragePerf = ragePerf
 Ragebot.getammo = getammo
-Ragebot.muzzlepos = muzzlepos
 Ragebot.valid = valid
 Ragebot.player = player
 Ragebot.eqSlot = eqSlot
 Ragebot.refreshAtk = refreshAtk
 Ragebot.clrVoidSnap = clrVoidSnap
+Ragebot.enabled = false
 
-do
-local config = Ragebot.config
-local ragePerf = Ragebot.ragePerf
-local getammo = Ragebot.getammo
-local muzzlepos = Ragebot.muzzlepos
-local valid = Ragebot.valid
-local player = Ragebot.player
-local vhState = Ragebot.vhState
-local camera = workspace.CurrentCamera
-
-local function mkStatusLbl()
-    local label = getgenv().InstanceTrackDrawingText(Drawing.new("Text"))
-    label.Size = 13
-    label.Font = 2
-    label.Outline = true
-    label.Center = true
-    label.Visible = false
-    label.Color = config.ragestatus.color
-    pcall(function()
-        label.OutlineColor = Color3.fromRGB(0, 0, 0)
-    end)
-    return label
 end
 
-local rageStatusLine1 = mkStatusLbl()
-local rageStatusLine2 = mkStatusLbl()
+-- ============================================================
+-- UNDERGROUND (Sliders 2-30)
+-- ============================================================
+undergroundEnabled = false
+undergroundDepth = 2.2
+undergroundConn = nil
+undergroundRealCF = nil
+undergroundRealVel = nil
+undergroundRealAngVel = nil
+undergroundRenderConn = nil
 
-local function styleStatusLbl(label)
-    label.Size = 13
-    label.Font = 2
-    label.Outline = true
-    label.Color = config.ragestatus.color
-    pcall(function()
-        label.OutlineColor = Color3.fromRGB(0, 0, 0)
-    end)
-end
-
-local function statusAnchor()
-    if config.ragestatus.mode == "muzzle" then
-        local mp = muzzlepos and muzzlepos()
-        if mp then
-            local wts = getgenv().InstanceWorldToScreen or worldToScreen
-            local screenPos, onScreen = wts(mp, camera)
-            if onScreen and screenPos then
-                return Vector2.new(screenPos.X, screenPos.Y)
+local function startUnderground()
+    if undergroundConn then return end
+    undergroundConn = RunService.Heartbeat:Connect(function()
+        if not undergroundEnabled then return end
+        pcall(function()
+            local char = lp.Character
+            if not char then return end
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if not hrp then return end
+            undergroundRealCF = hrp.CFrame
+            undergroundRealVel = hrp.AssemblyLinearVelocity
+            undergroundRealAngVel = hrp.AssemblyAngularVelocity
+            local depth = undergroundDepth or 2.2
+            local params = RaycastParams.new()
+            params.FilterDescendantsInstances = { char }
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            local result = Workspace:Raycast(hrp.Position, Vector3.new(0, -500, 0), params)
+            local fakeY
+            if result then
+                fakeY = result.Position.Y - depth
+            else
+                fakeY = -99999
             end
+            hrp.CFrame = CFrame.new(hrp.Position.X, fakeY, hrp.Position.Z)
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+        end)
+    end)
+    undergroundRenderConn = RunService:BindToRenderStep("UndergroundSync", Enum.RenderPriority.First.Value, function()
+        if undergroundEnabled and undergroundRealCF then
+            pcall(function()
+                local char = lp.Character
+                if not char then return end
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if not hrp then return end
+                hrp.CFrame = undergroundRealCF
+                hrp.AssemblyLinearVelocity = undergroundRealVel or Vector3.zero
+                hrp.AssemblyAngularVelocity = undergroundRealAngVel or Vector3.zero
+            end)
         end
-    end
-    local cam = camera or workspace.CurrentCamera
-    if not cam then
-        return Vector2.zero
-    end
-    return (cam.ViewportSize / 2) + Vector2.new(
-        config.ragestatus.staticOffsetX or 0,
-        config.ragestatus.staticOffsetY or 0
-    )
+    end)
 end
 
-local function rageActive()
-    return config.target.enabled or config.target.auto or config.voidspam.enabled
+local function stopUnderground()
+    if undergroundConn then
+        undergroundConn:Disconnect()
+        undergroundConn = nil
+    end
+    if undergroundRenderConn then
+        pcall(function() RunService:UnbindFromRenderStep("UndergroundSync") end)
+        undergroundRenderConn = nil
+    end
+    undergroundRealCF = nil
+    undergroundRealVel = nil
+    undergroundRealAngVel = nil
 end
 
-local function killNm()
-    if config.target.lastplayer then
-        return config.target.lastplayer.Name
-    end
-    if config.target.character then
-        local tp = game:GetService("Players"):GetPlayerFromCharacter(config.target.character)
-        if tp then
-            return tp.Name
-        end
-    end
-    return "target"
+getgenv().SetUnderground = function(val)
+    undergroundEnabled = val
+    if val then startUnderground() else stopUnderground() end
 end
+getgenv().UndergroundEnabled = false
 
-local function inVoid()
-    if vhState.active then return true end
-    if config.voidspam.enabled and config.voidspam.phase == "hide" and isSling(getweapon()) then
-        return true
-    end
-    if config.state.reloading and config.ragestatus.hideOnReload ~= false then
-        return true
-    end
-    return false
-end
+-- ============================================================
+-- CÁC MOD TỪ MESSAGE.TXT (TRỪ UNLOCK ALL)
+-- ============================================================
+local ModSettings = {
+    NoMeleeAnimation = false,
+    NoDashCooldown = false,
+    NoMeleeCooldown = false,
+    NoShootAnimation = false,
+    NoEquipAnimation = false,
+    InstantADS = false,
+    RapidFire = false,
+    NoSpread = false,
+    NoSmoke = false,
+    NoRecoil = false,
+    DeviceSpoof = false,
+    DeviceType = "VR",
+    NoFlash = false,
+}
 
-local function isKilling()
-    if not rageActive() then
-        return false
+local function applyMods()
+    -- No Melee Animation
+    if ModSettings.NoMeleeAnimation then
+        task.spawn(function()
+            local ok, Melee = pcall(function() return require(lp.PlayerScripts.Modules.ItemTypes.Melee) end)
+            if ok and Melee and Melee.StartShooting then
+                local oldStartShooting = Melee.StartShooting
+                Melee.StartShooting = function(self, p1, p2)
+                    local vm = self.ViewModel; local savedPlay
+                    if vm then savedPlay = vm.PlayAnimation; vm.PlayAnimation = function() end end
+                    local result = { oldStartShooting(self, p1, p2) }
+                    if vm and savedPlay then
+                        vm.PlayAnimation = savedPlay
+                        pcall(function()
+                            for _, name in ipairs({"Attack", "Attack1", "Attack2", "Swing", "Slash", "Combo1", "Combo2", "Combo3"}) do
+                                vm:StopAnimation(name)
+                            end
+                        end)
+                    end
+                    return table.unpack(result)
+                end
+            end
+        end)
     end
-    if config.state.reloading or inVoid() then
-        return false
-    end
-    if config.target.immune then
-        return false
-    end
-    if not config.target.enabled or not config.target.character or not valid(config.target.character) then
-        return false
-    end
-    if config.state.csyncactive then
-        return true
-    end
-    if config.voidspam.enabled and config.voidspam.phase == "shoot" and isSling(getweapon()) then
-        return true
-    end
-    if tick() - (ragePerf.lastAttackTick or 0) < 0.45 then
-        return true
-    end
-    return false
-end
 
-local function hudAmmo()
-    if isInfiniteWeapon() then return "∞" end
-    local cur, maxAmmo, melee = getammo()
-    if cur == nil then return "∞" end
-    if melee then return "melee" end
-    return string.format("%d/%d", math.floor(cur or 0), math.max(math.floor(maxAmmo or 0), 0))
-end
+    -- No Dash Cooldown
+    if ModSettings.NoDashCooldown then
+        task.spawn(function()
+            local modules = ReplicatedStorage:FindFirstChild("Modules")
+            local itemLib = modules and modules:FindFirstChild("ItemLibrary")
+            if itemLib then
+                local success, library = pcall(require, itemLib)
+                if success and type(library) == "table" then
+                    local items = library.Items or library.Weapons or library.Melee or library.Utilities
+                    if type(items) == "table" then
+                        for name, item in pairs(items) do
+                            if type(item) == "table" then
+                                local itemName = item.Name or name
+                                if string.lower(itemName) == "scythe" then
+                                    if item.DashCooldown then item.DashCooldown = 0 end
+                                    if item.AbilityCooldown then item.AbilityCooldown = 0 end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end
 
-local function fmtVsTime(minT, maxT)
-    local a = clampVs(minT)
-    local b = clampVs(maxT)
-    if b < a then
-        a, b = b, a
+    -- No Melee Cooldown
+    if ModSettings.NoMeleeCooldown then
+        task.spawn(function()
+            local modules = ReplicatedStorage:FindFirstChild("Modules")
+            local itemLib = modules and modules:FindFirstChild("ItemLibrary")
+            if itemLib then
+                local success, library = pcall(require, itemLib)
+                if success and type(library) == "table" then
+                    local items = library.Items or library.Weapons or library.Melee or library.Utilities
+                    if type(items) == "table" then
+                        local cooldowns = {"Cooldown", "AttackCooldown", "UseDelay", "SpinCooldown", "HeavyAttackCooldown", "AbilityCooldown", "FireCooldown"}
+                        for _, item in pairs(items) do
+                            if type(item) == "table" and (item.Type == "Melee" or item.Category == "Melee" or (item.Damage and not item.AmmoType)) then
+                                for _, field in ipairs(cooldowns) do
+                                    if item[field] then item[field] = 0 end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end)
     end
-    if math.abs(a - b) < 0.05 then
-        return string.format("%.1fs", a)
-    end
-    return string.format("%.1f-%.1fs", a, b)
-end
 
-local function vsDetail()
-    if not config.voidspam.enabled then
-        return ""
+    -- No Shoot Animation
+    if ModSettings.NoShootAnimation then
+        task.spawn(function()
+            local ok, Gun = pcall(function() return require(lp.PlayerScripts.Modules.ItemTypes.Gun) end)
+            if ok and Gun then
+                if Gun.StartShooting then
+                    local oldStartShooting = Gun.StartShooting
+                    Gun.StartShooting = function(self, p1, p2)
+                        local vm = self.ViewModel; local savedPlay
+                        if vm then savedPlay = vm.PlayAnimation; vm.PlayAnimation = function() end end
+                        local result = { oldStartShooting(self, p1, p2) }
+                        if vm and savedPlay then
+                            vm.PlayAnimation = savedPlay
+                            pcall(function()
+                                for _, name in ipairs({"Shoot","Fire","ShootBurst","Shoot_ADS","ShootHip","ShootEmpty","ShootADS","Burst"}) do
+                                    vm:StopAnimation(name)
+                                end
+                            end)
+                        end
+                        return table.unpack(result)
+                    end
+                end
+                local function silenceShootAnim(self, fn, ...)
+                    if not self.ViewModel then return fn(self, ...) end
+                    local vm = self.ViewModel; local oldPlay = vm.PlayAnimation
+                    vm.PlayAnimation = function() end
+                    local result = { pcall(fn, self, ...) }
+                    vm.PlayAnimation = oldPlay
+                    pcall(function()
+                        for _, name in ipairs({"Shoot","Fire","ShootBurst","Shoot_ADS","Shoot_Hip","ShootEmpty","ShootADS","Burst"}) do
+                            vm:StopAnimation(name)
+                        end
+                    end)
+                    if result[1] then return table.unpack(result, 2) end
+                end
+                if Gun.FinishShooting then
+                    local old = Gun.FinishShooting
+                    Gun.FinishShooting = function(self, ...) return silenceShootAnim(self, old, ...) end
+                end
+                if Gun.ShootBurst then
+                    local old = Gun.ShootBurst
+                    Gun.ShootBurst = function(self, ...) return silenceShootAnim(self, old, ...) end
+                end
+            end
+        end)
     end
-    local vs = config.voidspam
-    return string.format(
-        "void %s atk · %s hide",
-        fmtVsTime(vs.shoot_min, vs.shoot_max),
-        fmtVsTime(vs.hide_min, vs.hide_max)
-    )
-end
 
-local function rageLines()
-    local now = tick()
-    if isKilling() then
-        if not ragePerf.killStartAt then
-            ragePerf.killStartAt = now
-        end
-    else
-        ragePerf.killStartAt = nil
+    -- No Equip Animation
+    if ModSettings.NoEquipAnimation then
+        task.spawn(function()
+            local ok, Gun = pcall(function() return require(lp.PlayerScripts.Modules.ItemTypes.Gun) end)
+            if ok and Gun and Gun.Equip then
+                local old = Gun.Equip
+                Gun.Equip = function(self, ...)
+                    local r = { old(self, ...) }
+                    if self.ViewModel then
+                        self.ViewModel:StopAnimation("Equip")
+                        self.ViewModel:StopAnimation("EquipEmpty")
+                    end
+                    return table.unpack(r)
+                end
+            end
+        end)
     end
-    if config.state.reloading then
-        return "ragebot: void hide", "reloading"
-    end
-    if inVoid() then
-        local det = vsDetail()
-        return "ragebot: void hide", det ~= "" and det or ""
-    end
-    if isKilling() then
-        local name = killNm()
-        local elapsed = now - (ragePerf.killStartAt or now)
-        local hum = config.target.character and config.target.character:FindFirstChildOfClass("Humanoid")
-        local main = string.format("ragebot : attacking (%s) · %.1fs", name, elapsed)
-        local detailParts = {}
-        local hpBit = hum and string.format("%.0f hp", hum.Health) or "hp ?"
-        detailParts[#detailParts + 1] = hpBit
-        local voidDetail = vsDetail()
-        if voidDetail ~= "" then
-            detailParts[#detailParts + 1] = voidDetail
-        end
-        return main, table.concat(detailParts, " · ")
-    end
-    if rageActive() and config.target.enabled and config.target.character then
-        local hum = config.target.character:FindFirstChildOfClass("Humanoid")
-        local hpBit = hum and string.format("%.0f hp", hum.Health) or "locked"
-        return "ragebot: ready", hpBit
-    end
-    return "ragebot: idle", ""
-end
 
-local function drawStatus()
-    if not config.ragestatus.enabled or shouldSuppressGameplayOverlays() then
-        rageStatusLine1.Visible = false
-        rageStatusLine2.Visible = false
-        return
+    -- Instant ADS
+    if ModSettings.InstantADS then
+        task.spawn(function()
+            local ok, Gun = pcall(function() return require(lp.PlayerScripts.Modules.ItemTypes.Gun) end)
+            if ok and Gun then
+                if Gun.StartAiming then
+                    Gun.StartAiming = function(self, p)
+                        self:SetReplicate("IsAiming", true)
+                        self.StopSprinting:Fire()
+                        self.ViewModel:SetAiming(true)
+                        self:SetReplicate("FOVOffset", self.Info.AimFOVOffset)
+                        if self.ViewModel.CurrentAimValue then self.ViewModel.CurrentAimValue = 1 end
+                        return true, "StartAiming"
+                    end
+                end
+                if Gun.GetAimSpeed then
+                    Gun.GetAimSpeed = function(self) return 999 end
+                end
+            end
+        end)
     end
-    local anchor = statusAnchor()
-    local gap = config.ragestatus.lineGap or 14
-    local showAmmo = config.ragestatus.showAmmo ~= false
-    if ragePerf.lastRageColor ~= config.ragestatus.color then
-        ragePerf.lastRageColor = config.ragestatus.color
-        styleStatusLbl(rageStatusLine1)
-        styleStatusLbl(rageStatusLine2)
-    end
-    local mainLine, detailLine = rageLines()
-    local ammoLine = showAmmo and hudAmmo() or ""
-    local line2Text = detailLine
-    if line2Text ~= "" and ammoLine ~= "" then
-        line2Text = line2Text .. " · " .. ammoLine
-    elseif line2Text == "" then
-        line2Text = ammoLine
-    end
-    local lineCount = 1 + (line2Text ~= "" and 1 or 0)
-    local topOffset = -(lineCount - 1) * (gap / 2)
-    if mainLine ~= ragePerf.lastRageStatusText then
-        ragePerf.lastRageStatusText = mainLine
-        rageStatusLine1.Text = mainLine
-    end
-    rageStatusLine1.Position = anchor + Vector2.new(0, topOffset)
-    rageStatusLine1.Visible = config.ragestatus.enabled
-    local nextY = topOffset + gap
-    if line2Text ~= "" then
-        if line2Text ~= ragePerf.lastRageDetailText then
-            ragePerf.lastRageDetailText = line2Text
-            rageStatusLine2.Text = line2Text
-        end
-        rageStatusLine2.Position = anchor + Vector2.new(0, nextY)
-        rageStatusLine2.Visible = config.ragestatus.enabled
-    else
-        ragePerf.lastRageDetailText = ""
-        rageStatusLine2.Visible = false
-    end
-end
 
-Ragebot.drawStatus = drawStatus
-Ragebot.hideRageStatus = function()
-    rageStatusLine1.Visible = false
-    rageStatusLine2.Visible = false
-end
-Ragebot.clrVoidSnap = clrVoidSnap
-
-end
-
-do
-local config = Ragebot.config
-local nearest = Ragebot.nearest
-local settarget = Ragebot.settarget
-local cleartarget = Ragebot.cleartarget
-local stopvoid = Ragebot.stopvoid
-
-local function togglekey()
-    if config.target.auto then return end
-    if config.target.enabled and config.target.character then
-        cleartarget()
-    else
-        local target = nearest()
-        if target then
-            config.target.manualkey = true
-            settarget(target)
-        end
+    -- Rapid Fire
+    if ModSettings.RapidFire then
+        task.spawn(function()
+            local ok, Gun = pcall(function() return require(lp.PlayerScripts.Modules.ItemTypes.Gun) end)
+            if ok and Gun and Gun.Update then
+                local oldUpdate = Gun.Update
+                Gun.Update = function(self, dt, ...)
+                    if self._shoot_cooldown then self._shoot_cooldown = 0 end
+                    return oldUpdate(self, dt, ...)
+                end
+            end
+        end)
     end
-end
-end
+
+    -- No Spread
+    if ModSettings.NoSpread then
+        task.spawn(function()
+            local ok, GameplayUtility = pcall(function() return require(ReplicatedStorage.Modules.GameplayUtility) end)
+            if ok and GameplayUtility then
+                GameplayUtility.GetSpread = function() return CFrame.identity end
+            end
+            local FighterController = require(lp.PlayerScripts.Controllers.FighterController)
+            local oldNamecall
+            oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+                local method = getnamecallmethod()
+                if method == "FireServer" and self.Name == "UseItem" then
+                    local args = {...}
+                    if typeof(args[3]) == "table" then
+                        args[3]["\2"] = true
+                    end
+                end
+                return oldNamecall(self, ...)
+            end)
+        end)
+    end
+
+    -- No Smoke
+    if ModSettings.NoSmoke then
+        task.spawn(function()
+            local ok, SmokeScreen = pcall(function() return require(lp.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.FighterInterface.SmokeScreen) end)
+            if ok and SmokeScreen and SmokeScreen.Update then
+                SmokeScreen.Update = function(self)
+                    self._smoke_cloud_spring.Target = 0
+                    self._smoke_cloud_cover.Transparency = 1
+                    if self._smoke_cloud_dof then self._smoke_cloud_dof.Parent = nil end
+                    return
+                end
+            end
+            local ok2, SmokeCloud = pcall(function() return require(lp.PlayerScripts.Modules.SmokeCloud) end)
+            if ok2 and SmokeCloud and SmokeCloud.Update then
+                SmokeCloud.Update = function(self)
+                    if self.Model then self.Model:Destroy() end
+                    return true
+                end
+            end
+        end)
+    end
+
+    -- No Recoil
+    if ModSettings.NoRecoil then
+        task.spawn(function()
+            local ok, ClientItem = pcall(function() return require(lp.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.ClientItem) end)
+            if ok and ClientItem and ClientItem._Recoil then
+                ClientItem._Recoil = function() return end
+            end
+        end)
+    end
+
+    -- Device Spoof
+    if ModSettings.DeviceSpoof then
+        task.spawn(function()
+            local device = ModSettings.DeviceType or "VR"
+            local remote = ReplicatedStorage.Remotes.Replication.Fighter.SetControls
+            local controllers = lp.PlayerScripts.Controllers
+            local ok, fighterController = pcall(function() return require(controllers:WaitForChild("FighterController", 10)) end)
+            if ok and fighterController and fighterController._ReplicateControls then
+                fighterController._ReplicateControls = function(self)
+                    remote:FireServer(device)
+                    if not self._last_controls_replicated_time then
+                        self._last_controls_replicated_time = 0
+                    end
+                    self._last_controls_replicated_time = tick()
+                end
+                remote:FireServer(device)
+            end
+        end)
+    end
+
+    -- No Flash
+    if ModSettings.NoFlash then
+        task.spawn(function()
+            local ok, Flashed = pcall(function() return require(lp.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.FighterInterface.Flashed) end)
+            if ok and Flashed and Flashed.Flash then
+                Flashed.Flash = function() return end
+            end
+        end)
+    end
 end
 
 -- ============================================================
 -- UI
 -- ============================================================
+
+-- TAB 1: MAIN
 local MainTab = Window:AddTab('Main')
 
--- Aimbot Group (Left)
-local AimbotGroup = MainTab:AddLeftGroupbox('Aimbot')
-AimbotGroup:AddToggle('AimbotEnabled', {
+-- Aimbot (bên trái)
+local LeftGroup = MainTab:AddLeftGroupbox('Aimbot')
+LeftGroup:AddToggle('AimbotEnabled', {
     Text = 'Enable Aimbot',
     Default = false,
     Callback = function(v) Aimbot:setEnabled(v) end
 })
-AimbotGroup:AddToggle('AimbotVisCheck', {
+LeftGroup:AddToggle('AimbotVisCheck', {
     Text = 'Visible Check',
     Default = true,
     Callback = function(v) Aimbot:setVisibleCheck(v) end
 })
-AimbotGroup:AddToggle('AimbotTeamCheck', {
+LeftGroup:AddToggle('AimbotTeamCheck', {
     Text = 'Team Check',
     Default = true,
     Callback = function(v) Aimbot:setTeamCheck(v) end
 })
-AimbotGroup:AddSlider('AimbotFOV', {
+LeftGroup:AddSlider('AimbotFOV', {
     Text = 'FOV',
     Default = 360,
     Min = 10,
@@ -2537,7 +1713,7 @@ AimbotGroup:AddSlider('AimbotFOV', {
     Rounding = 0,
     Callback = function(v) Aimbot:setFOV(v) end
 })
-AimbotGroup:AddSlider('AimbotMaxDist', {
+LeftGroup:AddSlider('AimbotMaxDist', {
     Text = 'Max Distance',
     Default = 9999,
     Min = 100,
@@ -2545,7 +1721,7 @@ AimbotGroup:AddSlider('AimbotMaxDist', {
     Rounding = 0,
     Callback = function(v) Aimbot:setMaxDist(v) end
 })
-AimbotGroup:AddSlider('AimbotPrediction', {
+LeftGroup:AddSlider('AimbotPrediction', {
     Text = 'Prediction',
     Default = 0,
     Min = 0,
@@ -2553,7 +1729,7 @@ AimbotGroup:AddSlider('AimbotPrediction', {
     Rounding = 1,
     Callback = function(v) Aimbot:setPrediction(v) end
 })
-AimbotGroup:AddSlider('AimbotSmoothing', {
+LeftGroup:AddSlider('AimbotSmoothing', {
     Text = 'Smoothing',
     Default = 0,
     Min = 0,
@@ -2562,37 +1738,17 @@ AimbotGroup:AddSlider('AimbotSmoothing', {
     Callback = function(v) Aimbot:setSmoothing(v) end
 })
 
--- Underground Group (Right)
-local UndergroundGroup = MainTab:AddRightGroupbox('Underground (Anti-Aim)')
-UndergroundGroup:AddToggle('UndergroundToggle', {
-    Text = 'Underground',
+-- Ragebot (bên phải - dùng tabbox)
+local RightGroup = MainTab:AddRightTabbox()
+local RagebotTab = RightGroup:AddTab('Ragebot')
+
+RagebotTab:AddToggle('RagebotEnable', {
+    Text = 'Enable Ragebot',
     Default = false,
     Callback = function(v)
-        undergroundEnabled = v
-        getgenv().UndergroundEnabled = v
-        if v then startUnderground() else stopUnderground() end
-    end
-})
-UndergroundGroup:AddSlider('UndergroundDepth', {
-    Text = 'Depth',
-    Default = 2.2,
-    Min = 0.5,
-    Max = 10,
-    Rounding = 1,
-    Callback = function(v) undergroundDepth = v end
-})
-
--- Ragebot Tabbox (Right)
-local RightGroup = MainTab:AddRightTabbox()
-local ragebotTab = RightGroup:AddTab('Ragebot')
-
-ragebotTab:AddToggle('TargetOn', {
-    Text = 'Enable',
-    Default = false,
-    Callback = function(val)
-        Ragebot.config.target.rageMasterOn = val
+        Ragebot.config.target.rageMasterOn = v
         if Ragebot.config.target.auto then return end
-        if val then
+        if v then
             local target = Ragebot.nearest()
             if target then
                 Ragebot.config.target.manualkey = true
@@ -2602,7 +1758,7 @@ ragebotTab:AddToggle('TargetOn', {
             Ragebot.cleartarget()
         end
     end
-}):AddKeyPicker('TargetKey', {
+}):AddKeyPicker('RagebotKey', {
     Text = 'Ragebot Key',
     Default = 'None',
     Mode = 'Toggle',
@@ -2622,168 +1778,172 @@ ragebotTab:AddToggle('TargetOn', {
     end
 })
 
-ragebotTab:AddToggle('AutoTarget', {
+RagebotTab:AddToggle('RagebotAutoTarget', {
     Text = 'Auto Target',
     Default = false,
-    Callback = function(val) Ragebot.config.target.auto = val end
+    Callback = function(v) Ragebot.config.target.auto = v end
 })
 
-ragebotTab:AddDivider()
+RagebotTab:AddDivider()
 
-ragebotTab:AddDropdown('AutoTargetAttackPos', {
+RagebotTab:AddDropdown('RagebotAttackPos', {
     Text = 'Attack Position',
     Default = 'default',
     Values = { 'default', 'under' },
-    Callback = function(val)
-        Ragebot.config.target.attackPosition = val
+    Callback = function(v)
+        Ragebot.config.target.attackPosition = v
         if Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
-    end,
+    end
 })
 
-ragebotTab:AddSlider('UnderAttackOffset', {
+RagebotTab:AddSlider('RagebotUnderOffset', {
     Text = 'Under Offset',
     Default = 4,
     Min = 1,
     Max = 25,
     Rounding = 1,
     Compact = true,
-    Callback = function(val)
-        Ragebot.config.target.underOffset = val
+    Callback = function(v)
+        Ragebot.config.target.underOffset = v
         if Ragebot.config.target.attackPosition == "under" and Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
-    end,
+    end
 })
 
-ragebotTab:AddDivider()
+RagebotTab:AddDivider()
 
-ragebotTab:AddToggle('AttackCustomOverride', {
+RagebotTab:AddToggle('RagebotCustomOverride', {
     Text = 'Custom Attack Override',
     Default = false,
-    Callback = function(val)
-        Ragebot.config.target.attackCustomEnabled = val
+    Callback = function(v)
+        Ragebot.config.target.attackCustomEnabled = v
         if Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
-    end,
+    end
 })
 
-ragebotTab:AddSlider('CustomAttackHeight', {
+RagebotTab:AddSlider('RagebotCustomHeight', {
     Text = 'Orbit Height',
     Default = 2,
     Min = -25,
     Max = 30,
     Rounding = 1,
     Compact = true,
-    Callback = function(val)
-        Ragebot.config.target.customHeight = val
+    Callback = function(v)
+        Ragebot.config.target.customHeight = v
         if Ragebot.config.target.attackCustomEnabled and Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
-    end,
+    end
 })
-ragebotTab:AddSlider('CustomAttackFront', {
+
+RagebotTab:AddSlider('RagebotCustomFront', {
     Text = 'Front Offset',
     Default = 0,
     Min = -20,
     Max = 20,
     Rounding = 1,
     Compact = true,
-    Callback = function(val)
-        Ragebot.config.target.customFront = val
+    Callback = function(v)
+        Ragebot.config.target.customFront = v
         if Ragebot.config.target.attackCustomEnabled and Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
-    end,
+    end
 })
-ragebotTab:AddSlider('CustomAttackSide', {
+
+RagebotTab:AddSlider('RagebotCustomSide', {
     Text = 'Side Offset',
     Default = 0,
     Min = -20,
     Max = 20,
     Rounding = 1,
     Compact = true,
-    Callback = function(val)
-        Ragebot.config.target.customSide = val
+    Callback = function(v)
+        Ragebot.config.target.customSide = v
         if Ragebot.config.target.attackCustomEnabled and Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
-    end,
+    end
 })
-ragebotTab:AddSlider('CustomAttackVertical', {
+
+RagebotTab:AddSlider('RagebotCustomVertical', {
     Text = 'Vertical Offset',
     Default = 0,
     Min = -25,
     Max = 30,
     Rounding = 1,
     Compact = true,
-    Callback = function(val)
-        Ragebot.config.target.customVertical = val
+    Callback = function(v)
+        Ragebot.config.target.customVertical = v
         if Ragebot.config.target.attackCustomEnabled and Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
-    end,
+    end
 })
-ragebotTab:AddSlider('CustomAttackRadius', {
+
+RagebotTab:AddSlider('RagebotCustomRadius', {
     Text = 'Orbit Radius',
     Default = 0,
     Min = 0,
     Max = 25,
     Rounding = 1,
     Compact = true,
-    Callback = function(val)
-        Ragebot.config.target.customRadius = val
+    Callback = function(v)
+        Ragebot.config.target.customRadius = v
         if Ragebot.config.target.attackCustomEnabled and Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
-    end,
+    end
 })
 
-ragebotTab:AddDivider()
+RagebotTab:AddDivider()
 
-ragebotTab:AddDropdown('RageWeaponPick', {
+RagebotTab:AddDropdown('RagebotWeaponPick', {
     Text = 'Weapon Slot',
     Default = 'primary',
     Values = { 'primary', 'secondary', 'melee' },
-    Callback = function(val)
-        Ragebot.config.target.weaponPick = val
+    Callback = function(v)
+        Ragebot.config.target.weaponPick = v
         if Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
         if Ragebot.eqSlot then Ragebot.eqSlot() end
-    end,
+    end
 })
 
-ragebotTab:AddDropdown('TargetPart', {
+RagebotTab:AddDropdown('RagebotHitPart', {
     Text = 'Hit Part',
     Default = 'Head',
     Values = {'Head', 'HumanoidRootPart', 'Torso', 'UpperTorso', 'Closest', 'Random'},
-    Callback = function(val) Ragebot.config.target.hitpart = val end
+    Callback = function(v) Ragebot.config.target.hitpart = v end
 })
 
-ragebotTab:AddDivider()
+RagebotTab:AddDivider()
 
-ragebotTab:AddSlider('ShootAttempts', {
+RagebotTab:AddSlider('RagebotShootAttempts', {
     Text = 'Shoot Attempts',
     Default = 1,
     Min = 1,
     Max = 3,
     Rounding = 0,
     Suffix = 'x',
-    Callback = function(val)
-        Ragebot.config.target.shootAttempts = math.clamp(math.floor(tonumber(val) or 1), 1, 3)
+    Callback = function(v)
+        Ragebot.config.target.shootAttempts = math.clamp(math.floor(tonumber(v) or 1), 1, 3)
     end
 })
 
-ragebotTab:AddDivider()
+RagebotTab:AddDivider()
 
-ragebotTab:AddToggle('PredictT', {
+RagebotTab:AddToggle('RagebotPrediction', {
     Text = 'Prediction',
     Default = false,
-    Callback = function(val) Ragebot.config.prediction.enabled = val end
+    Callback = function(v) Ragebot.config.prediction.enabled = v end
 })
 
-ragebotTab:AddSlider('PredictMul', {
+RagebotTab:AddSlider('RagebotPredictionMult', {
     Text = 'Prediction Multiplier',
     Default = 1.2,
     Min = 0.1,
     Max = 3.0,
     Rounding = 1,
-    Callback = function(val) Ragebot.config.prediction.multiplier = val end
+    Callback = function(v) Ragebot.config.prediction.multiplier = v end
 })
 
-ragebotTab:AddDivider()
+RagebotTab:AddDivider()
 
-ragebotTab:AddToggle('VoidSpam', {
+RagebotTab:AddToggle('RagebotVoidSpam', {
     Text = 'Void Spam',
     Default = false,
-    Callback = function(val)
-        Ragebot.config.voidspam.enabled = val
-        if val then
+    Callback = function(v)
+        Ragebot.config.voidspam.enabled = v
+        if v then
             if Ragebot.config.target.immune then
                 Ragebot.config.voidspam.phase = nil
                 return
@@ -2802,17 +1962,17 @@ ragebotTab:AddToggle('VoidSpam', {
     end
 })
 
-ragebotTab:AddDualSlider('VoidShootTime', 'VoidHideTime', {
+RagebotTab:AddDualSlider('RagebotVoidShoot', 'RagebotVoidHide', {
     Text = 'Attack Time',
     Default = 1,
     Min = 0.1,
     Max = 2,
     Rounding = 1,
     Compact = true,
-    Callback = function(val)
-        val = clampVs(val)
-        Ragebot.config.voidspam.shoot_min = val
-        Ragebot.config.voidspam.shoot_max = val
+    Callback = function(v)
+        v = clampVs(v)
+        Ragebot.config.voidspam.shoot_min = v
+        Ragebot.config.voidspam.shoot_max = v
     end
 }, {
     Text = 'Hide Time',
@@ -2821,10 +1981,156 @@ ragebotTab:AddDualSlider('VoidShootTime', 'VoidHideTime', {
     Max = 2,
     Rounding = 1,
     Compact = true,
-    Callback = function(val)
-        val = clampVs(val)
-        Ragebot.config.voidspam.hide_min = val
-        Ragebot.config.voidspam.hide_max = val
+    Callback = function(v)
+        v = clampVs(v)
+        Ragebot.config.voidspam.hide_min = v
+        Ragebot.config.voidspam.hide_max = v
+    end
+})
+
+-- TAB 2: CHARACTER
+local CharacterTab = Window:AddTab('Character')
+
+-- Underground Group
+local UndergroundGroup = CharacterTab:AddLeftGroupbox('Underground (Anti-Aim)')
+UndergroundGroup:AddToggle('UndergroundToggle', {
+    Text = 'Enable Underground',
+    Default = false,
+    Callback = function(v)
+        undergroundEnabled = v
+        getgenv().UndergroundEnabled = v
+        if v then startUnderground() else stopUnderground() end
+    end
+})
+
+UndergroundGroup:AddSlider('UndergroundDepth', {
+    Text = 'Depth',
+    Default = 2.2,
+    Min = 2,
+    Max = 30,
+    Rounding = 1,
+    Callback = function(v) undergroundDepth = v end
+})
+
+-- TAB 3: MISC (Weapon Mods)
+local MiscTab = Window:AddTab('Misc')
+
+MiscTab:AddToggle('NoMeleeAnimation', {
+    Text = 'No Melee Animation',
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoMeleeAnimation = v
+        applyMods()
+    end
+})
+
+MiscTab:AddToggle('NoDashCooldown', {
+    Text = 'No Dash Cooldown (Scythe)',
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoDashCooldown = v
+        applyMods()
+    end
+})
+
+MiscTab:AddToggle('NoMeleeCooldown', {
+    Text = 'No Melee Cooldown',
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoMeleeCooldown = v
+        applyMods()
+    end
+})
+
+MiscTab:AddToggle('NoShootAnimation', {
+    Text = 'No Shoot Animation',
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoShootAnimation = v
+        applyMods()
+    end
+})
+
+MiscTab:AddToggle('NoEquipAnimation', {
+    Text = 'No Equip Animation',
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoEquipAnimation = v
+        applyMods()
+    end
+})
+
+MiscTab:AddToggle('InstantADS', {
+    Text = 'Instant ADS',
+    Default = false,
+    Callback = function(v)
+        ModSettings.InstantADS = v
+        applyMods()
+    end
+})
+
+MiscTab:AddToggle('RapidFire', {
+    Text = 'Rapid Fire',
+    Default = false,
+    Callback = function(v)
+        ModSettings.RapidFire = v
+        applyMods()
+    end
+})
+
+MiscTab:AddToggle('NoSpread', {
+    Text = 'No Spread',
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoSpread = v
+        applyMods()
+    end
+})
+
+MiscTab:AddToggle('NoSmoke', {
+    Text = 'No Smoke',
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoSmoke = v
+        applyMods()
+    end
+})
+
+MiscTab:AddToggle('NoRecoil', {
+    Text = 'No Recoil',
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoRecoil = v
+        applyMods()
+    end
+})
+
+MiscTab:AddToggle('NoFlash', {
+    Text = 'No Flash',
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoFlash = v
+        applyMods()
+    end
+})
+
+-- Device Spoof
+MiscTab:AddToggle('DeviceSpoof', {
+    Text = 'Device Spoof',
+    Default = false,
+    Callback = function(v)
+        ModSettings.DeviceSpoof = v
+        applyMods()
+    end
+})
+
+MiscTab:AddDropdown('DeviceType', {
+    Text = 'Device',
+    Values = {'VR', 'Touch', 'Gamepad', 'MouseKeyboard'},
+    Default = 1,
+    Callback = function(v)
+        ModSettings.DeviceType = v
+        if ModSettings.DeviceSpoof then applyMods() end
     end
 })
 
@@ -2836,8 +2142,8 @@ ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
 SaveManager:IgnoreThemeSettings()
 SaveManager:SetIgnoreIndexes({'MenuKeybind'})
-ThemeManager:SetFolder('Ragebot_Configs')
-SaveManager:SetFolder('Ragebot_Configs/configs')
+ThemeManager:SetFolder('RivalsScript')
+SaveManager:SetFolder('RivalsScript/configs')
 SaveManager:BuildConfigSection(SettingsTab)
 ThemeManager:ApplyToTab(SettingsTab)
 SaveManager:LoadAutoloadConfig()
