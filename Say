@@ -835,6 +835,7 @@ local config = {
         rageMasterOn = false,
         meleeFeetDrop = 3.5,
         underOffset = 4,
+        freezePlayer = false,
     },
     state = {
         reloading = false,
@@ -1430,6 +1431,13 @@ local function startsync()
         local root = config.target.character:FindFirstChild("HumanoidRootPart")
         if not root then stopsync() return end
 
+        if config.target.freezePlayer then
+            if localfighter and localfighter.Entity and localfighter.Entity.RootPart then
+                localfighter.Entity.RootPart.CFrame = config.orbit.savedpos or localfighter.Entity.RootPart.CFrame
+            end
+            return
+        end
+
         if config.state.outofammo and weapon and not isInfiniteWeapon() then
             local hrp = voidHrp()
             if hrp then
@@ -1454,15 +1462,13 @@ local function startsync()
         )
         config.orbit.serverpos = targetpos + offset
 
-        if not undergroundEnabled then
-            if localfighter and localfighter.Entity and localfighter.Entity.RootPart then
-                local currentPos = localfighter.Entity.RootPart.CFrame
-                local newPos = CFrame.new(config.orbit.serverpos)
-                local distance = (newPos.Position - currentPos.Position).Magnitude
-                if distance < 2000 then
-                    localfighter.Entity.RootPart.CFrame = newPos
-                    config.orbit.savedpos = currentPos
-                end
+        if localfighter and localfighter.Entity and localfighter.Entity.RootPart then
+            local currentPos = localfighter.Entity.RootPart.CFrame
+            local newPos = CFrame.new(config.orbit.serverpos)
+            local distance = (newPos.Position - currentPos.Position).Magnitude
+            if distance < 2000 then
+                localfighter.Entity.RootPart.CFrame = newPos
+                config.orbit.savedpos = currentPos
             end
         end
     end)
@@ -1807,12 +1813,19 @@ RageGroupBox:AddDropdown("RagebotWeapon", {
         Ragebot.config.target.weaponPick = v
     end
 })
+RageGroupBox:AddToggle("RagebotFreeze", {
+    Text = "Freeze Player",
+    Default = false,
+    Callback = function(v)
+        Ragebot.config.target.freezePlayer = v
+    end
+})
 RageGroupBox:AddSlider("RagebotHide", {
     Text = "Hide",
-    Default = 0.5,
+    Default = 0.3,
     Min = 0,
     Max = 1,
-    Rounding = 0.1,
+    Rounding = 0.25,
     Callback = function(v)
         if v == 0 then
             Ragebot.config.voidspam.hide_min = 0.1
@@ -1826,10 +1839,10 @@ RageGroupBox:AddSlider("RagebotHide", {
 })
 RageGroupBox:AddSlider("RagebotAttack", {
     Text = "Attack",
-    Default = 0.5,
+    Default = 1,
     Min = 0,
     Max = 2,
-    Rounding = 0.1,
+    Rounding = 0.25,
     Callback = function(v)
         if v == 0 then
             Ragebot.config.voidspam.shoot_min = 0.1
