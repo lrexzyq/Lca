@@ -1,28 +1,24 @@
-local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
-local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
-local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
-local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
+local Library = loadstring(game:HttpGet('https://raw.githubusercontent.com/lrexzyq/CreU/main/Library.lua'))()
+local SaveManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/lrexzyq/CreU/main/SaveManager.lua'))()
+local ThemeManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/lrexzyq/CreU/main/ThemeManager.lua'))()
 
-local Options = Library.Options
-local Toggles = Library.Toggles
+local Toggles = getgenv().Toggles
+local Options = getgenv().Options
 
 Library.ForceCheckbox = false
 Library.ShowToggleFrameInKeybinds = true
 
 local Window = Library:CreateWindow({
     Title = "Rivals Script",
-    Footer = "by yourname",
-    Icon = 95816097006870,
     Center = true,
     AutoShow = true,
-    NotifySide = "Right",
-    ShowCustomCursor = true,
+    Size = UDim2.new(0, 600, 0, 500),
 })
 
 local Tabs = {
-    Main = Window:AddTab("Main", "crosshair"),
-    Misc = Window:AddTab("Misc", "settings"),
-    ["UI Settings"] = Window:AddTab("UI Settings", "palette"),
+    Main = Window:AddTab("Main"),
+    Misc = Window:AddTab("Misc"),
+    ["UI Settings"] = Window:AddTab("UI Settings"),
 }
 
 local Players = game:GetService("Players")
@@ -266,7 +262,7 @@ local function stopUnderground()
 end
 
 local voidSpamEnabled = false
-local voidRange = math.huge
+local range = math.huge
 local voidHrp = nil
 local voidClientc, voidClientv, voidClientva = nil, nil, nil
 local voidHeartbeatConn, voidRenderConn = nil, nil
@@ -655,21 +651,6 @@ local function applyNoFlash()
     end
 end
 
-local function applyAllMods()
-    applyMeleeAnimation()
-    applyDashCooldown()
-    applyMeleeCooldown()
-    applyShootAnimation()
-    applyEquipAnimation()
-    applyInstantADS()
-    applyRapidFire()
-    applyNoSpread()
-    applyNoSmoke()
-    applyNoRecoil()
-    applyDeviceSpoof()
-    applyNoFlash()
-end
-
 Ragebot = {}
 do
 
@@ -844,10 +825,10 @@ local config = {
     },
     voidspam = {
         enabled = false,
-        shoot_min = 1,
-        shoot_max = 1,
-        hide_min = 1,
-        hide_max = 1,
+        shoot_min = 0.5,
+        shoot_max = 0.5,
+        hide_min = 0.5,
+        hide_max = 0.5,
         phase = nil,
         lastswitch = 0,
         currentduration = 0,
@@ -1185,15 +1166,7 @@ local function reloadHide(sling)
         snapVoid(hrp)
         return true
     end
-    local randomX = math.random(-10000, 10000)
-    local randomZ = math.random(-10000, 10000)
-    config.orbit.serverpos = Vector3.new(randomX, -99999999999, randomZ)
-    if sling and localfighter and localfighter.Entity and localfighter.Entity.RootPart then
-        pcall(function()
-            localfighter.Entity.RootPart.CFrame = CFrame.new(config.orbit.serverpos)
-        end)
-    end
-    return true
+    return false
 end
 
 local function isteammate(targetplayer)
@@ -1347,30 +1320,6 @@ local function refreshAtk()
     setOrbR()
 end
 
-local function stopsync()
-    if not config.state.csyncactive then return end
-    if config.orbit.connection then
-        config.orbit.connection:Disconnect()
-        config.orbit.connection = nil
-    end
-    config.state.csyncactive = false
-    config.orbit.active = false
-    clrVoidSnap()
-    config.voidspam.phase = nil
-    if config.orbit.savedpos and localfighter and localfighter.Entity and localfighter.Entity.RootPart then
-        local ok, pos = pcall(function() return config.orbit.savedpos end)
-        if ok and pos then
-            pcall(function()
-                localfighter.Entity.RootPart.CFrame = pos
-            end)
-        end
-    end
-    config.orbit.serverpos = nil
-    config.orbit.savedpos = nil
-    config.voidspam.phase = nil
-    oldpos = nil
-end
-
 local function isHidingPhase()
     return config.voidspam.enabled and config.voidspam.phase == "hide"
 end
@@ -1415,22 +1364,56 @@ local function startsync()
     end
     config.orbit.connection = runsvc.Heartbeat:Connect(function(dt)
         if not config.state.csyncactive then return end
-        if config.target.immune then stopsync() return end
-        if not config.target.character or not valid(config.target.character) then stopsync() return end
-        if not localfighter or not localfighter.Entity or not localfighter.Entity.RootPart then stopsync() return end
+        if config.target.immune then
+            stopsync()
+            return
+        end
+        if not config.target.character or not valid(config.target.character) then
+            stopsync()
+            return
+        end
+        if not localfighter or not localfighter.Entity or not localfighter.Entity.RootPart then
+            stopsync()
+            return
+        end
 
         setOrbR()
         oldpos = localfighter.Entity.RootPart.CFrame
 
         eqSlot()
 
-        if reloadHide() then return end
+        local slingWeapon = isSling(getweapon())
 
-        if not config.target.character then stopsync() return end
+        if reloadHide(slingWeapon) then return end
+
+        if not config.target.character then
+            stopsync()
+            return
+        end
         local root = config.target.character:FindFirstChild("HumanoidRootPart")
-        if not root then stopsync() return end
+        if not root then
+            stopsync()
+            return
+        end
 
-        if config.state.outofammo and weapon and not isInfiniteWeapon() then
+        if config.state.outofammo and not isInfiniteWeapon() then
+            local hrp = voidHrp()
+            if hrp then
+                snapVoid(hrp)
+            else
+                local randomX = math.random(-10000, 10000)
+                local randomZ = math.random(-10000, 10000)
+                config.orbit.serverpos = Vector3.new(randomX, -99999999999, randomZ)
+                pcall(function()
+                    localfighter.Entity.RootPart.CFrame = CFrame.new(config.orbit.serverpos)
+                end)
+            end
+            return
+        end
+
+        tickVoidSpam()
+
+        if isHidingPhase() then
             local hrp = voidHrp()
             if hrp then
                 snapVoid(hrp)
@@ -1454,18 +1437,40 @@ local function startsync()
         )
         config.orbit.serverpos = targetpos + offset
 
-        if not undergroundEnabled then
-            if localfighter and localfighter.Entity and localfighter.Entity.RootPart then
-                local currentPos = localfighter.Entity.RootPart.CFrame
-                local newPos = CFrame.new(config.orbit.serverpos)
-                local distance = (newPos.Position - currentPos.Position).Magnitude
-                if distance < 2000 then
-                    localfighter.Entity.RootPart.CFrame = newPos
-                    config.orbit.savedpos = currentPos
-                end
+        if localfighter and localfighter.Entity and localfighter.Entity.RootPart then
+            local currentPos = localfighter.Entity.RootPart.CFrame
+            local newPos = CFrame.new(config.orbit.serverpos)
+            local distance = (newPos.Position - currentPos.Position).Magnitude
+            if distance < 2000 then
+                localfighter.Entity.RootPart.CFrame = newPos
+                config.orbit.savedpos = currentPos
             end
         end
     end)
+end
+
+local function stopsync()
+    if not config.state.csyncactive then return end
+    if config.orbit.connection then
+        config.orbit.connection:Disconnect()
+        config.orbit.connection = nil
+    end
+    config.state.csyncactive = false
+    config.orbit.active = false
+    clrVoidSnap()
+    config.voidspam.phase = nil
+    if config.orbit.savedpos and localfighter and localfighter.Entity and localfighter.Entity.RootPart then
+        local ok, pos = pcall(function() return config.orbit.savedpos end)
+        if ok and pos then
+            pcall(function()
+                localfighter.Entity.RootPart.CFrame = pos
+            end)
+        end
+    end
+    config.orbit.serverpos = nil
+    config.orbit.savedpos = nil
+    config.voidspam.phase = nil
+    oldpos = nil
 end
 
 local function autoshoot()
@@ -1657,7 +1662,7 @@ Ragebot.enabled = false
 
 end
 
-local LeftGroupBox = Tabs.Main:AddLeftGroupbox("Aimbot", "crosshair")
+local LeftGroupBox = Tabs.Main:AddLeftGroupbox("Aimbot")
 LeftGroupBox:AddToggle("AimbotEnabled", {
     Text = "Enable Aimbot",
     Default = false,
@@ -1718,7 +1723,7 @@ LeftGroupBox:AddDropdown("AimbotRunService", {
     Callback = function(v) setRunService(v) end
 })
 
-local RightGroupBox = Tabs.Main:AddRightGroupbox("Movement", "move")
+local RightGroupBox = Tabs.Main:AddRightGroupbox("Movement")
 RightGroupBox:AddToggle("UndergroundEnabled", {
     Text = "Underground",
     Default = false,
@@ -1778,7 +1783,7 @@ RightGroupBox:AddToggle("VoidSpamEnabled", {
     end
 })
 
-local RageGroupBox = Tabs.Main:AddRightGroupbox("Ragebot", "sword")
+local RageGroupBox = Tabs.Main:AddRightGroupbox("Ragebot")
 RageGroupBox:AddToggle("RagebotEnabled", {
     Text = "Enable Ragebot",
     Default = false,
@@ -1797,6 +1802,14 @@ RageGroupBox:AddToggle("RagebotEnabled", {
             Ragebot.config.voidspam.enabled = false
             Ragebot.cleartarget()
         end
+    end
+})
+RageGroupBox:AddDropdown("RagebotWeapon", {
+    Text = "Weapon Slot",
+    Values = {"primary", "secondary", "melee"},
+    Default = 1,
+    Callback = function(v)
+        Ragebot.config.target.weaponPick = v
     end
 })
 RageGroupBox:AddSlider("RagebotHide", {
@@ -1834,7 +1847,7 @@ RageGroupBox:AddSlider("RagebotAttack", {
     end
 })
 
-local WeaponGroup = Tabs.Misc:AddLeftGroupbox("Weapon Mods", "sword")
+local WeaponGroup = Tabs.Misc:AddLeftGroupbox("Weapon Mods")
 WeaponGroup:AddButton({
     Text = "No Melee Animation",
     Func = function()
@@ -1924,7 +1937,7 @@ WeaponGroup:AddButton({
     end
 })
 
-local DeviceGroup = Tabs.Misc:AddRightGroupbox("Device Spoof", "smartphone")
+local DeviceGroup = Tabs.Misc:AddRightGroupbox("Device Spoof")
 DeviceGroup:AddToggle("DeviceSpoof", {
     Text = "Enable Device Spoof",
     Default = false,
