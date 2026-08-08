@@ -670,7 +670,7 @@ local function applyAllMods()
     applyNoFlash()
 end
 
-local Ragebot = {}
+Ragebot = {}
 do
 
 local replicatedstorage = cloneref(game:GetService("ReplicatedStorage"))
@@ -1797,6 +1797,14 @@ RageGroupBox:AddToggle("RagebotEnabled", {
             Ragebot.config.voidspam.enabled = false
             Ragebot.cleartarget()
         end
+    end
+})
+RageGroupBox:AddDropdown("RagebotWeapon", {
+    Text = "Weapon Slot",
+    Values = {"primary", "secondary", "melee"},
+    Default = 1,
+    Callback = function(v)
+        Ragebot.config.target.weaponPick = v
     end
 })
 RageGroupBox:AddSlider("RagebotHide", {
