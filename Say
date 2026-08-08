@@ -10,8 +10,8 @@ Library.ForceCheckbox = false
 Library.ShowToggleFrameInKeybinds = true
 
 local Window = Library:CreateWindow({
-    Title = "Rivals Script",
-    Footer = "by yourname",
+    Title = "Skiding",
+    Footer = "phatskidslord",
     Icon = 95816097006870,
     Center = true,
     AutoShow = true,
