@@ -21,13 +21,6 @@ local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local lp = Players.LocalPlayer
 
--- Hàm safeRequire
-local function safeRequire(obj)
-    local success, res = pcall(require, obj)
-    if success then return res end
-    return nil
-end
-
 -- ============================================================
 -- AIMBOT LOGIC
 -- ============================================================
