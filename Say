@@ -1,33 +1,29 @@
--- ===== RIVALS SCRIPT (WINDUI) =====
--- Bao gồm: Aimbot + Ragebot (UnnamedFeatures) + Underground + tất cả mod (trừ Unlock All)
--- Device Spoof có dropdown: VR, Touch, Gamepad, MouseKeyboard
+local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
+local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
+local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
+local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
 
--- Load WindUI Library
-local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
-local Window = WindUI:CreateWindow({
+local Options = Library.Options
+local Toggles = Library.Toggles
+
+Library.ForceCheckbox = false
+Library.ShowToggleFrameInKeybinds = true
+
+local Window = Library:CreateWindow({
     Title = "Rivals Script",
-    Author = "by .ftgs",
-    Folder = "RivalsScript",
-    Size = UDim2.fromOffset(700, 600),
-    MinSize = Vector2.new(560, 350),
-    MaxSize = Vector2.new(850, 560),
-    Resizable = true,
-    Theme = "Dark",
-    OpenButton = {
-        Title = "Open Rivals Script",
-        CornerRadius = UDim.new(1, 0),
-        StrokeThickness = 3,
-        Enabled = true,
-        Draggable = true,
-        OnlyMobile = false,
-        Scale = 0.5,
-        Color = ColorSequence.new(Color3.fromHex("#30FF6A"), Color3.fromHex("#e7ff2f")),
-    },
-    Topbar = {
-        Height = 44,
-        ButtonsType = "Mac",
-    },
+    Footer = "by yourname",
+    Icon = 95816097006870,
+    Center = true,
+    AutoShow = true,
+    NotifySide = "Right",
+    ShowCustomCursor = true,
 })
+
+local Tabs = {
+    Main = Window:AddTab("Main", "crosshair"),
+    Misc = Window:AddTab("Misc", "settings"),
+    ["UI Settings"] = Window:AddTab("UI Settings", "palette"),
+}
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -36,16 +32,38 @@ local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local lp = Players.LocalPlayer
 
--- Hàm safeRequire
 local function safeRequire(obj)
     local success, res = pcall(require, obj)
     if success then return res end
     return nil
 end
 
--- ============================================================
--- AIMBOT LOGIC
--- ============================================================
+local function worldToScreen(pos)
+    local cam = Workspace.CurrentCamera
+    local vec, onScreen = cam:WorldToViewportPoint(pos)
+    return Vector2.new(vec.X, vec.Y), onScreen
+end
+
+local runServiceType = "Heartbeat"
+local runServiceConnection = nil
+
+local function setRunService(type)
+    runServiceType = type
+    if runServiceConnection then
+        runServiceConnection:Disconnect()
+        runServiceConnection = nil
+    end
+    if type == "Heartbeat" then
+        runServiceConnection = RunService.Heartbeat:Connect(function() Aimbot:update() end)
+    elseif type == "RenderStepped" then
+        runServiceConnection = RunService.RenderStepped:Connect(function() Aimbot:update() end)
+    elseif type == "PreSimulation" then
+        runServiceConnection = RunService.PreSimulation:Connect(function() Aimbot:update() end)
+    end
+end
+
+local hitPartsList = {"Head", "UpperTorso", "LowerTorso", "HumanoidRootPart"}
+
 Aimbot = {
     enabled = false,
     visCheck = true,
@@ -55,6 +73,7 @@ Aimbot = {
     prediction = 0,
     smoothing = 0,
     cc = nil,
+    hitPart = "Head",
 
     getCC = function(self)
         if not self.cc then
@@ -70,6 +89,7 @@ Aimbot = {
     setMaxDist = function(self, v) self.maxDist = v end,
     setPrediction = function(self, v) self.prediction = v end,
     setSmoothing = function(self, v) self.smoothing = v end,
+    setHitPart = function(self, v) self.hitPart = v end,
 
     update = function(self)
         if not self.enabled then return end
@@ -92,15 +112,25 @@ Aimbot = {
             local char = p.Character
             if not char then continue end
 
-            local head = char:FindFirstChild("Head")
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if not head or not hum or hum.Health <= 0 then continue end
+            local targetPart
+            if self.hitPart == "HumanoidRootPart" then
+                targetPart = char:FindFirstChild("HumanoidRootPart")
+            else
+                targetPart = char:FindFirstChild(self.hitPart)
+            end
+            if not targetPart then
+                targetPart = char:FindFirstChild("Head")
+                if not targetPart then continue end
+            end
 
-            local aimPos = head.Position
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if not hum or hum.Health <= 0 then continue end
+
+            local aimPos = targetPart.Position
             if self.prediction > 0 then
-                local vel = head.AssemblyLinearVelocity
+                local vel = targetPart.AssemblyLinearVelocity
                 if vel.Magnitude < 500 then
-                    aimPos = head.Position + vel * self.prediction
+                    aimPos = targetPart.Position + vel * self.prediction
                 end
             end
 
@@ -114,10 +144,10 @@ Aimbot = {
 
             if self.visCheck then
                 local rp = RaycastParams.new()
-                rp.FilterDescendantsInstances = { lp.Character, head.Parent }
+                rp.FilterDescendantsInstances = { lp.Character, char }
                 rp.FilterType = Enum.RaycastFilterType.Exclude
-                local result = Workspace:Raycast(camPos, (head.Position - camPos).Unit * 1000, rp)
-                if result and not result.Instance:IsDescendantOf(head.Parent) then continue end
+                local result = Workspace:Raycast(camPos, (aimPos - camPos).Unit * 1000, rp)
+                if result and not result.Instance:IsDescendantOf(char) then continue end
             end
 
             if dist < bestDist then
@@ -134,12 +164,513 @@ Aimbot = {
     end
 }
 
-RunService.RenderStepped:Connect(function() Aimbot:update() end)
+setRunService("Heartbeat")
 
--- ============================================================
--- RAGEBOT (UnnamedFeatures)
--- ============================================================
-Ragebot = {}
+local undergroundEnabled = false
+local undergroundDepth = 2.5
+local undergroundConn = nil
+local undergroundRenderConn = nil
+local undergroundRealCF = nil
+local undergroundRealVel = nil
+local undergroundRealAngVel = nil
+local undergroundOldCF = nil
+local undergroundOldVel = nil
+local undergroundOldAngVel = nil
+local undergroundOldCamCF = nil
+local undergroundFirstRun = true
+
+local function startUnderground()
+    if undergroundConn then return end
+    undergroundFirstRun = true
+    undergroundConn = RunService.Heartbeat:Connect(function()
+        if not undergroundEnabled then return end
+        pcall(function()
+            local char = lp.Character
+            if not char then return end
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if not hrp then return end
+            if undergroundFirstRun then
+                undergroundOldCF = hrp.CFrame
+                undergroundOldVel = hrp.AssemblyLinearVelocity
+                undergroundOldAngVel = hrp.AssemblyAngularVelocity
+                undergroundOldCamCF = Workspace.CurrentCamera.CFrame
+                undergroundFirstRun = false
+            end
+            undergroundRealCF = hrp.CFrame
+            undergroundRealVel = hrp.AssemblyLinearVelocity
+            undergroundRealAngVel = hrp.AssemblyAngularVelocity
+            local depth = undergroundDepth or 2.5
+            local params = RaycastParams.new()
+            params.FilterDescendantsInstances = { char }
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            local result = Workspace:Raycast(hrp.Position, Vector3.new(0, -500, 0), params)
+            local fakeY
+            if result then
+                fakeY = result.Position.Y - depth
+            else
+                fakeY = -99999
+            end
+            hrp.CFrame = CFrame.new(hrp.Position.X, fakeY, hrp.Position.Z)
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+        end)
+    end)
+    undergroundRenderConn = RunService:BindToRenderStep("UndergroundSync", Enum.RenderPriority.First.Value, function()
+        if undergroundEnabled and undergroundRealCF then
+            pcall(function()
+                local char = lp.Character
+                if not char then return end
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if not hrp then return end
+                hrp.CFrame = undergroundRealCF
+                hrp.AssemblyLinearVelocity = undergroundRealVel or Vector3.zero
+                hrp.AssemblyAngularVelocity = undergroundRealAngVel or Vector3.zero
+            end)
+        end
+    end)
+end
+
+local function stopUnderground()
+    if undergroundConn then
+        undergroundConn:Disconnect()
+        undergroundConn = nil
+    end
+    if undergroundRenderConn then
+        pcall(function() RunService:UnbindFromRenderStep("UndergroundSync") end)
+        undergroundRenderConn = nil
+    end
+    if undergroundOldCF then
+        pcall(function()
+            local char = lp.Character
+            if char then
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    hrp.CFrame = undergroundOldCF
+                    hrp.AssemblyLinearVelocity = undergroundOldVel or Vector3.zero
+                    hrp.AssemblyAngularVelocity = undergroundOldAngVel or Vector3.zero
+                end
+            end
+            if undergroundOldCamCF then
+                Workspace.CurrentCamera.CFrame = undergroundOldCamCF
+            end
+        end)
+        undergroundOldCF = nil
+        undergroundOldVel = nil
+        undergroundOldAngVel = nil
+        undergroundOldCamCF = nil
+    end
+    undergroundRealCF = nil
+    undergroundRealVel = nil
+    undergroundRealAngVel = nil
+    undergroundFirstRun = true
+end
+
+local voidSpamEnabled = false
+local voidRange = math.huge
+local voidHrp = nil
+local voidClientc, voidClientv, voidClientva = nil, nil, nil
+local voidHeartbeatConn, voidRenderConn = nil, nil
+local voidOldCF = nil
+local voidOldVel = nil
+local voidOldAngVel = nil
+local voidOldCamCF = nil
+local voidFirstRun = true
+
+local function betterRandom(mi, ma, dmi, dma)
+    local val = math.random(mi, ma)
+    local attempts = 0
+    while (val >= dmi and val <= dma) and attempts < 100 do
+        val = math.random(mi, ma)
+        attempts = attempts + 1
+    end
+    return val
+end
+
+function startVoidSpam()
+    if voidHeartbeatConn then return end
+    voidFirstRun = true
+    voidHeartbeatConn = RunService.Heartbeat:Connect(function()
+        if not voidSpamEnabled then return end
+        pcall(function()
+            local char = lp.Character
+            if not char then return end
+            voidHrp = char:FindFirstChild("HumanoidRootPart")
+            if not voidHrp then return end
+            if voidFirstRun then
+                voidOldCF = voidHrp.CFrame
+                voidOldVel = voidHrp.AssemblyLinearVelocity
+                voidOldAngVel = voidHrp.AssemblyAngularVelocity
+                voidOldCamCF = Workspace.CurrentCamera.CFrame
+                voidFirstRun = false
+            end
+            voidClientc = voidHrp.CFrame
+            voidClientv = voidHrp.AssemblyLinearVelocity
+            voidClientva = voidHrp.AssemblyAngularVelocity
+            local range = voidRange
+            voidHrp.CFrame = CFrame.new(
+                betterRandom(-range, range, -range/2, range/2),
+                betterRandom(-range, range, -range/2, range/2),
+                betterRandom(-range, range, -range/2, range/2)
+            ) * CFrame.Angles(math.pi, math.pi, math.pi)
+            voidHrp.AssemblyLinearVelocity = Vector3.new(
+                betterRandom(-range, range, -range/2, range/2),
+                betterRandom(-range, range, -range/2, range/2),
+                betterRandom(-range, range, -range/2, range/2)
+            )
+            voidHrp.AssemblyAngularVelocity = Vector3.new(
+                betterRandom(-range, range, -range/2, range/2),
+                betterRandom(-range, range, -range/2, range/2),
+                betterRandom(-range, range, -range/2, range/2)
+            )
+        end)
+    end)
+    voidRenderConn = RunService:BindToRenderStep("VoidSpamSync", Enum.RenderPriority.First.Value, function()
+        if voidSpamEnabled and voidHrp then
+            pcall(function()
+                voidHrp.CFrame = voidClientc
+                voidHrp.AssemblyLinearVelocity = voidClientv
+                voidHrp.AssemblyAngularVelocity = voidClientva
+            end)
+        end
+    end)
+end
+
+function stopVoidSpam()
+    voidSpamEnabled = false
+    if voidHeartbeatConn then
+        voidHeartbeatConn:Disconnect()
+        voidHeartbeatConn = nil
+    end
+    if voidRenderConn then
+        pcall(function() RunService:UnbindFromRenderStep("VoidSpamSync") end)
+        voidRenderConn = nil
+    end
+    if voidOldCF then
+        pcall(function()
+            local char = lp.Character
+            if char then
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    hrp.CFrame = voidOldCF
+                    hrp.AssemblyLinearVelocity = voidOldVel or Vector3.zero
+                    hrp.AssemblyAngularVelocity = voidOldAngVel or Vector3.zero
+                end
+            end
+            if voidOldCamCF then
+                Workspace.CurrentCamera.CFrame = voidOldCamCF
+            end
+        end)
+        voidOldCF = nil
+        voidOldVel = nil
+        voidOldAngVel = nil
+        voidOldCamCF = nil
+    end
+    voidHrp = nil
+    voidClientc = nil
+    voidClientv = nil
+    voidClientva = nil
+    voidFirstRun = true
+end
+
+local ModSettings = {}
+
+local function applyMeleeAnimation()
+    if ModSettings.NoMeleeAnimation then
+        task.spawn(function()
+            local ok, Melee = pcall(function() return require(lp.PlayerScripts.Modules.ItemTypes.Melee) end)
+            if ok and Melee and Melee.StartShooting then
+                local old = Melee.StartShooting
+                Melee.StartShooting = function(self, p1, p2)
+                    local vm = self.ViewModel; local savedPlay
+                    if vm then savedPlay = vm.PlayAnimation; vm.PlayAnimation = function() end end
+                    local result = { old(self, p1, p2) }
+                    if vm and savedPlay then
+                        vm.PlayAnimation = savedPlay
+                        pcall(function()
+                            for _, name in ipairs({"Attack", "Attack1", "Attack2", "Swing", "Slash", "Combo1", "Combo2", "Combo3"}) do
+                                vm:StopAnimation(name)
+                            end
+                        end)
+                    end
+                    return table.unpack(result)
+                end
+            end
+        end)
+    end
+end
+
+local function applyDashCooldown()
+    if ModSettings.NoDashCooldown then
+        task.spawn(function()
+            local modules = ReplicatedStorage:FindFirstChild("Modules")
+            local itemLib = modules and modules:FindFirstChild("ItemLibrary")
+            if itemLib then
+                local success, library = pcall(require, itemLib)
+                if success and type(library) == "table" then
+                    local items = library.Items or library.Weapons or library.Melee or library.Utilities
+                    if type(items) == "table" then
+                        for name, item in pairs(items) do
+                            if type(item) == "table" then
+                                local itemName = item.Name or name
+                                if string.lower(itemName) == "scythe" then
+                                    if item.DashCooldown then item.DashCooldown = 0 end
+                                    if item.AbilityCooldown then item.AbilityCooldown = 0 end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end
+end
+
+local function applyMeleeCooldown()
+    if ModSettings.NoMeleeCooldown then
+        task.spawn(function()
+            local modules = ReplicatedStorage:FindFirstChild("Modules")
+            local itemLib = modules and modules:FindFirstChild("ItemLibrary")
+            if itemLib then
+                local success, library = pcall(require, itemLib)
+                if success and type(library) == "table" then
+                    local items = library.Items or library.Weapons or library.Melee or library.Utilities
+                    if type(items) == "table" then
+                        local cooldowns = {"Cooldown", "AttackCooldown", "UseDelay", "SpinCooldown", "HeavyAttackCooldown", "AbilityCooldown", "FireCooldown"}
+                        for _, item in pairs(items) do
+                            if type(item) == "table" and (item.Type == "Melee" or item.Category == "Melee" or (item.Damage and not item.AmmoType)) then
+                                for _, field in ipairs(cooldowns) do
+                                    if item[field] then item[field] = 0 end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end
+end
+
+local function applyShootAnimation()
+    if ModSettings.NoShootAnimation then
+        task.spawn(function()
+            local ok, Gun = pcall(function() return require(lp.PlayerScripts.Modules.ItemTypes.Gun) end)
+            if ok and Gun then
+                if Gun.StartShooting then
+                    local old = Gun.StartShooting
+                    Gun.StartShooting = function(self, p1, p2)
+                        local vm = self.ViewModel; local savedPlay
+                        if vm then savedPlay = vm.PlayAnimation; vm.PlayAnimation = function() end end
+                        local result = { old(self, p1, p2) }
+                        if vm and savedPlay then
+                            vm.PlayAnimation = savedPlay
+                            pcall(function()
+                                for _, name in ipairs({"Shoot","Fire","ShootBurst","Shoot_ADS","ShootHip","ShootEmpty","ShootADS","Burst"}) do
+                                    vm:StopAnimation(name)
+                                end
+                            end)
+                        end
+                        return table.unpack(result)
+                    end
+                end
+                if Gun.FinishShooting then
+                    local old = Gun.FinishShooting
+                    Gun.FinishShooting = function(self, ...)
+                        if not self.ViewModel then return old(self, ...) end
+                        local vm = self.ViewModel; local oldPlay = vm.PlayAnimation
+                        vm.PlayAnimation = function() end
+                        local result = { pcall(old, self, ...) }
+                        vm.PlayAnimation = oldPlay
+                        pcall(function()
+                            for _, name in ipairs({"Shoot","Fire","ShootBurst","Shoot_ADS","Shoot_Hip","ShootEmpty","ShootADS","Burst"}) do
+                                vm:StopAnimation(name)
+                            end
+                        end)
+                        if result[1] then return table.unpack(result, 2) end
+                    end
+                end
+                if Gun.ShootBurst then
+                    local old = Gun.ShootBurst
+                    Gun.ShootBurst = function(self, ...)
+                        if not self.ViewModel then return old(self, ...) end
+                        local vm = self.ViewModel; local oldPlay = vm.PlayAnimation
+                        vm.PlayAnimation = function() end
+                        local result = { pcall(old, self, ...) }
+                        vm.PlayAnimation = oldPlay
+                        pcall(function()
+                            for _, name in ipairs({"Shoot","Fire","ShootBurst","Shoot_ADS","Shoot_Hip","ShootEmpty","ShootADS","Burst"}) do
+                                vm:StopAnimation(name)
+                            end
+                        end)
+                        if result[1] then return table.unpack(result, 2) end
+                    end
+                end
+            end
+        end)
+    end
+end
+
+local function applyEquipAnimation()
+    if ModSettings.NoEquipAnimation then
+        task.spawn(function()
+            local ok, Gun = pcall(function() return require(lp.PlayerScripts.Modules.ItemTypes.Gun) end)
+            if ok and Gun and Gun.Equip then
+                local old = Gun.Equip
+                Gun.Equip = function(self, ...)
+                    local r = { old(self, ...) }
+                    if self.ViewModel then
+                        self.ViewModel:StopAnimation("Equip")
+                        self.ViewModel:StopAnimation("EquipEmpty")
+                    end
+                    return table.unpack(r)
+                end
+            end
+        end)
+    end
+end
+
+local function applyInstantADS()
+    if ModSettings.InstantADS then
+        task.spawn(function()
+            local ok, Gun = pcall(function() return require(lp.PlayerScripts.Modules.ItemTypes.Gun) end)
+            if ok and Gun then
+                if Gun.StartAiming then
+                    Gun.StartAiming = function(self, p)
+                        self:SetReplicate("IsAiming", true)
+                        self.StopSprinting:Fire()
+                        self.ViewModel:SetAiming(true)
+                        self:SetReplicate("FOVOffset", self.Info.AimFOVOffset)
+                        if self.ViewModel.CurrentAimValue then self.ViewModel.CurrentAimValue = 1 end
+                        return true, "StartAiming"
+                    end
+                end
+                if Gun.GetAimSpeed then
+                    Gun.GetAimSpeed = function(self) return 999 end
+                end
+            end
+        end)
+    end
+end
+
+local function applyRapidFire()
+    if ModSettings.RapidFire then
+        task.spawn(function()
+            local ok, Gun = pcall(function() return require(lp.PlayerScripts.Modules.ItemTypes.Gun) end)
+            if ok and Gun and Gun.Update then
+                local old = Gun.Update
+                Gun.Update = function(self, dt, ...)
+                    if self._shoot_cooldown then self._shoot_cooldown = 0 end
+                    return old(self, dt, ...)
+                end
+            end
+        end)
+    end
+end
+
+local function applyNoSpread()
+    if ModSettings.NoSpread then
+        task.spawn(function()
+            local ok, GameplayUtility = pcall(function() return require(ReplicatedStorage.Modules.GameplayUtility) end)
+            if ok and GameplayUtility then
+                GameplayUtility.GetSpread = function() return CFrame.identity end
+            end
+            local FighterController = require(lp.PlayerScripts.Controllers.FighterController)
+            local oldNamecall
+            oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+                local method = getnamecallmethod()
+                if method == "FireServer" and self.Name == "UseItem" then
+                    local args = {...}
+                    if typeof(args[3]) == "table" then
+                        args[3]["\2"] = true
+                    end
+                end
+                return oldNamecall(self, ...)
+            end)
+        end)
+    end
+end
+
+local function applyNoSmoke()
+    if ModSettings.NoSmoke then
+        task.spawn(function()
+            local ok, SmokeScreen = pcall(function() return require(lp.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.FighterInterface.SmokeScreen) end)
+            if ok and SmokeScreen and SmokeScreen.Update then
+                SmokeScreen.Update = function(self)
+                    self._smoke_cloud_spring.Target = 0
+                    self._smoke_cloud_cover.Transparency = 1
+                    if self._smoke_cloud_dof then self._smoke_cloud_dof.Parent = nil end
+                    return
+                end
+            end
+            local ok2, SmokeCloud = pcall(function() return require(lp.PlayerScripts.Modules.SmokeCloud) end)
+            if ok2 and SmokeCloud and SmokeCloud.Update then
+                SmokeCloud.Update = function(self)
+                    if self.Model then self.Model:Destroy() end
+                    return true
+                end
+            end
+        end)
+    end
+end
+
+local function applyNoRecoil()
+    if ModSettings.NoRecoil then
+        task.spawn(function()
+            local ok, ClientItem = pcall(function() return require(lp.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.ClientItem) end)
+            if ok and ClientItem and ClientItem._Recoil then
+                ClientItem._Recoil = function() return end
+            end
+        end)
+    end
+end
+
+local function applyDeviceSpoof()
+    if ModSettings.DeviceSpoof then
+        task.spawn(function()
+            local device = ModSettings.DeviceType or "VR"
+            local remote = ReplicatedStorage.Remotes.Replication.Fighter.SetControls
+            local controllers = lp.PlayerScripts.Controllers
+            local ok, fighterController = pcall(function() return require(controllers:WaitForChild("FighterController", 10)) end)
+            if ok and fighterController and fighterController._ReplicateControls then
+                fighterController._ReplicateControls = function(self)
+                    remote:FireServer(device)
+                    if not self._last_controls_replicated_time then
+                        self._last_controls_replicated_time = 0
+                    end
+                    self._last_controls_replicated_time = tick()
+                end
+                remote:FireServer(device)
+            end
+        end)
+    end
+end
+
+local function applyNoFlash()
+    if ModSettings.NoFlash then
+        task.spawn(function()
+            local ok, Flashed = pcall(function() return require(lp.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.FighterInterface.Flashed) end)
+            if ok and Flashed and Flashed.Flash then
+                Flashed.Flash = function() return end
+            end
+        end)
+    end
+end
+
+local function applyAllMods()
+    applyMeleeAnimation()
+    applyDashCooldown()
+    applyMeleeCooldown()
+    applyShootAnimation()
+    applyEquipAnimation()
+    applyInstantADS()
+    applyRapidFire()
+    applyNoSpread()
+    applyNoSmoke()
+    applyNoRecoil()
+    applyDeviceSpoof()
+    applyNoFlash()
+end
+
+local Ragebot = {}
 do
 
 local replicatedstorage = cloneref(game:GetService("ReplicatedStorage"))
@@ -283,6 +814,7 @@ local function lobbyCache()
     return _lobbyCache.v
 end
 
+getgenv().IsInActiveMatch = liveMatch
 getgenv().IsInLobby = lobbyCache
 
 local config = {
@@ -298,35 +830,11 @@ local config = {
         manualkey = false,
         immune = false,
         attackPosition = "default",
-        attackCustomEnabled = false,
         weaponPick = "primary",
         forceWeapon = true,
         rageMasterOn = false,
         meleeFeetDrop = 3.5,
         underOffset = 4,
-        customHeight = 2,
-        customFront = 0,
-        customSide = 0,
-        customVertical = 0,
-        customRadius = 0,
-    },
-    prediction = {
-        enabled = false,
-        multiplier = 1.2,
-        velocity = Vector3.new(0, 0, 0),
-        acceleration = Vector3.new(0, 0, 0),
-        lastposition = nil,
-        lasttime = 0,
-    },
-    orbit = {
-        active = false,
-        angle = 0,
-        serverpos = nil,
-        connection = nil,
-        speed = 9000,
-        height = 1,
-        radius = 0,
-        savedpos = nil,
     },
     state = {
         reloading = false,
@@ -344,6 +852,17 @@ local config = {
         lastswitch = 0,
         currentduration = 0,
     },
+    orbit = {
+        active = false,
+        angle = 0,
+        serverpos = nil,
+        connection = nil,
+        speed = 9000,
+        height = 1,
+        radius = 0,
+        originalpos = nil,
+        savedpos = nil,
+    },
 }
 
 local ragePerf = {
@@ -351,15 +870,6 @@ local ragePerf = {
     hitPartByPlayer = {},
     lastHitAtByPlayer = {},
     killStartAt = nil,
-}
-
-local vhState = {
-    active = false,
-    hrp = nil,
-    mainConnection = nil,
-    restoreConnection = nil,
-    currentVoidPos = nil,
-    lastTeleportTime = 0,
 }
 
 local localfighter = modules.fighter.LocalFighter
@@ -454,6 +964,11 @@ local function pickMelee()
     return (config.target.weaponPick or "primary") == "melee"
 end
 
+local function isSling(weapon)
+    if not weapon then return false end
+    return weapon:lower():find("slingshot", 1, true) ~= nil
+end
+
 local function getammo()
     if isInfiniteWeapon() then return nil, nil, false end
     local success, controller = pcall(function()
@@ -493,10 +1008,6 @@ local function itemMelee(item)
     if meleeNm(nm) then return true end
     local t = item:Get("ItemType") or item:Get("Type") or item:Get("Category")
     return type(t) == "string" and t:lower():find("melee", 1, true) ~= nil
-end
-
-local function isSling(weapon)
-    return weapon and weapon:lower():find("slingshot", 1, true) ~= nil
 end
 
 local function lfItems()
@@ -710,8 +1221,7 @@ local function nearest()
             if valid(char) then
                 local root = char:FindFirstChild("HumanoidRootPart")
                 if root then
-                    local wts = getgenv().WorldToScreen or worldToScreen
-                    local screenpos, onscreen = wts(root.Position, camera)
+                    local screenpos, onscreen = worldToScreen(root.Position)
                     if onscreen and screenpos then
                         local distance = (Vector2.new(screenpos.X, screenpos.Y) - cursorpos).Magnitude
                         if distance < bestdistance then
@@ -750,42 +1260,6 @@ local function hitpartfromname(character, partname)
     end
 end
 
-local function updatevel()
-    if not config.target.character or not config.prediction.enabled then
-        config.prediction.velocity = Vector3.new(0, 0, 0)
-        config.prediction.lastposition = nil
-        return
-    end
-    local root = config.target.character:FindFirstChild("HumanoidRootPart")
-    if not root then return end
-    local now = tick()
-    local dt = now - config.prediction.lasttime
-    if dt > 0 and dt < 0.1 then
-        local currentpos = root.Position
-        if config.prediction.lastposition then
-            local instantvel = (currentpos - config.prediction.lastposition) / dt
-            config.prediction.velocity = config.prediction.velocity:Lerp(instantvel, 0.6)
-        end
-        config.prediction.lastposition = currentpos
-        config.prediction.lasttime = now
-    end
-end
-
-local function predict(targetpart, origin)
-    if not config.prediction.enabled or not targetpart then
-        return targetpart and targetpart.Position or Vector3.new()
-    end
-    local basepos = targetpart.Position
-    local distance = (basepos - origin).Magnitude
-    local ping = 0
-    pcall(function()
-        ping = game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
-    end)
-    local traveltime = distance / 3000
-    local totaltime = (traveltime + ping) * config.prediction.multiplier
-    return basepos + (config.prediction.velocity * totaltime)
-end
-
 local function canuse()
     local char = player.Character
     if not char then return false end
@@ -822,15 +1296,6 @@ local function atkCfg()
             side = 0,
             vertical = -drop,
             radius = 0,
-        }
-    end
-    if config.target.attackCustomEnabled then
-        return {
-            height = config.target.customHeight or 2,
-            front = config.target.customFront or 0,
-            side = config.target.customSide or 0,
-            vertical = config.target.customVertical or 0,
-            radius = config.target.customRadius or 0,
         }
     end
     local mode = config.target.attackPosition or "default"
@@ -892,7 +1357,7 @@ local function stopsync()
     config.orbit.active = false
     clrVoidSnap()
     config.voidspam.phase = nil
-    if config.orbit.savedpos and localfighter and localfighter.Entity and localfighter.Entity.RootPart and not getgenv().UndergroundEnabled then
+    if config.orbit.savedpos and localfighter and localfighter.Entity and localfighter.Entity.RootPart then
         local ok, pos = pcall(function() return config.orbit.savedpos end)
         if ok and pos then
             pcall(function()
@@ -957,61 +1422,15 @@ local function startsync()
         setOrbR()
         oldpos = localfighter.Entity.RootPart.CFrame
 
-        local function isQuickSwapActive()
-            if pickMelee() then return false end
-            local lf = modules.fighter and modules.fighter.LocalFighter
-            if not lf or not lf.EquippedItem then return false end
-            local name = tostring(lf.EquippedItem:Get("Name") or ""):lower()
-            return name:find("fist", 1, true) or name:find("utility", 1, true)
-        end
-
-        local _weapon = getweapon()
-        local checksling = isSling(_weapon)
-
-        if isQuickSwapActive() then return end
-
         eqSlot()
 
-        if reloadHide(checksling) then return end
-
-        if not checksling and config.voidspam.enabled and not config.target.immune then
-            tickVoidSpam()
-            if config.voidspam.phase == "hide" then
-                local randomX = math.random(-10000, 10000)
-                local randomZ = math.random(-10000, 10000)
-                config.orbit.serverpos = Vector3.new(randomX, -99999999999, randomZ)
-                pcall(function()
-                    localfighter.Entity.RootPart.CFrame = CFrame.new(config.orbit.serverpos)
-                end)
-                return
-            end
-        end
+        if reloadHide() then return end
 
         if not config.target.character then stopsync() return end
         local root = config.target.character:FindFirstChild("HumanoidRootPart")
         if not root then stopsync() return end
 
-        if not checksling and isHidingPhase() then
-            local randomX = math.random(-10000, 10000)
-            local randomZ = math.random(-10000, 10000)
-            config.orbit.serverpos = Vector3.new(randomX, -99999999999, randomZ)
-            pcall(function()
-                localfighter.Entity.RootPart.CFrame = CFrame.new(config.orbit.serverpos)
-            end)
-            return
-        end
-
-        if checksling then
-            if vhState and vhState.active then
-                local trg = config.target.character:FindFirstChild("HumanoidRootPart")
-                if trg then
-                    local flat = Vector3.new(trg.CFrame.LookVector.X, 0, trg.CFrame.LookVector.Z).Unit
-                    config.orbit.serverpos = trg.Position + Vector3.new(0, 15, 0) + (flat * 5)
-                end
-            end
-        end
-
-        if config.state.outofammo and not checksling and _weapon and not isInfiniteWeapon() then
+        if config.state.outofammo and weapon and not isInfiniteWeapon() then
             local hrp = voidHrp()
             if hrp then
                 snapVoid(hrp)
@@ -1035,7 +1454,7 @@ local function startsync()
         )
         config.orbit.serverpos = targetpos + offset
 
-        if not getgenv().UndergroundEnabled then
+        if not undergroundEnabled then
             if localfighter and localfighter.Entity and localfighter.Entity.RootPart then
                 local currentPos = localfighter.Entity.RootPart.CFrame
                 local newPos = CFrame.new(config.orbit.serverpos)
@@ -1050,13 +1469,9 @@ local function startsync()
 end
 
 local function autoshoot()
-    if not isSling(getweapon()) and config.voidspam.enabled and config.voidspam.phase == "hide" then return end
     if not config.target.enabled or not config.target.character or not config.target.autoshoot then return end
     if config.target.immune then return end
-    if not isSling(getweapon()) and config.voidspam.enabled and config.voidspam.phase == "hide" then return end
-    if config.voidspam.enabled and config.voidspam.phase == "hide" then return end
     local weapon = getweapon()
-    local checksling = isSling(weapon)
     eqSlot()
     local lf = modules.fighter and modules.fighter.LocalFighter
     if not lf or not lf.EquippedItem then return end
@@ -1070,22 +1485,13 @@ local function autoshoot()
     if not hitPart then return end
     local shootPos
     local targetPos
-    if vhState and vhState.active and checksling then
+    if config.state.csyncactive and config.orbit.serverpos then
+        shootPos = config.orbit.serverpos
+    else
         local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
         shootPos = root and root.Position or Vector3.new()
-        targetPos = predict(hitPart, shootPos)
-    else
-        if vhState and vhState.active then
-            local myRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-            shootPos = myRoot and myRoot.Position or Vector3.new()
-        elseif config.state.csyncactive and config.orbit.serverpos then
-            shootPos = config.orbit.serverpos
-        else
-            local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-            shootPos = root and root.Position or Vector3.new()
-        end
-        targetPos = predict(hitPart, shootPos)
     end
+    targetPos = hitPart.Position
     local data = {
         [utf8.char(1)] = {
             [utf8.char(0)] = modules.utility:EncodeCFrame(CFrame.new(shootPos, targetPos)),
@@ -1113,7 +1519,7 @@ end
 
 local oldcamupdate = modules.camcontrol.Update
 modules.camcontrol.Update = function(...)
-    if getgenv().UndergroundEnabled then
+    if undergroundEnabled then
         return oldcamupdate(...)
     elseif config.state.csyncactive and localfighter and localfighter.Entity and localfighter.Entity.RootPart and oldpos then
         localfighter.Entity.RootPart.CFrame = oldpos
@@ -1194,100 +1600,9 @@ local function settarget(char)
     end
 end
 
-local sling = {
-    enabled = false,
-    connections = {}
-}
-
-local function checksling()
-    return isSling(getweapon())
-end
-
-local function nearplr()
-    local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-    if not root then return nil end
-    local found, best = nil, math.huge
-    for _, p in ipairs(players:GetPlayers()) do
-        if p == player or not p.Character then continue end
-        local head = p.Character:FindFirstChild("HitboxHead") or p.Character:FindFirstChild("Head")
-        if not head then continue end
-        local d = (head.Position - root.Position).Magnitude
-        if d < best then
-            found = head
-            best = d
-        end
-    end
-    return found
-end
-
-local function slingshotTP()
-    if sling.connections.touch then return end
-    sling.connections.touch = workspace.DescendantAdded:Connect(function(d)
-        if d:IsA("BasePart") or d:IsA("Model") then
-            if d.Name == "Slingshot" or d.Name == "CoreProjectile" or d.Name == "OuterProjectile" then
-                task.spawn(function()
-                    task.wait(0.06)
-                    local part = d:IsA("BasePart") and d or d:FindFirstChildWhichIsA("BasePart")
-                    if not part then return end
-                    part.CanTouch = true
-                    for i = 1, 60 do
-                        if not part.Parent or not part:IsDescendantOf(workspace) then break end
-                        local target = nearplr()
-                        if target and target:IsA("BasePart")
-                            and target.Parent
-                            and target:IsDescendantOf(workspace)
-                        then
-                            pcall(firetouchinterest, target, part, 0)
-                            pcall(firetouchinterest, target, part, 1)
-                        end
-                        task.wait()
-                    end
-                end)
-            end
-        end
-    end)
-end
-
-local function stopslingTP()
-    if sling.connections.touch then
-        sling.connections.touch:Disconnect()
-        sling.connections.touch = nil
-    end
-end
-
-local function updatesling()
-    local slingon = checksling()
-    local hastarget = config.target.enabled and config.target.character ~= nil
-    if slingon then
-        if not sling.enabled then
-            sling.enabled = true
-            slingshotTP()
-        end
-        if getgenv().SetUnderground then
-            getgenv().SetUnderground(true)
-        end
-        vhState.active = hastarget
-        if hastarget and not config.state.csyncactive then
-            startsync()
-        elseif not hastarget and config.state.csyncactive and not config.target.enabled then
-            stopsync()
-        end
-    else
-        if sling.enabled then
-            sling.enabled = false
-            stopslingTP()
-        end
-        if getgenv().SetUnderground then
-            getgenv().SetUnderground(false)
-        end
-        vhState.active = false
-    end
-end
-
 local function fflag()
     local hastarget = config.target.enabled and config.target.character and valid(config.target.character)
-    local slingon = checksling()
-    if hastarget and slingon then
+    if hastarget then
         pcall(function()
             setfflag("TargetTimeDelayFacctorTenths", "999999")
         end)
@@ -1300,7 +1615,6 @@ end
 
 runsvc.Heartbeat:Connect(function()
     fflag()
-    updatesling()
     tickAmmo()
     if config.target.auto and not config.target.manualkey then
         local current, _, melee = getammo()
@@ -1332,7 +1646,6 @@ Ragebot.nearest = nearest
 Ragebot.settarget = settarget
 Ragebot.cleartarget = cleartarget
 Ragebot.stopsync = stopsync
-Ragebot.vhState = vhState
 Ragebot.ragePerf = ragePerf
 Ragebot.getammo = getammo
 Ragebot.valid = valid
@@ -1344,749 +1657,298 @@ Ragebot.enabled = false
 
 end
 
--- ============================================================
--- UNDERGROUND
--- ============================================================
-undergroundEnabled = false
-undergroundDepth = 2.2
-undergroundConn = nil
-undergroundRealCF = nil
-undergroundRealVel = nil
-undergroundRealAngVel = nil
-undergroundRenderConn = nil
-
-local function startUnderground()
-    if undergroundConn then return end
-    undergroundConn = RunService.Heartbeat:Connect(function()
-        if not undergroundEnabled then return end
-        pcall(function()
-            local char = lp.Character
-            if not char then return end
-            local hrp = char:FindFirstChild("HumanoidRootPart")
-            if not hrp then return end
-            undergroundRealCF = hrp.CFrame
-            undergroundRealVel = hrp.AssemblyLinearVelocity
-            undergroundRealAngVel = hrp.AssemblyAngularVelocity
-            local depth = undergroundDepth or 2.2
-            local params = RaycastParams.new()
-            params.FilterDescendantsInstances = { char }
-            params.FilterType = Enum.RaycastFilterType.Exclude
-            local result = Workspace:Raycast(hrp.Position, Vector3.new(0, -500, 0), params)
-            local fakeY
-            if result then
-                fakeY = result.Position.Y - depth
-            else
-                fakeY = -99999
-            end
-            hrp.CFrame = CFrame.new(hrp.Position.X, fakeY, hrp.Position.Z)
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.AssemblyAngularVelocity = Vector3.zero
-        end)
-    end)
-    undergroundRenderConn = RunService:BindToRenderStep("UndergroundSync", Enum.RenderPriority.First.Value, function()
-        if undergroundEnabled and undergroundRealCF then
-            pcall(function()
-                local char = lp.Character
-                if not char then return end
-                local hrp = char:FindFirstChild("HumanoidRootPart")
-                if not hrp then return end
-                hrp.CFrame = undergroundRealCF
-                hrp.AssemblyLinearVelocity = undergroundRealVel or Vector3.zero
-                hrp.AssemblyAngularVelocity = undergroundRealAngVel or Vector3.zero
-            end)
-        end
-    end)
-end
-
-local function stopUnderground()
-    if undergroundConn then
-        undergroundConn:Disconnect()
-        undergroundConn = nil
-    end
-    if undergroundRenderConn then
-        pcall(function() RunService:UnbindFromRenderStep("UndergroundSync") end)
-        undergroundRenderConn = nil
-    end
-    undergroundRealCF = nil
-    undergroundRealVel = nil
-    undergroundRealAngVel = nil
-end
-
-getgenv().SetUnderground = function(val)
-    undergroundEnabled = val
-    if val then startUnderground() else stopUnderground() end
-end
-getgenv().UndergroundEnabled = false
-
--- ============================================================
--- CÁC MOD TỪ MESSAGE.TXT (TRỪ UNLOCK ALL)
--- ============================================================
-local ModSettings = {
-    NoMeleeAnimation = false,
-    NoDashCooldown = false,
-    NoMeleeCooldown = false,
-    NoShootAnimation = false,
-    NoEquipAnimation = false,
-    InstantADS = false,
-    RapidFire = false,
-    NoSpread = false,
-    NoSmoke = false,
-    NoRecoil = false,
-    DeviceSpoof = false,
-    DeviceType = "VR",
-    NoFlash = false,
-}
-
-local function applyMods()
-    -- No Melee Animation
-    if ModSettings.NoMeleeAnimation then
-        task.spawn(function()
-            local ok, Melee = pcall(function() return require(lp.PlayerScripts.Modules.ItemTypes.Melee) end)
-            if ok and Melee and Melee.StartShooting then
-                local oldStartShooting = Melee.StartShooting
-                Melee.StartShooting = function(self, p1, p2)
-                    local vm = self.ViewModel; local savedPlay
-                    if vm then savedPlay = vm.PlayAnimation; vm.PlayAnimation = function() end end
-                    local result = { oldStartShooting(self, p1, p2) }
-                    if vm and savedPlay then
-                        vm.PlayAnimation = savedPlay
-                        pcall(function()
-                            for _, name in ipairs({"Attack", "Attack1", "Attack2", "Swing", "Slash", "Combo1", "Combo2", "Combo3"}) do
-                                vm:StopAnimation(name)
-                            end
-                        end)
-                    end
-                    return table.unpack(result)
-                end
-            end
-        end)
-    end
-
-    -- No Dash Cooldown
-    if ModSettings.NoDashCooldown then
-        task.spawn(function()
-            local modules = ReplicatedStorage:FindFirstChild("Modules")
-            local itemLib = modules and modules:FindFirstChild("ItemLibrary")
-            if itemLib then
-                local success, library = pcall(require, itemLib)
-                if success and type(library) == "table" then
-                    local items = library.Items or library.Weapons or library.Melee or library.Utilities
-                    if type(items) == "table" then
-                        for name, item in pairs(items) do
-                            if type(item) == "table" then
-                                local itemName = item.Name or name
-                                if string.lower(itemName) == "scythe" then
-                                    if item.DashCooldown then item.DashCooldown = 0 end
-                                    if item.AbilityCooldown then item.AbilityCooldown = 0 end
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end)
-    end
-
-    -- No Melee Cooldown
-    if ModSettings.NoMeleeCooldown then
-        task.spawn(function()
-            local modules = ReplicatedStorage:FindFirstChild("Modules")
-            local itemLib = modules and modules:FindFirstChild("ItemLibrary")
-            if itemLib then
-                local success, library = pcall(require, itemLib)
-                if success and type(library) == "table" then
-                    local items = library.Items or library.Weapons or library.Melee or library.Utilities
-                    if type(items) == "table" then
-                        local cooldowns = {"Cooldown", "AttackCooldown", "UseDelay", "SpinCooldown", "HeavyAttackCooldown", "AbilityCooldown", "FireCooldown"}
-                        for _, item in pairs(items) do
-                            if type(item) == "table" and (item.Type == "Melee" or item.Category == "Melee" or (item.Damage and not item.AmmoType)) then
-                                for _, field in ipairs(cooldowns) do
-                                    if item[field] then item[field] = 0 end
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end)
-    end
-
-    -- No Shoot Animation
-    if ModSettings.NoShootAnimation then
-        task.spawn(function()
-            local ok, Gun = pcall(function() return require(lp.PlayerScripts.Modules.ItemTypes.Gun) end)
-            if ok and Gun then
-                if Gun.StartShooting then
-                    local oldStartShooting = Gun.StartShooting
-                    Gun.StartShooting = function(self, p1, p2)
-                        local vm = self.ViewModel; local savedPlay
-                        if vm then savedPlay = vm.PlayAnimation; vm.PlayAnimation = function() end end
-                        local result = { oldStartShooting(self, p1, p2) }
-                        if vm and savedPlay then
-                            vm.PlayAnimation = savedPlay
-                            pcall(function()
-                                for _, name in ipairs({"Shoot","Fire","ShootBurst","Shoot_ADS","ShootHip","ShootEmpty","ShootADS","Burst"}) do
-                                    vm:StopAnimation(name)
-                                end
-                            end)
-                        end
-                        return table.unpack(result)
-                    end
-                end
-                local function silenceShootAnim(self, fn, ...)
-                    if not self.ViewModel then return fn(self, ...) end
-                    local vm = self.ViewModel; local oldPlay = vm.PlayAnimation
-                    vm.PlayAnimation = function() end
-                    local result = { pcall(fn, self, ...) }
-                    vm.PlayAnimation = oldPlay
-                    pcall(function()
-                        for _, name in ipairs({"Shoot","Fire","ShootBurst","Shoot_ADS","Shoot_Hip","ShootEmpty","ShootADS","Burst"}) do
-                            vm:StopAnimation(name)
-                        end
-                    end)
-                    if result[1] then return table.unpack(result, 2) end
-                end
-                if Gun.FinishShooting then
-                    local old = Gun.FinishShooting
-                    Gun.FinishShooting = function(self, ...) return silenceShootAnim(self, old, ...) end
-                end
-                if Gun.ShootBurst then
-                    local old = Gun.ShootBurst
-                    Gun.ShootBurst = function(self, ...) return silenceShootAnim(self, old, ...) end
-                end
-            end
-        end)
-    end
-
-    -- No Equip Animation
-    if ModSettings.NoEquipAnimation then
-        task.spawn(function()
-            local ok, Gun = pcall(function() return require(lp.PlayerScripts.Modules.ItemTypes.Gun) end)
-            if ok and Gun and Gun.Equip then
-                local old = Gun.Equip
-                Gun.Equip = function(self, ...)
-                    local r = { old(self, ...) }
-                    if self.ViewModel then
-                        self.ViewModel:StopAnimation("Equip")
-                        self.ViewModel:StopAnimation("EquipEmpty")
-                    end
-                    return table.unpack(r)
-                end
-            end
-        end)
-    end
-
-    -- Instant ADS
-    if ModSettings.InstantADS then
-        task.spawn(function()
-            local ok, Gun = pcall(function() return require(lp.PlayerScripts.Modules.ItemTypes.Gun) end)
-            if ok and Gun then
-                if Gun.StartAiming then
-                    Gun.StartAiming = function(self, p)
-                        self:SetReplicate("IsAiming", true)
-                        self.StopSprinting:Fire()
-                        self.ViewModel:SetAiming(true)
-                        self:SetReplicate("FOVOffset", self.Info.AimFOVOffset)
-                        if self.ViewModel.CurrentAimValue then self.ViewModel.CurrentAimValue = 1 end
-                        return true, "StartAiming"
-                    end
-                end
-                if Gun.GetAimSpeed then
-                    Gun.GetAimSpeed = function(self) return 999 end
-                end
-            end
-        end)
-    end
-
-    -- Rapid Fire
-    if ModSettings.RapidFire then
-        task.spawn(function()
-            local ok, Gun = pcall(function() return require(lp.PlayerScripts.Modules.ItemTypes.Gun) end)
-            if ok and Gun and Gun.Update then
-                local oldUpdate = Gun.Update
-                Gun.Update = function(self, dt, ...)
-                    if self._shoot_cooldown then self._shoot_cooldown = 0 end
-                    return oldUpdate(self, dt, ...)
-                end
-            end
-        end)
-    end
-
-    -- No Spread
-    if ModSettings.NoSpread then
-        task.spawn(function()
-            local ok, GameplayUtility = pcall(function() return require(ReplicatedStorage.Modules.GameplayUtility) end)
-            if ok and GameplayUtility then
-                GameplayUtility.GetSpread = function() return CFrame.identity end
-            end
-            local FighterController = require(lp.PlayerScripts.Controllers.FighterController)
-            local oldNamecall
-            oldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
-                local method = getnamecallmethod()
-                if method == "FireServer" and self.Name == "UseItem" then
-                    local args = {...}
-                    if typeof(args[3]) == "table" then
-                        args[3]["\2"] = true
-                    end
-                end
-                return oldNamecall(self, ...)
-            end)
-        end)
-    end
-
-    -- No Smoke
-    if ModSettings.NoSmoke then
-        task.spawn(function()
-            local ok, SmokeScreen = pcall(function() return require(lp.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.FighterInterface.SmokeScreen) end)
-            if ok and SmokeScreen and SmokeScreen.Update then
-                SmokeScreen.Update = function(self)
-                    self._smoke_cloud_spring.Target = 0
-                    self._smoke_cloud_cover.Transparency = 1
-                    if self._smoke_cloud_dof then self._smoke_cloud_dof.Parent = nil end
-                    return
-                end
-            end
-            local ok2, SmokeCloud = pcall(function() return require(lp.PlayerScripts.Modules.SmokeCloud) end)
-            if ok2 and SmokeCloud and SmokeCloud.Update then
-                SmokeCloud.Update = function(self)
-                    if self.Model then self.Model:Destroy() end
-                    return true
-                end
-            end
-        end)
-    end
-
-    -- No Recoil
-    if ModSettings.NoRecoil then
-        task.spawn(function()
-            local ok, ClientItem = pcall(function() return require(lp.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.ClientItem) end)
-            if ok and ClientItem and ClientItem._Recoil then
-                ClientItem._Recoil = function() return end
-            end
-        end)
-    end
-
-    -- Device Spoof
-    if ModSettings.DeviceSpoof then
-        task.spawn(function()
-            local device = ModSettings.DeviceType or "VR"
-            local remote = ReplicatedStorage.Remotes.Replication.Fighter.SetControls
-            local controllers = lp.PlayerScripts.Controllers
-            local ok, fighterController = pcall(function() return require(controllers:WaitForChild("FighterController", 10)) end)
-            if ok and fighterController and fighterController._ReplicateControls then
-                fighterController._ReplicateControls = function(self)
-                    remote:FireServer(device)
-                    if not self._last_controls_replicated_time then
-                        self._last_controls_replicated_time = 0
-                    end
-                    self._last_controls_replicated_time = tick()
-                end
-                remote:FireServer(device)
-            end
-        end)
-    end
-
-    -- No Flash
-    if ModSettings.NoFlash then
-        task.spawn(function()
-            local ok, Flashed = pcall(function() return require(lp.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.FighterInterface.Flashed) end)
-            if ok and Flashed and Flashed.Flash then
-                Flashed.Flash = function() return end
-            end
-        end)
-    end
-end
-
--- ============================================================
--- UI (WindUI)
--- ============================================================
-
--- TAB 1: MAIN
-local MainTab = Window:Tab({ Title = "Main", Icon = "home" })
-
--- Aimbot Section (bên trái)
-local AimbotSection = MainTab:Section({ Title = "Aimbot" })
-AimbotSection:Toggle({
-    Title = "Enable Aimbot",
+local LeftGroupBox = Tabs.Main:AddLeftGroupbox("Aimbot", "crosshair")
+LeftGroupBox:AddToggle("AimbotEnabled", {
+    Text = "Enable Aimbot",
+    Default = false,
     Callback = function(v) Aimbot:setEnabled(v) end
 })
-AimbotSection:Toggle({
-    Title = "Visible Check",
-    Value = true,
+LeftGroupBox:AddToggle("AimbotVisCheck", {
+    Text = "Visible Check",
+    Default = true,
     Callback = function(v) Aimbot:setVisibleCheck(v) end
 })
-AimbotSection:Toggle({
-    Title = "Team Check",
-    Value = true,
+LeftGroupBox:AddToggle("AimbotTeamCheck", {
+    Text = "Team Check",
+    Default = true,
     Callback = function(v) Aimbot:setTeamCheck(v) end
 })
-AimbotSection:Slider({
-    Title = "FOV",
-    Step = 1,
-    Value = { Min = 10, Max = 500, Default = 360 },
+LeftGroupBox:AddSlider("AimbotFOV", {
+    Text = "FOV",
+    Default = 360,
+    Min = 1,
+    Max = 360000000,
+    Rounding = 0,
     Callback = function(v) Aimbot:setFOV(v) end
 })
-AimbotSection:Slider({
-    Title = "Max Distance",
-    Step = 1,
-    Value = { Min = 100, Max = 99999, Default = 9999 },
+LeftGroupBox:AddSlider("AimbotMaxDist", {
+    Text = "Max Distance",
+    Default = 9999,
+    Min = 100,
+    Max = 99999999999999,
+    Rounding = 0,
     Callback = function(v) Aimbot:setMaxDist(v) end
 })
-AimbotSection:Slider({
-    Title = "Prediction",
-    Step = 0.1,
-    Value = { Min = 0, Max = 5, Default = 0 },
+LeftGroupBox:AddSlider("AimbotPrediction", {
+    Text = "Prediction",
+    Default = 0,
+    Min = 0,
+    Max = 3,
+    Rounding = 1,
     Callback = function(v) Aimbot:setPrediction(v) end
 })
-AimbotSection:Slider({
-    Title = "Smoothing",
-    Step = 0.01,
-    Value = { Min = 0, Max = 1, Default = 0 },
+LeftGroupBox:AddSlider("AimbotSmoothing", {
+    Text = "Smoothing",
+    Default = 0,
+    Min = 0,
+    Max = 100,
+    Rounding = 1,
     Callback = function(v) Aimbot:setSmoothing(v) end
 })
+LeftGroupBox:AddDropdown("AimbotHitPart", {
+    Text = "Hit Part",
+    Values = hitPartsList,
+    Default = 1,
+    Callback = function(v) Aimbot:setHitPart(v) end
+})
+LeftGroupBox:AddDropdown("AimbotRunService", {
+    Text = "Update Mode",
+    Values = {"Heartbeat", "RenderStepped", "PreSimulation"},
+    Default = 1,
+    Callback = function(v) setRunService(v) end
+})
 
--- Ragebot Section (bên phải)
-local RagebotSection = MainTab:Section({ Title = "Ragebot" })
-RagebotSection:Toggle({
-    Title = "Enable Ragebot",
+local RightGroupBox = Tabs.Main:AddRightGroupbox("Movement", "move")
+RightGroupBox:AddToggle("UndergroundEnabled", {
+    Text = "Underground",
+    Default = false,
     Callback = function(v)
-        Ragebot.config.target.rageMasterOn = v
-        if Ragebot.config.target.auto then return end
+        undergroundEnabled = v
         if v then
+            startUnderground()
+        else
+            stopUnderground()
+        end
+    end
+})
+RightGroupBox:AddSlider("UndergroundDepth", {
+    Text = "Depth",
+    Default = 2.5,
+    Min = 2.5,
+    Max = 50,
+    Rounding = 1,
+    Suffix = " studs",
+    Callback = function(v)
+        undergroundDepth = v
+        if undergroundEnabled then
+            stopUnderground()
+            startUnderground()
+        end
+    end
+})
+RightGroupBox:AddInput("UndergroundCustomDepth", {
+    Text = "Custom Depth",
+    Default = "2.5",
+    Placeholder = "Enter number...",
+    Callback = function(v)
+        local num = tonumber(v)
+        if num and num >= 2.5 then
+            undergroundDepth = num
+            if undergroundEnabled then
+                stopUnderground()
+                startUnderground()
+            end
+            Options.UndergroundDepth:SetValue(num)
+            Library:Notify("Underground depth set to " .. num)
+        elseif v ~= "" then
+            Library:Notify("Invalid depth (min 2.5)")
+        end
+    end
+})
+RightGroupBox:AddToggle("VoidSpamEnabled", {
+    Text = "Void Spam",
+    Default = false,
+    Callback = function(v)
+        voidSpamEnabled = v
+        if v then
+            startVoidSpam()
+        else
+            stopVoidSpam()
+        end
+    end
+})
+
+local RageGroupBox = Tabs.Main:AddRightGroupbox("Ragebot", "sword")
+RageGroupBox:AddToggle("RagebotEnabled", {
+    Text = "Enable Ragebot",
+    Default = false,
+    Callback = function(v)
+        Ragebot.enabled = v
+        Ragebot.config.target.rageMasterOn = v
+        Ragebot.config.target.auto = v
+        Ragebot.config.target.autoshoot = v
+        if v then
+            Ragebot.config.voidspam.enabled = true
             local target = Ragebot.nearest()
             if target then
-                Ragebot.config.target.manualkey = true
                 Ragebot.settarget(target)
             end
         else
+            Ragebot.config.voidspam.enabled = false
             Ragebot.cleartarget()
         end
     end
 })
-RagebotSection:Toggle({
-    Title = "Auto Target",
-    Callback = function(v) Ragebot.config.target.auto = v end
-})
-RagebotSection:Space()
-RagebotSection:Dropdown({
-    Title = "Attack Position",
-    Values = { "default", "under" },
-    Value = "default",
+RageGroupBox:AddSlider("RagebotHide", {
+    Text = "Hide",
+    Default = 0.5,
+    Min = 0,
+    Max = 1,
+    Rounding = 0.1,
     Callback = function(v)
-        Ragebot.config.target.attackPosition = v
-        if Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
-    end
-})
-RagebotSection:Slider({
-    Title = "Under Offset",
-    Step = 1,
-    Value = { Min = 1, Max = 25, Default = 4 },
-    Callback = function(v)
-        Ragebot.config.target.underOffset = v
-        if Ragebot.config.target.attackPosition == "under" and Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
-    end
-})
-RagebotSection:Space()
-RagebotSection:Toggle({
-    Title = "Custom Attack Override",
-    Callback = function(v)
-        Ragebot.config.target.attackCustomEnabled = v
-        if Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
-    end
-})
-RagebotSection:Slider({
-    Title = "Orbit Height",
-    Step = 1,
-    Value = { Min = -25, Max = 30, Default = 2 },
-    Callback = function(v)
-        Ragebot.config.target.customHeight = v
-        if Ragebot.config.target.attackCustomEnabled and Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
-    end
-})
-RagebotSection:Slider({
-    Title = "Front Offset",
-    Step = 1,
-    Value = { Min = -20, Max = 20, Default = 0 },
-    Callback = function(v)
-        Ragebot.config.target.customFront = v
-        if Ragebot.config.target.attackCustomEnabled and Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
-    end
-})
-RagebotSection:Slider({
-    Title = "Side Offset",
-    Step = 1,
-    Value = { Min = -20, Max = 20, Default = 0 },
-    Callback = function(v)
-        Ragebot.config.target.customSide = v
-        if Ragebot.config.target.attackCustomEnabled and Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
-    end
-})
-RagebotSection:Slider({
-    Title = "Vertical Offset",
-    Step = 1,
-    Value = { Min = -25, Max = 30, Default = 0 },
-    Callback = function(v)
-        Ragebot.config.target.customVertical = v
-        if Ragebot.config.target.attackCustomEnabled and Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
-    end
-})
-RagebotSection:Slider({
-    Title = "Orbit Radius",
-    Step = 1,
-    Value = { Min = 0, Max = 25, Default = 0 },
-    Callback = function(v)
-        Ragebot.config.target.customRadius = v
-        if Ragebot.config.target.attackCustomEnabled and Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
-    end
-})
-RagebotSection:Space()
-RagebotSection:Dropdown({
-    Title = "Weapon Slot",
-    Values = { "primary", "secondary", "melee" },
-    Value = "primary",
-    Callback = function(v)
-        Ragebot.config.target.weaponPick = v
-        if Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
-        if Ragebot.eqSlot then Ragebot.eqSlot() end
-    end
-})
-RagebotSection:Dropdown({
-    Title = "Hit Part",
-    Values = { "Head", "HumanoidRootPart", "Torso", "UpperTorso", "Closest", "Random" },
-    Value = "Head",
-    Callback = function(v) Ragebot.config.target.hitpart = v end
-})
-RagebotSection:Space()
-RagebotSection:Slider({
-    Title = "Shoot Attempts",
-    Step = 1,
-    Value = { Min = 1, Max = 3, Default = 1 },
-    Suffix = "x",
-    Callback = function(v)
-        Ragebot.config.target.shootAttempts = math.clamp(math.floor(tonumber(v) or 1), 1, 3)
-    end
-})
-RagebotSection:Space()
-RagebotSection:Toggle({
-    Title = "Prediction",
-    Callback = function(v) Ragebot.config.prediction.enabled = v end
-})
-RagebotSection:Slider({
-    Title = "Prediction Multiplier",
-    Step = 0.1,
-    Value = { Min = 0.1, Max = 3.0, Default = 1.2 },
-    Callback = function(v) Ragebot.config.prediction.multiplier = v end
-})
-RagebotSection:Space()
-RagebotSection:Toggle({
-    Title = "Void Spam",
-    Callback = function(v)
-        Ragebot.config.voidspam.enabled = v
-        if v then
-            if Ragebot.config.target.immune then
-                Ragebot.config.voidspam.phase = nil
-                return
-            end
-            if isSling(Ragebot.getweapon()) then
-                Ragebot.config.voidspam.lastswitch = tick()
-                Ragebot.config.voidspam.phase = "shoot"
-                Ragebot.config.voidspam.currentduration = randVs(Ragebot.config.voidspam.shoot_min, Ragebot.config.voidspam.shoot_max)
-            else
-                Ragebot.config.voidspam.phase = nil
-            end
+        if v == 0 then
+            Ragebot.config.voidspam.hide_min = 0.1
+            Ragebot.config.voidspam.hide_max = 0.1
         else
-            Ragebot.config.voidspam.phase = nil
-            if Ragebot.clrVoidSnap then Ragebot.clrVoidSnap() end
+            Ragebot.config.voidspam.hide_min = v - 0.25
+            Ragebot.config.voidspam.hide_max = v + 0.25
         end
+        Ragebot.config.voidspam.enabled = true
     end
 })
-RagebotSection:Slider({
-    Title = "Void Attack Time",
-    Step = 0.1,
-    Value = { Min = 0.1, Max = 2, Default = 1 },
+RageGroupBox:AddSlider("RagebotAttack", {
+    Text = "Attack",
+    Default = 0.5,
+    Min = 0,
+    Max = 2,
+    Rounding = 0.1,
     Callback = function(v)
-        v = clampVs(v)
-        Ragebot.config.voidspam.shoot_min = v
-        Ragebot.config.voidspam.shoot_max = v
+        if v == 0 then
+            Ragebot.config.voidspam.shoot_min = 0.1
+            Ragebot.config.voidspam.shoot_max = 0.1
+        else
+            Ragebot.config.voidspam.shoot_min = v - 0.25
+            Ragebot.config.voidspam.shoot_max = v + 0.25
+        end
+        Ragebot.config.voidspam.enabled = true
     end
 })
-RagebotSection:Slider({
-    Title = "Void Hide Time",
-    Step = 0.1,
-    Value = { Min = 0.1, Max = 2, Default = 1 },
+
+local WeaponGroup = Tabs.Misc:AddLeftGroupbox("Weapon Mods", "sword")
+WeaponGroup:AddButton({
+    Text = "No Melee Animation",
+    Func = function()
+        ModSettings.NoMeleeAnimation = true
+        applyMeleeAnimation()
+        Library:Notify("Applied No Melee Animation")
+    end
+})
+WeaponGroup:AddButton({
+    Text = "No Dash Cooldown (Scythe)",
+    Func = function()
+        ModSettings.NoDashCooldown = true
+        applyDashCooldown()
+        Library:Notify("Applied No Dash Cooldown")
+    end
+})
+WeaponGroup:AddButton({
+    Text = "No Melee Cooldown",
+    Func = function()
+        ModSettings.NoMeleeCooldown = true
+        applyMeleeCooldown()
+        Library:Notify("Applied No Melee Cooldown")
+    end
+})
+WeaponGroup:AddButton({
+    Text = "No Shoot Animation",
+    Func = function()
+        ModSettings.NoShootAnimation = true
+        applyShootAnimation()
+        Library:Notify("Applied No Shoot Animation")
+    end
+})
+WeaponGroup:AddButton({
+    Text = "No Equip Animation",
+    Func = function()
+        ModSettings.NoEquipAnimation = true
+        applyEquipAnimation()
+        Library:Notify("Applied No Equip Animation")
+    end
+})
+WeaponGroup:AddButton({
+    Text = "Instant ADS",
+    Func = function()
+        ModSettings.InstantADS = true
+        applyInstantADS()
+        Library:Notify("Applied Instant ADS")
+    end
+})
+WeaponGroup:AddButton({
+    Text = "Rapid Fire",
+    Func = function()
+        ModSettings.RapidFire = true
+        applyRapidFire()
+        Library:Notify("Applied Rapid Fire")
+    end
+})
+WeaponGroup:AddButton({
+    Text = "No Spread",
+    Func = function()
+        ModSettings.NoSpread = true
+        applyNoSpread()
+        Library:Notify("Applied No Spread")
+    end
+})
+WeaponGroup:AddButton({
+    Text = "No Smoke",
+    Func = function()
+        ModSettings.NoSmoke = true
+        applyNoSmoke()
+        Library:Notify("Applied No Smoke")
+    end
+})
+WeaponGroup:AddButton({
+    Text = "No Recoil",
+    Func = function()
+        ModSettings.NoRecoil = true
+        applyNoRecoil()
+        Library:Notify("Applied No Recoil")
+    end
+})
+WeaponGroup:AddButton({
+    Text = "No Flash",
+    Func = function()
+        ModSettings.NoFlash = true
+        applyNoFlash()
+        Library:Notify("Applied No Flash")
+    end
+})
+
+local DeviceGroup = Tabs.Misc:AddRightGroupbox("Device Spoof", "smartphone")
+DeviceGroup:AddToggle("DeviceSpoof", {
+    Text = "Enable Device Spoof",
+    Default = false,
     Callback = function(v)
-        v = clampVs(v)
-        Ragebot.config.voidspam.hide_min = v
-        Ragebot.config.voidspam.hide_max = v
+        ModSettings.DeviceSpoof = v
+        applyDeviceSpoof()
     end
 })
-
--- TAB 2: CHARACTER
-local CharacterTab = Window:Tab({ Title = "Character", Icon = "user" })
-
-local UndergroundSection = CharacterTab:Section({ Title = "Underground (Anti-Aim)" })
-UndergroundSection:Toggle({
-    Title = "Enable Underground",
-    Callback = function(v)
-        undergroundEnabled = v
-        getgenv().UndergroundEnabled = v
-        if v then startUnderground() else stopUnderground() end
-    end
-})
-UndergroundSection:Slider({
-    Title = "Depth",
-    Step = 0.1,
-    Value = { Min = 2, Max = 30, Default = 2.2 },
-    Callback = function(v) undergroundDepth = v end
-})
-
--- TAB 3: MISC (Weapon Mods)
-local MiscTab = Window:Tab({ Title = "Misc", Icon = "settings" })
-
-local ModsSection = MiscTab:Section({ Title = "Weapon Mods" })
-ModsSection:Toggle({
-    Title = "No Melee Animation",
-    Callback = function(v) ModSettings.NoMeleeAnimation = v; applyMods() end
-})
-ModsSection:Toggle({
-    Title = "No Dash Cooldown (Scythe)",
-    Callback = function(v) ModSettings.NoDashCooldown = v; applyMods() end
-})
-ModsSection:Toggle({
-    Title = "No Melee Cooldown",
-    Callback = function(v) ModSettings.NoMeleeCooldown = v; applyMods() end
-})
-ModsSection:Toggle({
-    Title = "No Shoot Animation",
-    Callback = function(v) ModSettings.NoShootAnimation = v; applyMods() end
-})
-ModsSection:Toggle({
-    Title = "No Equip Animation",
-    Callback = function(v) ModSettings.NoEquipAnimation = v; applyMods() end
-})
-ModsSection:Toggle({
-    Title = "Instant ADS",
-    Callback = function(v) ModSettings.InstantADS = v; applyMods() end
-})
-ModsSection:Toggle({
-    Title = "Rapid Fire",
-    Callback = function(v) ModSettings.RapidFire = v; applyMods() end
-})
-ModsSection:Toggle({
-    Title = "No Spread",
-    Callback = function(v) ModSettings.NoSpread = v; applyMods() end
-})
-ModsSection:Toggle({
-    Title = "No Smoke",
-    Callback = function(v) ModSettings.NoSmoke = v; applyMods() end
-})
-ModsSection:Toggle({
-    Title = "No Recoil",
-    Callback = function(v) ModSettings.NoRecoil = v; applyMods() end
-})
-ModsSection:Toggle({
-    Title = "No Flash",
-    Callback = function(v) ModSettings.NoFlash = v; applyMods() end
-})
-ModsSection:Space()
-ModsSection:Toggle({
-    Title = "Device Spoof",
-    Callback = function(v) ModSettings.DeviceSpoof = v; applyMods() end
-})
-ModsSection:Dropdown({
-    Title = "Device",
-    Values = { "VR", "Touch", "Gamepad", "MouseKeyboard" },
-    Value = "VR",
+DeviceGroup:AddDropdown("DeviceType", {
+    Text = "Device",
+    Values = {"VR", "Touch", "Gamepad", "MouseKeyboard"},
+    Default = 1,
     Callback = function(v)
         ModSettings.DeviceType = v
-        if ModSettings.DeviceSpoof then applyMods() end
+        if ModSettings.DeviceSpoof then applyDeviceSpoof() end
     end
 })
 
--- ============================================================
--- SETTINGS (Save/Load)
--- ============================================================
-local SettingsTab = Window:Tab({ Title = "Settings", Icon = "gear" })
-local ConfigSection = SettingsTab:Section({ Title = "Configs" })
-
-local ConfigManager = Window:ConfigManager()
-local AllConfigs = ConfigManager:AllConfigs()
-local ConfigNameInput
-
--- Danh sách config
-local ConfigDropdown = ConfigSection:Dropdown({
-    Title = "All Configs",
-    Values = AllConfigs,
-    Value = AllConfigs[1],
-    Callback = function(value)
-        ConfigNameInput:Set(value)
-    end
-})
-
--- Input tên config
-ConfigNameInput = ConfigSection:Input({
-    Title = "Config Name",
-    Value = "",
-    Callback = function(value)
-        -- Không làm gì
-    end
-})
-
--- Nút Save
-ConfigSection:Button({
-    Title = "Save Config",
-    Justify = "Center",
-    Callback = function()
-        local name = ConfigNameInput:Get()
-        if name and name ~= "" then
-            local config = ConfigManager:CreateConfig(name)
-            config:Save()
-            ConfigDropdown:Refresh(ConfigManager:AllConfigs())
-            Window:Notify({ Title = "Saved", Content = "Config saved: " .. name })
-        else
-            Window:Notify({ Title = "Error", Content = "Please enter a config name" })
-        end
-    end
-})
-
--- Nút Load
-ConfigSection:Button({
-    Title = "Load Config",
-    Justify = "Center",
-    Callback = function()
-        local name = ConfigNameInput:Get()
-        if name and name ~= "" then
-            local config = ConfigManager:CreateConfig(name)
-            if config:Load() then
-                Window:Notify({ Title = "Loaded", Content = "Config loaded: " .. name })
-            else
-                Window:Notify({ Title = "Error", Content = "Failed to load config" })
-            end
-        end
-    end
-})
-
--- Nút Delete
-ConfigSection:Button({
-    Title = "Delete Config",
-    Justify = "Center",
-    Color = Color3.fromHex("#EF4F1D"),
-    Callback = function()
-        local name = ConfigNameInput:Get()
-        if name and name ~= "" then
-            local config = ConfigManager:CreateConfig(name)
-            config:Delete()
-            ConfigDropdown:Refresh(ConfigManager:AllConfigs())
-            Window:Notify({ Title = "Deleted", Content = "Config deleted: " .. name })
-        end
-    end
-})
-
--- Nút Refresh
-ConfigSection:Button({
-    Title = "Refresh List",
-    Justify = "Center",
-    Callback = function()
-        ConfigDropdown:Refresh(ConfigManager:AllConfigs())
-    end
-})
+ThemeManager:SetLibrary(Library)
+SaveManager:SetLibrary(Library)
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetIgnoreIndexes({"MenuKeybind"})
+ThemeManager:SetFolder("RivalsScript")
+SaveManager:SetFolder("RivalsScript/configs")
+SaveManager:BuildConfigSection(Tabs["UI Settings"])
+ThemeManager:ApplyToTab(Tabs["UI Settings"])
+SaveManager:LoadAutoloadConfig()
