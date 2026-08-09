@@ -3121,8 +3121,8 @@ ragebotTab:AddSlider("PredictMul", {
     Text = "prediction mult",
     Default = 1.2,
     Min = 0.1,
-    Max = 3.0,
-    Rounding = 1,
+    Max = 10,
+    Rounding = 0.1,
     Callback = function(val) config.prediction.multiplier = val end
 })
 
@@ -3153,11 +3153,11 @@ ragebotTab:AddToggle("VoidSpam", {
 })
 
 ragebotTab:AddDualSlider('VoidShootTime', 'VoidHideTime', {
-    Default = 1,
+    Default = 0.5,
     Text = "attack",
-    Min = 0.1,
+    Min = 0,
     Max = 2,
-    Rounding = 1,
+    Rounding = 0.1,
     Compact = true,
     Callback = function(val)
         val = clampVs(val)
@@ -3165,11 +3165,11 @@ ragebotTab:AddDualSlider('VoidShootTime', 'VoidHideTime', {
         config.voidspam.shoot_max = val
     end
 }, {
-    Default = 1,
+    Default = 0.5,
     Text = "hide",
-    Min = 0.1,
-    Max = 2,
-    Rounding = 1,
+    Min = 0,
+    Max = 1,
+    Rounding = 0.1,
     Compact = true,
     Callback = function(val)
         val = clampVs(val)
@@ -3454,10 +3454,6 @@ hitNotifDepBox:SetupDependencies({
     { hitNotificationsToggle, true }
 })
 
--- =============================================
--- PHẦN CÒN LẠI CỦA SCRIPT (GIỮ NGUYÊN)
--- =============================================
-
 local LeftGroupBox = Tabs.Main:AddLeftGroupbox("Aimbot", "crosshair")
 LeftGroupBox:AddToggle("AimbotEnabled", {
     Text = "Enable Aimbot",
@@ -3478,15 +3474,15 @@ LeftGroupBox:AddSlider("AimbotFOV", {
     Text = "FOV",
     Default = 360,
     Min = 1,
-    Max = 360000000,
-    Rounding = 0,
+    Max = 360,
+    Rounding = 1,
     Callback = function(v) Aimbot:setFOV(v) end
 })
 LeftGroupBox:AddSlider("AimbotMaxDist", {
     Text = "Max Distance",
     Default = 9999,
     Min = 100,
-    Max = 99999999999999,
+    Max = 9999999999999,
     Rounding = 0,
     Callback = function(v) Aimbot:setMaxDist(v) end
 })
@@ -3494,8 +3490,8 @@ LeftGroupBox:AddSlider("AimbotPrediction", {
     Text = "Prediction",
     Default = 0,
     Min = 0,
-    Max = 3,
-    Rounding = 1,
+    Max = 1,
+    Rounding = 0.1,
     Callback = function(v) Aimbot:setPrediction(v) end
 })
 LeftGroupBox:AddSlider("AimbotSmoothing", {
@@ -3536,7 +3532,7 @@ RightGroupBox:AddSlider("UndergroundDepth", {
     Text = "Depth",
     Default = 2.5,
     Min = 2.5,
-    Max = 50,
+    Max = 30,
     Rounding = 1,
     Suffix = " studs",
     Callback = function(v)
