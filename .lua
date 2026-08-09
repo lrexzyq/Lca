@@ -3,1086 +3,118 @@ local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
 local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
 local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
 
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer
+
 local Options = Library.Options
 local Toggles = Library.Toggles
+
+local function makeCompatBox(parent)
+    local box = {}
+    function box:SetupDependencies(...) end
+    function box:Update(...) end
+    return setmetatable(box, {
+        __index = function(_, key)
+            local value = parent[key]
+            if type(value) == "function" then
+                return function(_, ...)
+                    return value(parent, ...)
+                end
+            end
+            return value
+        end
+    })
+end
 getgenv().Options = Options
 getgenv().Toggles = Toggles
 
-Library.ForceCheckbox = false
-Library.ShowToggleFrameInKeybinds = true
+local clonerefFn = cloneref or clonereference or function(instance)
+    return instance
+end
 
-local INSTANCE_ACCENT = Color3.fromRGB(0, 200, 255)
-local INSTANCE_MENU_DISPLAY_ORDER = 2147483646
-
-pcall(function()
-    if Library.Scheme then
-        Library.Scheme.AccentColor = INSTANCE_ACCENT
+local function instanceSafeRequire(moduleRef, timeoutSec)
+    local cache = getgenv().InstanceModuleCache
+    if not cache then
+        cache = {}
+        getgenv().InstanceModuleCache = cache
     end
-end)
+
+    local key = typeof(moduleRef) == "Instance" and moduleRef:GetFullName() or tostring(moduleRef)
+    if cache[key] ~= nil then
+        return cache[key]
+    end
+
+    local deadline = timeoutSec and (os.clock() + timeoutSec) or math.huge
+    local lastErr
+
+    while os.clock() < deadline do
+        if typeof(moduleRef) == "Instance" and not moduleRef.Parent then
+            task.wait(0.1)
+        else
+            local ok, result = pcall(require, moduleRef)
+            if ok then
+                cache[key] = result
+                return result
+            end
+            lastErr = result
+            task.wait(0.1)
+        end
+    end
+
+    error("module load failed: " .. key .. " (" .. tostring(lastErr) .. ")")
+end
+
+getgenv().InstanceRequire = instanceSafeRequire
 
 local Window = Library:CreateWindow({
     Title = "Rivals Script",
-    Footer = "Instance",
+    Footer = "by yourname",
     Icon = 95816097006870,
     Center = true,
     AutoShow = true,
     NotifySide = "Right",
     ShowCustomCursor = true,
-    TabPadding = 6,
-    MenuFadeTime = 0,
 })
 
 pcall(function()
+    if Window.Holder then
+        Window.Holder.Size = UDim2.fromOffset(700, 600)
+    end
     if Library.ScreenGui then
-        Library.ScreenGui.DisplayOrder = INSTANCE_MENU_DISPLAY_ORDER
+        Library.ScreenGui.DisplayOrder = 2147483646
         Library.ScreenGui.IgnoreGuiInset = true
         Library.ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
     end
 end)
 
+local function safeRequire(obj)
+    local success, result = pcall(require, obj)
+    return success and result or nil
+end
+
+local function worldToScreen(pos)
+    local camera = Workspace.CurrentCamera
+    if not camera or not pos then
+        return Vector2.zero, false
+    end
+    local vec, onScreen = camera:WorldToViewportPoint(pos)
+    return Vector2.new(vec.X, vec.Y), onScreen and vec.Z > 0
+end
+
+-- Original gameplay/features begin here. The old custom Instance UI/library/bootstrap
+-- is intentionally excluded; the feature logic below uses the Obsidian Window/Tabs above.
 local Tabs = {
-    Combat = Window:AddTab("combat", "crosshair"),
-    Character = Window:AddTab("character", "user"),
-    Visuals = Window:AddTab("visuals", "eye"),
-    World = Window:AddTab("world", "globe"),
-    Misc = Window:AddTab("misc", "settings"),
-    ["UI Settings"] = Window:AddTab("settings", "palette"),
+    Combat = Window:AddTab("combat"),
+    Character = Window:AddTab("character"),
+    Visuals = Window:AddTab("visuals"),
+    World = Window:AddTab("world"),
+    Misc = Window:AddTab("misc"),
+    ['UI Settings'] = Window:AddTab('settings'),
 }
-
-
-
-local INSTANCE_ACCENT = Color3.fromRGB(0, 200, 255)
-local INSTANCE_BROWN_ACCENTS = {
-    Color3.fromRGB(200, 149, 108),
-    Color3.fromRGB(200, 149, 106),
-    Color3.fromRGB(200, 149, 107),
-    Color3.fromRGB(0, 110, 55),
-}
-
-local function colorNearAccent(a, b)
-    return math.abs(a.R - b.R) + math.abs(a.G - b.G) + math.abs(a.B - b.B) < 0.04
-end
-
-local function isLegacyBrownAccent(c)
-    for _, legacy in ipairs(INSTANCE_BROWN_ACCENTS) do
-        if colorNearAccent(c, legacy) then
-            return true
-        end
-    end
-    return false
-end
-
-local function applyInstanceAccentTheme()
-    if not Library then return end
-    Library.AccentColor = INSTANCE_ACCENT
-    if Library.GetDarkerColor then
-        Library.AccentColorDark = Library:GetDarkerColor(INSTANCE_ACCENT)
-    else
-        local h, s, v = Color3.toHSV(INSTANCE_ACCENT)
-        Library.AccentColorDark = Color3.fromHSV(h, s, v / 1.5)
-    end
-    if Library.UpdateColorsUsingRegistry then
-        pcall(function() Library:UpdateColorsUsingRegistry() end)
-    end
-    pcall(function()
-        if Library.ScreenGui then
-            for _, obj in ipairs(Library.ScreenGui:GetDescendants()) do
-                if obj:IsA("GuiObject") and isLegacyBrownAccent(obj.BackgroundColor3) then
-                    obj.BackgroundColor3 = INSTANCE_ACCENT
-                end
-                if obj:IsA("TextLabel") and isLegacyBrownAccent(obj.TextColor3) then
-                    obj.TextColor3 = INSTANCE_ACCENT
-                end
-            end
-        end
-    end)
-end
-applyInstanceAccentTheme()
-getgenv().InstanceApplyAccentTheme = applyInstanceAccentTheme
-
-local SaveManager = loadstring([==[local httpService = game:GetService('HttpService')
-local SaveManager = {} do
-	SaveManager.Folder = 'LinoriaLibSettings'
-	SaveManager.Ignore = {}
-	SaveManager.Parser = {
-		Toggle = {
-			Save = function(idx, object) 
-				return { type = 'Toggle', idx = idx, value = object.Value } 
-			end,
-			Load = function(idx, data)
-				if Toggles[idx] then 
-					Toggles[idx]:SetValue(data.value)
-				end
-			end,
-		},
-
-		Slider = {
-			Save = function(idx, object)
-				return { type = 'Slider', idx = idx, value = object.Value }
-			end,
-			Load = function(idx, data)
-				if Options[idx] then 
-					Options[idx]:SetValue(data.value)
-				end
-			end,
-		},
-
-		Dropdown = {
-			Save = function(idx, object)
-				return { type = 'Dropdown', idx = idx, value = object.Value, multi = object.Multi }
-			end,
-			Load = function(idx, data)
-				if Options[idx] then 
-					Options[idx]:SetValue(data.value)
-				end
-			end,
-		},
-
-		ColorPicker = {
-			Save = function(idx, object)
-				return { 
-					type = 'ColorPicker', 
-					idx = idx, 
-					value = object.Value:ToHex(), 
-					transparency = object.Transparency 
-				}
-			end,
-			Load = function(idx, data)
-				if Options[idx] then 
-					Options[idx]:SetValueRGB(Color3.fromHex(data.value or "FFFFFF"), data.transparency or 0)
-				end
-			end,
-		},
-
-		KeyPicker = {
-			Save = function(idx, object) 
-				return { 
-					type = 'KeyPicker', 
-					idx = idx, 
-					key = object.Value or "None",
-					mode = object.Mode or "Toggle",
-					toggled = object.Toggled or false,
-					syncToggleState = object.SyncToggleState or false
-				} 
-			end,
-			Load = function(idx, data)
-				if Options[idx] then 
-					if Options[idx].SetValue then
-						if type(Options[idx].SetValue) == "function" then
-							Options[idx]:SetValue({ data.key, data.mode })
-						else
-							Options[idx].Value = data.key
-							Options[idx].Mode = data.mode
-						end
-					end
-					if data.toggled ~= nil and Options[idx].Toggled ~= nil then
-						Options[idx].Toggled = data.toggled
-					end
-					if Options[idx].Update then
-						Options[idx]:Update()
-					end
-					if Options[idx].Display then
-						Options[idx]:Display()
-					end
-				end
-			end,
-		},
-
-		Keybind = {
-			Save = function(idx, object)
-				return { 
-					type = 'Keybind', 
-					idx = idx, 
-					key = object.Value or "None",
-					mode = object.Mode or "Toggle",
-					toggled = object.Toggled or false,
-					syncToggleState = object.SyncToggleState or false
-				} 
-			end,
-			Load = function(idx, data)
-				if Options[idx] then 
-					if Options[idx].SetValue then
-						if type(Options[idx].SetValue) == "function" then
-							Options[idx]:SetValue({ data.key, data.mode })
-						else
-							Options[idx].Value = data.key
-							Options[idx].Mode = data.mode
-						end
-					end
-					if data.toggled ~= nil and Options[idx].Toggled ~= nil then
-						Options[idx].Toggled = data.toggled
-					end
-					if Options[idx].Update then
-						Options[idx]:Update()
-					end
-					if Options[idx].Display then
-						Options[idx]:Display()
-					end
-				end
-			end,
-		},
-
-		Input = {
-			Save = function(idx, object)
-				return { type = 'Input', idx = idx, text = object.Value }
-			end,
-			Load = function(idx, data)
-				if Options[idx] and type(data.text) == 'string' then
-					Options[idx]:SetValue(data.text)
-				end
-			end,
-		},
-
-		Theme = {
-			Save = function()
-				local colors = {}
-				for _, name in ipairs({"FontColor", "MainColor", "BackgroundColor", "AccentColor", "OutlineColor", "RiskColor"}) do
-					if Library[name] then
-						colors[name] = Library[name]:ToHex()
-					end
-				end
-				return { type = 'Theme', colors = colors }
-			end,
-			Load = function(data)
-				if not data.colors then return end
-				for name, hex in pairs(data.colors) do
-					if Library[name] then
-						Library[name] = Color3.fromHex(hex)
-					end
-				end
-				Library:UpdateColorsUsingRegistry()
-			end,
-		}
-	}
-
-	function SaveManager:SetIgnoreIndexes(list)
-		for _, key in next, list do
-			self.Ignore[key] = true
-		end
-	end
-
-	function SaveManager:SetFolder(folder)
-		self.Folder = folder
-		self:BuildFolderTree()
-	end
-
-	function SaveManager:Save(name)
-		if not name or name:gsub("%s+", "") == "" then
-			return false, "no config name"
-		end
-
-		local fullPath = self.Folder .. '/settings/' .. name .. '.json'
-
-		local data = { objects = {}, theme = nil }
-
-		for idx, toggle in next, Toggles do
-			if self.Ignore[idx] then continue end
-			table.insert(data.objects, self.Parser.Toggle.Save(idx, toggle))
-		end
-
-		for idx, option in next, Options do
-			if self.Ignore[idx] then continue end
-			
-			local parser = nil
-			
-			if option.Type == 'KeyPicker' then
-				parser = self.Parser.KeyPicker
-			elseif option.Type == 'Keybind' then
-				parser = self.Parser.Keybind
-			else
-				parser = self.Parser[option.Type]
-			end
-			
-			if parser and parser.Save then
-				table.insert(data.objects, parser.Save(idx, option))
-			end
-		end
-
-		data.theme = self.Parser.Theme.Save()
-
-		local success, encoded = pcall(httpService.JSONEncode, httpService, data)
-		if not success then return false, 'encode failed' end
-
-		writefile(fullPath, encoded)
-		return true
-	end
-
-	function SaveManager:Load(name)
-		if not name then return false, 'no config selected' end
-
-		local file = self.Folder .. '/settings/' .. name .. '.json'
-		if not isfile(file) then return false, 'file not found' end
-
-		local success, decoded = pcall(httpService.JSONDecode, httpService, readfile(file))
-		if not success then return false, 'decode failed' end
-
-		for _, obj in next, decoded.objects or {} do
-			local parser = nil
-			
-			if obj.type == 'KeyPicker' then
-				parser = self.Parser.KeyPicker
-			elseif obj.type == 'Keybind' then
-				parser = self.Parser.Keybind
-			else
-				parser = self.Parser[obj.type]
-			end
-			
-			if parser and parser.Load then
-				task.spawn(parser.Load, obj.idx, obj)
-			end
-		end
-
-		if decoded.theme then
-			self.Parser.Theme.Load(decoded.theme)
-		end
-
-		return true
-	end
-
-	function SaveManager:IgnoreThemeSettings()
-		self:SetIgnoreIndexes({ 
-			"BackgroundColor", "MainColor", "AccentColor", "OutlineColor", "FontColor", "RiskColor",
-			"ThemeManager_ThemeList", "ThemeManager_CustomThemeList", "ThemeManager_CustomThemeName"
-		})
-	end
-
-	function SaveManager:BuildFolderTree()
-		local paths = { self.Folder, self.Folder .. '/themes', self.Folder .. '/settings' }
-		for _, path in ipairs(paths) do
-			if not isfolder(path) then makefolder(path) end
-		end
-	end
-
-	function SaveManager:RefreshConfigList()
-		local list = listfiles(self.Folder .. '/settings')
-		local out = {}
-		for _, file in ipairs(list) do
-			if file:sub(-5) == '.json' then
-				local name = file:match("([^/\\]+)%.json$")
-				if name then table.insert(out, name) end
-			end
-		end
-		return out
-	end
-
-	function SaveManager:SetLibrary(library)
-		self.Library = library
-		library.SaveManager = self
-	end
-
-	function SaveManager:LoadAutoloadConfig()
-		local path = self.Folder .. '/settings/autoload.txt'
-		if isfile(path) then
-			local name = readfile(path):gsub("%s+", "")
-			if name ~= "" then
-				local success, err = self:Load(name)
-				if success then
-					self.Library:Notify('Auto-loaded config: ' .. name, 4)
-				else
-					self.Library:Notify('Failed to auto-load: ' .. err, 4)
-				end
-			end
-		end
-	end
-
-	function SaveManager:BuildConfigSection(tab)
-		assert(self.Library, 'Library not set')
-
-		local section = tab:AddRightGroupbox('Configs')
-
-		section:AddInput('SaveManager_ConfigName', { Text = 'Config Name' })
-		section:AddDropdown('SaveManager_ConfigList', { 
-			Text = 'Config List', 
-			Values = self:RefreshConfigList(), 
-			AllowNull = true 
-		})
-
-		section:AddDivider()
-
-		section:AddButton('Create Config', function()
-			local name = Options.SaveManager_ConfigName.Value
-			if name:gsub("%s+", "") == "" then
-				return self.Library:Notify('Config name cannot be empty', 2)
-			end
-
-			local success, err = self:Save(name)
-			if success then
-				self.Library:Notify('Created config: ' .. name, 3)
-				Options.SaveManager_ConfigList:SetValues(self:RefreshConfigList())
-			else
-				self.Library:Notify('Failed to save: ' .. err, 3)
-			end
-		end):AddButton('Load Config', function()
-			local name = Options.SaveManager_ConfigList.Value
-			if not name then return end
-
-			local success, err = self:Load(name)
-			if success then
-				self.Library:Notify('Loaded: ' .. name, 3)
-			else
-				self.Library:Notify('Load failed: ' .. err, 3)
-			end
-		end)
-
-		section:AddButton('Overwrite Config', function()
-			local name = Options.SaveManager_ConfigList.Value
-			if not name then return end
-			local success, err = self:Save(name)
-			if success then
-				self.Library:Notify('Overwrote: ' .. name, 3)
-			else
-				self.Library:Notify('Overwrite failed: ' .. err, 3)
-			end
-		end)
-
-		section:AddButton('Refresh List', function()
-			Options.SaveManager_ConfigList:SetValues(self:RefreshConfigList())
-		end)
-
-		section:AddButton('Set as Autoload', function()
-			local name = Options.SaveManager_ConfigList.Value
-			if not name then return end
-			writefile(self.Folder .. '/settings/autoload.txt', name)
-			self.Library:Notify('Set ' .. name .. ' as autoload', 3)
-		end)
-
-		SaveManager.AutoloadLabel = section:AddLabel('Autoload: none', true)
-
-		if isfile(self.Folder .. '/settings/autoload.txt') then
-			local name = readfile(self.Folder .. '/settings/autoload.txt')
-			SaveManager.AutoloadLabel:SetText('Autoload: ' .. name)
-		end
-
-		SaveManager:SetIgnoreIndexes({ 'SaveManager_ConfigList', 'SaveManager_ConfigName' })
-	end
-
-	SaveManager:BuildFolderTree()
-end
-
-return SaveManager]==])()
-local ThemeManager = loadstring([==[local httpService = game:GetService('HttpService')
-local ThemeManager = {} do
-	ThemeManager.Folder = 'LinoriaLibSettings'
-	-- if not isfolder(ThemeManager.Folder) then makefolder(ThemeManager.Folder) end
-
-	ThemeManager.Library = nil
-	ThemeManager.BuiltInThemes = {
-    ['Default'] = { 1, httpService:JSONDecode('{"FontColor":"ffffff","MainColor":"1c1c1c","AccentColor":"c8956c","BackgroundColor":"141414","OutlineColor":"323232"}') },
-    ['Purple'] = { 2, httpService:JSONDecode('{"FontColor":"ffffff","MainColor":"1c1c1c","AccentColor":"4400ff","BackgroundColor":"141414","OutlineColor":"323232"}') },
-    ['Fatality'] = { 3, httpService:JSONDecode('{"FontColor":"ffffff","MainColor":"1e1842","AccentColor":"c50754","BackgroundColor":"191335","OutlineColor":"3c355d"}') },
-    ['Mint'] = { 4, httpService:JSONDecode('{"FontColor":"ffffff","MainColor":"242424","AccentColor":"3db488","BackgroundColor":"1c1c1c","OutlineColor":"373737"}') },
-    ['Tokyo Night'] = { 5, httpService:JSONDecode('{"FontColor":"ffffff","MainColor":"191925","AccentColor":"6759b3","BackgroundColor":"16161f","OutlineColor":"323232"}') },
-    ['Quartz'] = { 6, httpService:JSONDecode('{"FontColor":"ffffff","MainColor":"232330","AccentColor":"426e87","BackgroundColor":"1d1b26","OutlineColor":"27232f"}') },
-    ['Silver Lake'] = { 7, httpService:JSONDecode('{"FontColor":"c7c7c8","MainColor":"1b1e24","AccentColor":"5471bc","BackgroundColor":"121317","OutlineColor":"312e2e"}') },
-}
-
-	function ThemeManager:ApplyTheme(theme)
-		local customThemeData = self:GetCustomTheme(theme)
-		local data = customThemeData or self.BuiltInThemes[theme]
-
-		if not data then return end
-
-		-- custom themes are just regular dictionaries instead of an array with { index, dictionary }
-
-		local scheme = data[2]
-		for idx, col in next, customThemeData or scheme do
-			self.Library[idx] = Color3.fromHex(col)
-			
-			if Options[idx] then
-				Options[idx]:SetValueRGB(Color3.fromHex(col))
-			end
-		end
-
-		self:ThemeUpdate()
-	end
-
-	function ThemeManager:ThemeUpdate()
-    local options = { "FontColor", "MainColor", "AccentColor", "BackgroundColor", "OutlineColor" }
-    for i, field in next, options do
-        if Options and Options[field] then
-            self.Library[field] = Options[field].Value
-        end
-    end
-
-    self.Library.AccentColorDark = self.Library:GetDarkerColor(self.Library.AccentColor)
-    self.Library:UpdateColorsUsingRegistry()
-
-    if self.Library.ScreenGui then
-        for _, v in ipairs(self.Library.ScreenGui:GetDescendants()) do
-            if v:IsA("TextLabel") and v.BackgroundTransparency < 1 and v.Size.Y.Offset <= 18 then
-                v.BackgroundTransparency = 1
-            end
-        end
-    end
-end
-
-	function ThemeManager:LoadDefault()		
-		local theme = 'Default'
-		local content = isfile(self.Folder .. '/themes/default.txt') and readfile(self.Folder .. '/themes/default.txt')
-
-		local isDefault = true
-		if content then
-			if self.BuiltInThemes[content] then
-				theme = content
-			elseif self:GetCustomTheme(content) then
-				theme = content
-				isDefault = false;
-			end
-		elseif self.BuiltInThemes[self.DefaultTheme] then
-		 	theme = self.DefaultTheme
-		end
-
-		if isDefault then
-			Options.ThemeManager_ThemeList:SetValue(theme)
-		else
-			self:ApplyTheme(theme)
-		end
-	end
-
-	function ThemeManager:SaveDefault(theme)
-		writefile(self.Folder .. '/themes/default.txt', theme)
-	end
-
-	function ThemeManager:CreateThemeManager(groupbox)
-		groupbox:AddLabel('Background color'):AddColorPicker('BackgroundColor', { Default = self.Library.BackgroundColor });
-		groupbox:AddLabel('Main color')	:AddColorPicker('MainColor', { Default = self.Library.MainColor });
-		groupbox:AddLabel('Accent color'):AddColorPicker('AccentColor', { Default = self.Library.AccentColor });
-		groupbox:AddLabel('Outline color'):AddColorPicker('OutlineColor', { Default = self.Library.OutlineColor });
-		groupbox:AddLabel('Font color')	:AddColorPicker('FontColor', { Default = self.Library.FontColor });
-
-		local ThemesArray = {}
-		for Name, Theme in next, self.BuiltInThemes do
-			table.insert(ThemesArray, Name)
-		end
-
-		table.sort(ThemesArray, function(a, b) return self.BuiltInThemes[a][1] < self.BuiltInThemes[b][1] end)
-
-		groupbox:AddDivider()
-		groupbox:AddDropdown('ThemeManager_ThemeList', { Text = 'Theme list', Values = ThemesArray, Default = 1 })
-
-		groupbox:AddButton('Set as default', function()
-			self:SaveDefault(Options.ThemeManager_ThemeList.Value)
-			self.Library:Notify(string.format('Set default theme to %q', Options.ThemeManager_ThemeList.Value))
-		end)
-
-		Options.ThemeManager_ThemeList:OnChanged(function()
-			self:ApplyTheme(Options.ThemeManager_ThemeList.Value)
-		end)
-
-		groupbox:AddDivider()
-		groupbox:AddInput('ThemeManager_CustomThemeName', { Text = 'Custom theme name' })
-		groupbox:AddDropdown('ThemeManager_CustomThemeList', { Text = 'Custom themes', Values = self:ReloadCustomThemes(), AllowNull = true, Default = 1 })
-		groupbox:AddDivider()
-		
-		groupbox:AddButton('Save theme', function() 
-			self:SaveCustomTheme(Options.ThemeManager_CustomThemeName.Value)
-
-			Options.ThemeManager_CustomThemeList:SetValues(self:ReloadCustomThemes())
-			Options.ThemeManager_CustomThemeList:SetValue(nil)
-		end):AddButton('Load theme', function() 
-			self:ApplyTheme(Options.ThemeManager_CustomThemeList.Value) 
-		end)
-
-		groupbox:AddButton('Refresh list', function()
-			Options.ThemeManager_CustomThemeList:SetValues(self:ReloadCustomThemes())
-			Options.ThemeManager_CustomThemeList:SetValue(nil)
-		end)
-
-		groupbox:AddButton('Set as default', function()
-			if Options.ThemeManager_CustomThemeList.Value ~= nil and Options.ThemeManager_CustomThemeList.Value ~= '' then
-				self:SaveDefault(Options.ThemeManager_CustomThemeList.Value)
-				self.Library:Notify(string.format('Set default theme to %q', Options.ThemeManager_CustomThemeList.Value))
-			end
-		end)
-
-		ThemeManager:LoadDefault()
-
-		local function UpdateTheme()
-			self:ThemeUpdate()
-		end
-
-		Options.BackgroundColor:OnChanged(UpdateTheme)
-		Options.MainColor:OnChanged(UpdateTheme)
-		Options.AccentColor:OnChanged(UpdateTheme)
-		Options.OutlineColor:OnChanged(UpdateTheme)
-		Options.FontColor:OnChanged(UpdateTheme)
-	end
-
-	function ThemeManager:GetCustomTheme(file)
-		local path = self.Folder .. '/themes/' .. file
-		if not isfile(path) then
-			return nil
-		end
-
-		local data = readfile(path)
-		local success, decoded = pcall(httpService.JSONDecode, httpService, data)
-		
-		if not success then
-			return nil
-		end
-
-		return decoded
-	end
-
-	function ThemeManager:SaveCustomTheme(file)
-		if file:gsub(' ', '') == '' then
-			return self.Library:Notify('Invalid file name for theme (empty)', 3)
-		end
-
-		local theme = {}
-		local fields = { "FontColor", "MainColor", "AccentColor", "BackgroundColor", "OutlineColor" }
-
-		for _, field in next, fields do
-			theme[field] = Options[field].Value:ToHex()
-		end
-
-		writefile(self.Folder .. '/themes/' .. file .. '.json', httpService:JSONEncode(theme))
-	end
-
-	function ThemeManager:ReloadCustomThemes()
-		local list = listfiles(self.Folder .. '/themes')
-
-		local out = {}
-		for i = 1, #list do
-			local file = list[i]
-			if file:sub(-5) == '.json' then
-				-- i hate this but it has to be done ...
-
-				local pos = file:find('.json', 1, true)
-				local char = file:sub(pos, pos)
-
-				while char ~= '/' and char ~= '\\' and char ~= '' do
-					pos = pos - 1
-					char = file:sub(pos, pos)
-				end
-
-				if char == '/' or char == '\\' then
-					table.insert(out, file:sub(pos + 1))
-				end
-			end
-		end
-
-		return out
-	end
-
-	function ThemeManager:SetLibrary(lib)
-		self.Library = lib
-		lib.ThemeManager = self
-	end
-
-	function ThemeManager:BuildFolderTree()
-		local paths = {}
-
-		-- build the entire tree if a path is like some-hub/phantom-forces
-		-- makefolder builds the entire tree on Synapse X but not other exploits
-
-		local parts = self.Folder:split('/')
-		for idx = 1, #parts do
-			paths[#paths + 1] = table.concat(parts, '/', 1, idx)
-		end
-
-		table.insert(paths, self.Folder .. '/themes')
-		table.insert(paths, self.Folder .. '/settings')
-
-		for i = 1, #paths do
-			local str = paths[i]
-			if not isfolder(str) then
-				makefolder(str)
-			end
-		end
-	end
-
-	function ThemeManager:SetFolder(folder)
-		self.Folder = folder
-		self:BuildFolderTree()
-	end
-
-	function ThemeManager:CreateGroupBox(tab)
-		assert(self.Library, 'Must set ThemeManager.Library first!')
-		return tab:AddLeftGroupbox('Themes')
-	end
-
-	function ThemeManager:ApplyToTab(tab)
-		assert(self.Library, 'Must set ThemeManager.Library first!')
-		local groupbox = self:CreateGroupBox(tab)
-		self:CreateThemeManager(groupbox)
-	end
-
-	function ThemeManager:ApplyToGroupbox(groupbox)
-		assert(self.Library, 'Must set ThemeManager.Library first!')
-		self:CreateThemeManager(groupbox)
-	end
-
-	ThemeManager:BuildFolderTree()
-end
-
-return ThemeManager]==])()
-
-local INSTANCE_MENU_DISPLAY_ORDER = 2147483646
-local INSTANCE_COSMETIC_DISPLAY_ORDER = 2147483647
-local INSTANCE_KEYBIND_LIST_ORDER = 80
-local INSTANCE_GAMEPLAY_OVERLAY_ORDER = 10
-
-local function applyInstanceUiLayering()
-    pcall(function()
-        if Library and Library.ScreenGui then
-            Library.ScreenGui.DisplayOrder = INSTANCE_MENU_DISPLAY_ORDER
-            Library.ScreenGui.IgnoreGuiInset = true
-            Library.ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
-        end
-    end)
-    pcall(function()
-        local st = getgenv().InstanceCosmeticUIState
-        if st and st.gui then
-            st.gui.DisplayOrder = INSTANCE_COSMETIC_DISPLAY_ORDER
-            st.gui.IgnoreGuiInset = true
-            st.gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
-        end
-    end)
-    pcall(function()
-        local kb = getgenv().InstanceKeybindList
-        if kb and kb.gui then
-            kb.gui.DisplayOrder = INSTANCE_KEYBIND_LIST_ORDER
-            kb.gui.IgnoreGuiInset = true
-            kb.gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
-        end
-    end)
-end
-getgenv().InstanceApplyUiLayering = applyInstanceUiLayering
-
-
-getgenv().InstanceMenuCursor = getgenv().InstanceMenuCursor or {}
-
-local function ensureInstanceMenuCursor()
-    local mc = getgenv().InstanceMenuCursor
-    if mc.cursor then pcall(function() mc.cursor:Remove() end) end
-    if mc.outline then pcall(function() mc.outline:Remove() end) end
-    mc.cursor = Drawing.new("Triangle")
-    mc.cursor.Filled = true
-    mc.cursor.Thickness = 1
-    mc.cursor.Visible = false
-    mc.outline = Drawing.new("Triangle")
-    mc.outline.Filled = false
-    mc.outline.Thickness = 1
-    mc.outline.Color = Color3.new(0, 0, 0)
-    mc.outline.Visible = false
-    mc.initialized = true
-    mc.wasOpen = false
-    mc.savedMouseIcon = true
-end
-
-local function isInstanceMenuOpen()
-    if not Library or Library.Unloaded then return false end
-    if Window and Window.Holder and Window.Holder.Parent then
-        return Window.Holder.Visible
-    end
-    return false
-end
-
-local function shouldSuppressGameplayOverlays()
-    return isInstanceMenuOpen()
-end
-
-ensureInstanceMenuCursor()
-
-local MENU_CURSOR_HZ = 240
-local MENU_CURSOR_BIND = "InstanceMenuCursorDraw"
-local menuCursorAccum = 0
-
-local function drawInstanceMenuCursor()
-    local mc = getgenv().InstanceMenuCursor
-    if not mc or not mc.cursor or not mc.outline then return end
-    local open = isInstanceMenuOpen()
-    if not open then
-        if mc.cursor.Visible then
-            mc.cursor.Visible = false
-            mc.outline.Visible = false
-        end
-        if mc.wasOpen then
-            UserInputServiceMenu.MouseIconEnabled = mc.savedMouseIcon
-        end
-        mc.wasOpen = false
-        return
-    end
-    if not mc.wasOpen then
-        mc.savedMouseIcon = UserInputServiceMenu.MouseIconEnabled
-    end
-    UserInputServiceMenu.MouseIconEnabled = false
-    local mPos = UserInputServiceMenu:GetMouseLocation()
-    local accent = (Library and Library.AccentColor) or Color3.fromRGB(0, 200, 255)
-    mc.cursor.Visible = true
-    mc.outline.Visible = true
-    mc.cursor.Color = accent
-    mc.cursor.PointA = Vector2.new(mPos.X, mPos.Y)
-    mc.cursor.PointB = Vector2.new(mPos.X + 16, mPos.Y + 6)
-    mc.cursor.PointC = Vector2.new(mPos.X + 6, mPos.Y + 16)
-    mc.outline.PointA = mc.cursor.PointA
-    mc.outline.PointB = mc.cursor.PointB
-    mc.outline.PointC = mc.cursor.PointC
-    mc.wasOpen = true
-end
-
-pcall(function() RunService:UnbindFromRenderStep(MENU_CURSOR_BIND) end)
-pcall(function()
-    RunService:BindToRenderStep(MENU_CURSOR_BIND, Enum.RenderPriority.Last.Value + 10, function(dt)
-        menuCursorAccum = menuCursorAccum + (dt or 0)
-        local step = 1 / MENU_CURSOR_HZ
-        if menuCursorAccum < step then return end
-        menuCursorAccum = menuCursorAccum % step
-        drawInstanceMenuCursor()
-    end)
-end)
-
-getgenv().InstanceIsMenuOpen = isInstanceMenuOpen
-
-getgenv().InstanceLanguage = getgenv().InstanceLanguage or "english"
-
-local InstanceWeaponTranslations = {
-    korean = {
-        ["Assault Rifle"] = "돌격 소총", ["Handgun"] = "권총", ["Shotgun"] = "산탄총", ["Sniper"] = "저격총",
-        ["Bow"] = "활", ["Burst Rifle"] = "버스트 소총", ["Crossbow"] = "석궁", ["Gunblade"] = "건블레이드",
-        ["RPG"] = "RPG", ["Energy Rifle"] = "에너지 소총", ["Flamethrower"] = "화염방사기",
-        ["Grenade Launcher"] = "유탄 발사기", ["Minigun"] = "미니건", ["Paintball Gun"] = "페인트볼 건",
-        ["Distortion"] = "디스토션", ["Permafrost"] = "영구 동토", ["Daggers"] = "단검", ["Flare Gun"] = "플레어 건",
-        ["Revolver"] = "리볼버", ["Shorty"] = "쇼티", ["Spray"] = "스프레이", ["Uzi"] = "UZI",
-        ["Energy Pistols"] = "에너지 권총", ["Exogun"] = "엑소건", ["Slingshot"] = "새총", ["Warper"] = "워퍼",
-        ["Fists"] = "주먹", ["Battle Axe"] = "전투 도끼", ["Chainsaw"] = "전기톱", ["Katana"] = "카타나",
-        ["Knife"] = "나이프", ["Riot Shield"] = "방패", ["Scythe"] = "낫", ["Maul"] = "망치",
-        ["Trowel"] = "모종삽", ["Grenade"] = "수류탄", ["Flashbang"] = "섬광탄", ["Freeze Ray"] = "냉동 광선",
-        ["Jump Pad"] = "점프 패드", ["Molotov"] = "화염병", ["Satchel"] = "가방", ["Smoke Grenade"] = "연막탄",
-        ["War Horn"] = "나팔", ["Medkit"] = "의료 키트", ["Substapce Tripmine"] = "지뢰", ["Warpstone"] = "워프석",
-        ["Hook"] = "갈고리", ["Spear"] = "창", ["Grappler"] = "그래플러", ["Maul"] = "망치",
-    },
-    spanish = {
-        ["Assault Rifle"] = "rifle de asalto", ["Handgun"] = "pistola", ["Shotgun"] = "escopeta", ["Sniper"] = "francotirador",
-        ["Bow"] = "arco", ["Burst Rifle"] = "rifle ráfaga", ["Crossbow"] = "ballesta", ["Gunblade"] = "espada-pistola",
-        ["RPG"] = "RPG", ["Energy Rifle"] = "rifle de energía", ["Flamethrower"] = "lanzallamas",
-        ["Grenade Launcher"] = "lanzagranadas", ["Minigun"] = "minigun", ["Paintball Gun"] = "pistola de paintball",
-        ["Distortion"] = "distorsión", ["Permafrost"] = "permafrost", ["Daggers"] = "dagas", ["Flare Gun"] = "pistola de bengalas",
-        ["Revolver"] = "revólver", ["Shorty"] = "shorty", ["Spray"] = "spray", ["Uzi"] = "uzi",
-        ["Energy Pistols"] = "pistolas de energía", ["Exogun"] = "exopistola", ["Slingshot"] = "honda", ["Warper"] = "teletransportador",
-        ["Fists"] = "puños", ["Battle Axe"] = "hacha de batalla", ["Chainsaw"] = "motosierra", ["Katana"] = "katana",
-        ["Knife"] = "cuchillo", ["Riot Shield"] = "escudo", ["Scythe"] = "guadaña", ["Maul"] = "mazo",
-        ["Trowel"] = "paleta", ["Grenade"] = "granada", ["Flashbang"] = "granada cegadora", ["Freeze Ray"] = "rayo congelante",
-        ["Jump Pad"] = "plataforma de salto", ["Molotov"] = "cóctel molotov", ["Satchel"] = "mochila", ["Smoke Grenade"] = "granada de humo",
-        ["War Horn"] = "cuerno de guerra", ["Medkit"] = "botiquín", ["Substapce Tripmine"] = "mina", ["Warpstone"] = "piedra de teletransporte",
-        ["Hook"] = "gancho", ["Spear"] = "lanza", ["Grappler"] = "gancho", ["Maul"] = "mazo",
-    },
-}
-
-local InstanceLocaleTable = {
-    english = {
-        studs = "%.0f studs", studs_short = "%d studs", select_weapon = "select a weapon first",
-        apply = "apply", apply_all = "apply to all", language = "language",
-        cosmetic_title = "cosmetic changer", weapons = "weapons", cosmetics = "cosmetics",
-        filter_weapons = "filter weapons...", filter_cosmetics = "filter cosmetics...",
-        skin = "skin", wrap = "wrap", rclick_hint = "r-click weapon: remove skin",
-        unlock_all = "unlock all", inverted = "inverted", favorited = "favorited",
-    },
-    korean = {
-        studs = "%.0f 스터드", studs_short = "%d 스터드", select_weapon = "무기를 먼저 선택하세요",
-        apply = "적용", apply_all = "전체 적용", language = "언어",
-        cosmetic_title = "코스메틱 변경", weapons = "무기", cosmetics = "코스메틱",
-        filter_weapons = "무기 검색...", filter_cosmetics = "코스메틱 검색...",
-        skin = "스킨", wrap = "랩", rclick_hint = "우클릭: 스킨 제거",
-        unlock_all = "전체 해제", inverted = "반전", favorited = "즐겨찾기",
-    },
-    spanish = {
-        studs = "%.0f studs", studs_short = "%d studs", select_weapon = "selecciona un arma primero",
-        apply = "aplicar", apply_all = "aplicar a todos", language = "idioma",
-        cosmetic_title = "cambiador de cosméticos", weapons = "armas", cosmetics = "cosméticos",
-        filter_weapons = "filtrar armas...", filter_cosmetics = "filtrar cosméticos...",
-        skin = "skin", wrap = "wrap", rclick_hint = "clic derecho: quitar skin",
-        unlock_all = "desbloquear todo", inverted = "invertido", favorited = "favorito",
-    },
-}
-
-getgenv().InstanceTranslateWeapon = function(name)
-    if not name or type(name) ~= "string" then return name end
-    local lang = getgenv().InstanceLanguage or "english"
-    if lang == "english" then return name end
-    local pack = InstanceWeaponTranslations[lang]
-    return (pack and pack[name]) or name
-end
-
-getgenv().InstanceTranslateLabel = function(text)
-    if not text or type(text) ~= "string" then return text end
-    local lang = getgenv().InstanceLanguage or "english"
-    if lang == "english" then return text:lower() end
-    local translated = getgenv().InstanceTranslateWeapon(text)
-    if translated ~= text then return translated:lower() end
-    return text:lower()
-end
-
-getgenv().InstanceGetUiFont = function()
-    if getgenv().InstanceLanguage == "korean" and getgenv().InstanceUIFont then
-        return getgenv().InstanceUIFont
-    end
-    if Library and Library.Font then
-        return Library.Font
-    end
-    return getgenv().InstanceUIFont or Enum.Font.Roboto
-end
-
-getgenv().InstanceL = function(key, ...)
-    local lang = getgenv().InstanceLanguage or "english"
-    local pack = InstanceLocaleTable[lang] or InstanceLocaleTable.english
-    local template = pack[key] or InstanceLocaleTable.english[key] or key
-    if select("#", ...) > 0 then
-        return string.format(template, ...)
-    end
-    return template
-end
-
-local InstanceFontHttp = game:GetService("HttpService")
-
-local InstanceFontSources = {
-    english = { file = "instance_ui_en.otf", fontFile = "instance_ui_en.font", name = "InstanceUI_En", url = "https://github.com/nyrus573l/esp-fonts/raw/refs/heads/main/fortnite.otf" },
-    korean = { file = "instance_ui_ko.otf", fontFile = "instance_ui_ko.font", name = "InstanceUI_Ko", url = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Korean/NotoSansCJKkr-Regular.otf" },
-    spanish = { file = "instance_ui_es.otf", fontFile = "instance_ui_es.font", name = "InstanceUI_Es", url = "https://github.com/nyrus573l/esp-fonts/raw/refs/heads/main/fortnite.otf" },
-}
-
-local function loadInstanceLanguageFont(lang)
-    lang = lang or getgenv().InstanceLanguage or "english"
-    local src = InstanceFontSources[lang] or InstanceFontSources.english
-    local ok, face = pcall(function()
-        if isfile and writefile and getcustomasset then
-            if not isfile(src.file) then
-                writefile(src.file, game:HttpGet(src.url))
-            end
-            if isfile(src.fontFile) then pcall(function() delfile(src.fontFile) end) end
-            local fontdata = { name = src.name, faces = {{ name = "Regular", weight = 400, style = "normal", assetId = getcustomasset(src.file) }} }
-            writefile(src.fontFile, InstanceFontHttp:JSONEncode(fontdata))
-            return Font.new(getcustomasset(src.fontFile))
-        end
-        return nil
-    end)
-    if ok and face then
-        getgenv().InstanceUIFont = face
-        return face
-    end
-    getgenv().InstanceUIFont = Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Medium)
-    return getgenv().InstanceUIFont
-end
-
-getgenv().InstanceReloadLanguageFont = function(lang)
-    lang = lang or getgenv().InstanceLanguage or "english"
-    if lang == "english" and Library and Library.Font then
-        getgenv().InstanceUIFont = Library.Font
-        return Library.Font
-    end
-    return loadInstanceLanguageFont(lang)
-end
-task.defer(function()
-    pcall(function()
-        getgenv().InstanceReloadLanguageFont(getgenv().InstanceLanguage)
-    end)
-end)
-
-getgenv().InstanceDrawingTextPool = getgenv().InstanceDrawingTextPool or {}
-
-getgenv().InstanceTrackDrawingText = function(obj)
-    table.insert(getgenv().InstanceDrawingTextPool, obj)
-    pcall(function()
-        local face = getgenv().InstanceUIFont
-        if face and obj.FontFace ~= nil then obj.FontFace = face end
-    end)
-    return obj
-end
-
-getgenv().InstanceApplyDrawingUIFont = function()
-    local face = getgenv().InstanceUIFont
-    if not face then return end
-    for _, obj in ipairs(getgenv().InstanceDrawingTextPool) do
-        pcall(function()
-            if obj.FontFace ~= nil then obj.FontFace = face end
-        end)
-    end
-end
-
-getgenv().InstanceApplyUiFont = function(obj, textSize)
-    if not obj then return end
-    if textSize then obj.TextSize = textSize end
-    local font = getgenv().InstanceGetUiFont()
-    pcall(function()
-        if typeof(font) == "Font" then
-            obj.FontFace = font
-        else
-            obj.Font = font
-        end
-    end)
-end
-
-getgenv().InstanceApplyUIFont = function()
-    local face = getgenv().InstanceGetUiFont()
-    if not face then return end
-    getgenv().InstanceUIFont = face
-    if _G.ESPObjects then
-        for _, box in pairs(_G.ESPObjects) do
-            if box and box.text then
-                for _, lbl in pairs(box.text) do
-                    if typeof(lbl) == "Instance" and lbl:IsA("TextLabel") then
-                        lbl.FontFace = face
-                    end
-                end
-            end
-        end
-    end
-    if getgenv().InstanceApplyDrawingUIFont then pcall(getgenv().InstanceApplyDrawingUIFont) end
-    if getgenv().InstanceApplyKbListTheme then pcall(getgenv().InstanceApplyKbListTheme) end
-end
-
-getgenv().InstanceHudFonts = {
-    { n = "gotham", draw = 2, face = function() return Font.new("rbxasset://fonts/families/GothamSSm.json", Enum.FontWeight.Medium) end },
-    { n = "code", draw = 3, face = function() return Font.fromEnum(Enum.Font.Code) end },
-    { n = "roboto", draw = 1, face = function() return Font.fromEnum(Enum.Font.Roboto) end },
-    { n = "builder", draw = 0, face = function() return Font.fromEnum(Enum.Font.BuilderSans) end },
-    { n = "arial", draw = 1, face = function() return Font.fromEnum(Enum.Font.Arial) end },
-    { n = "legacy", draw = 0, face = function() return Font.fromEnum(Enum.Font.Legacy) end },
-    { n = "source", draw = 2, face = function() return Font.fromEnum(Enum.Font.SourceSans) end },
-    { n = "custom", draw = 2, face = function() return getgenv().InstanceUIFont or Font.fromEnum(Enum.Font.Gotham) end },
-}
-getgenv().InstanceHudFontNames = {}
-for i, slot in ipairs(getgenv().InstanceHudFonts) do
-    getgenv().InstanceHudFontNames[i] = slot.n
-end
-getgenv().InstanceHudFontIdx = 1
-getgenv().InstanceHudDrawFont = 2
-
-getgenv().InstanceHudFontIndexByName = function(name)
-    for i, slot in ipairs(getgenv().InstanceHudFonts) do
-        if slot.n == name then return i end
-    end
-    return 1
-end
-
-getgenv().InstanceApplyHudFont = function(idx)
-    idx = math.clamp(tonumber(idx) or getgenv().InstanceHudFontIdx or 1, 1, #getgenv().InstanceHudFonts)
-    local slot = getgenv().InstanceHudFonts[idx]
-    getgenv().InstanceHudFontIdx = idx
-    getgenv().InstanceHudDrawFont = slot.draw or 2
-    local face
-    pcall(function() face = slot.face() end)
-    if face then getgenv().InstanceEspUiFont = face end
-    if _G.ESPObjects then
-        for _, box in pairs(_G.ESPObjects) do
-            if box and box.text then
-                for _, lbl in pairs(box.text) do
-                    if typeof(lbl) == "Instance" and lbl:IsA("TextLabel") and face then
-                        lbl.FontFace = face
-                    end
-                end
-            end
-        end
-    end
-    for _, obj in ipairs(getgenv().InstanceDrawingTextPool or {}) do
-        pcall(function()
-            if obj.Font ~= nil then obj.Font = getgenv().InstanceHudDrawFont end
-            if face and obj.FontFace ~= nil then obj.FontFace = face end
-        end)
-    end
-end
-
 
 local function alignInstanceMenuTabs()
     if not Window or not Window.Holder then return end
@@ -3586,7 +2618,7 @@ hitEffectsToggle:AddColorPicker("HitEffectColorPicker", {
     end
 })
 
-local hitEffectDepBox = hitEffectsTab:AddDependencyBox()
+local hitEffectDepBox = makeCompatBox(hitEffectsTab)
 
 hitEffectDepBox:AddSlider("HitEffectFloatSpeed", {
     Text = "float speed",
@@ -5694,7 +4726,7 @@ local noAnimToggle = viewportTab:AddToggle("NoAnimations", {
     end,
 })
 
-local noAnimDepBox = viewportTab:AddDependencyBox()
+local noAnimDepBox = makeCompatBox(viewportTab)
 noAnimDepBox:AddDropdown("NoAnimationsList", {
     Text = "disabled animations",
     Values = { "Idle", "Reloading", "Sprinting", "Crouching", "Shooting", "Aiming" },
@@ -5731,7 +4763,7 @@ local gunChamsToggle = vmTab:AddToggle("GunChams", {
     Callback = function(v) gunColor3 = v end,
 })
 
-local gunChamsDep = vmTab:AddDependencyBox()
+local gunChamsDep = makeCompatBox(vmTab)
 gunChamsDep:AddDropdown("GunMaterial", {
     Text = "gun material",
     Default = "Neon",
@@ -5781,7 +4813,7 @@ local armChamsToggle = vmTab:AddToggle("ArmChams", {
     Callback = function(v) armColor3 = v end,
 })
 
-local armChamsDep = vmTab:AddDependencyBox()
+local armChamsDep = makeCompatBox(vmTab)
 armChamsDep:AddDropdown("ArmMaterial", {
     Text = "arm material",
     Default = "ForceField",
@@ -5869,7 +4901,7 @@ local gunHighlightToggle = vmTab:AddToggle("GunHighlight", {
     Callback = function(v) gunHighlightBottom = v end,
 })
 
-local gunHighlightDep = vmTab:AddDependencyBox()
+local gunHighlightDep = makeCompatBox(vmTab)
 gunHighlightDep:AddDropdown("GunHighlightMaterial", {
     Text = "gun highlight material",
     Default = "Neon",
@@ -5915,7 +4947,7 @@ local armHighlightToggle = vmTab:AddToggle("ArmHighlight", {
     Callback = function(v) armHighlightBottom = v end,
 })
 
-local armHighlightDep = vmTab:AddDependencyBox()
+local armHighlightDep = makeCompatBox(vmTab)
 armHighlightDep:AddDropdown("ArmHighlightMaterial", {
     Text = "arm highlight material",
     Default = "Neon",
@@ -6584,7 +5616,6 @@ local config = {
         weaponPick = "primary",
         forceWeapon = true,
         rageMasterOn = false,
-        locked = false,
         meleeFeetDrop = 3.5,
         underOffset = 4,
         customHeight = 2,
@@ -7657,7 +6688,6 @@ end)
 
 local function cleartarget()
     config.target.enabled = false
-    config.target.locked = false
     stopsync()
     config.target.character = nil
     config.target.lastchar = nil
@@ -7843,7 +6873,7 @@ runsvc.Heartbeat:Connect(function()
         local current, _, melee = getammo()
         local hasammo = current == nil or current > 0 or melee
         if hasammo and not config.state.reloading then
-            if not config.target.locked and (not config.target.enabled or not config.target.character or not valid(config.target.character)) then
+            if not config.target.enabled or not config.target.character or not valid(config.target.character) then
                 local newtarget = nearest()
                 if newtarget then
                     if config.target.enabled then stopsync() end
@@ -7877,7 +6907,6 @@ ragebot.valid = valid
 ragebot.player = player
 ragebot.eqSlot = eqSlot
 ragebot.refreshAtk = refreshAtk
-ragebot.toggleLock = toggleLock
 
 do
 local config = ragebot.config
@@ -8120,22 +7149,6 @@ local settarget = ragebot.settarget
 local cleartarget = ragebot.cleartarget
 local stopvoid = ragebot.stopvoid
 
-local function toggleLock()
-    config.target.locked = not config.target.locked
-    if config.target.locked then
-        if not config.target.character or not valid(config.target.character) then
-            local target = nearest()
-            if target then
-                config.target.manualkey = true
-                settarget(target)
-            else
-                config.target.locked = false
-            end
-        end
-    end
-    return config.target.locked
-end
-
 local function togglekey()
     if config.target.auto then return end
     if config.target.enabled and config.target.character then
@@ -8176,16 +7189,6 @@ rageui.ragebottab:AddToggle("TargetOn", {
     Default = "None",
     Mode = "Toggle",
     Callback = function() togglekey() end
-})
-
-rageui.ragebottab:AddToggle("TargetLock", {
-    Text = "lock target",
-    Default = false,
-    Callback = function(val)
-        if val ~= config.target.locked then
-            toggleLock()
-        end
-    end
 })
 
 rageui.ragebottab:AddToggle("AutoTarget", {
@@ -8236,7 +7239,7 @@ rageui.ragebottab:AddToggle("AttackCustomOverride", {
     end,
 })
 
-local attackUnderDep = rageui.ragebottab:AddDependencyBox()
+local attackUnderDep = rageui.ragebottab
 
 attackUnderDep:AddSlider("UnderAttackOffset", {
     Text = "under offset",
@@ -8260,7 +7263,7 @@ attackUnderDep:SetupDependencies({
     { attackUnderVisGate, true },
 })
 
-local attackCustomDep = rageui.ragebottab:AddDependencyBox()
+local attackCustomDep = rageui.ragebottab
 
 local function onAtkCustom()
     if config.target.attackCustomEnabled and config.state.csyncactive and ragebot.refreshAtk then
@@ -8467,7 +7470,7 @@ local rageStatusToggle = rageui.ragebotvisualtab:AddToggle("RageStatus", {
     end,
 })
 
-local rageStatusDep = rageui.ragebotvisualtab:AddDependencyBox()
+local rageStatusDep = rageui.ragebotvisualtab
 rageStatusDep:SetupDependencies({
     { rageStatusToggle, true },
 })
@@ -11571,7 +10574,7 @@ local hitNotificationsToggle = hitNotifTab:AddToggle('HitNotifications', {
     end
 })
 
-local hitNotifDepBox = hitNotifTab:AddDependencyBox()
+local hitNotifDepBox = makeCompatBox(hitNotifTab)
 hitNotifDepBox:AddSlider('HitNotifDuration', {
     Text = 'duration',
     Default = rbHitCfg.duration,
@@ -11626,7 +10629,7 @@ local hitNotifPositionDropdown = hitNotifDepBox:AddDropdown('HitNotifPosition', 
     end
 })
 
-local hitNotifPosDepBox = hitNotifDepBox:AddDependencyBox()
+local hitNotifPosDepBox = makeCompatBox(hitNotifDepBox)
 hitNotifPosDepBox:AddSlider('HitNotifOffsetX', {
     Text = 'custom x',
     Default = rbHitCfg.offsetX,
@@ -13204,7 +12207,7 @@ v67:AddToggle('box_enabled', {
     end
 })
 
-local BoxDepBox = v67:AddDependencyBox()
+local BoxDepBox = makeCompatBox(v67)
 
 BoxDepBox:AddToggle('box_enabled2', {
     Text = 'boxes',
@@ -15438,7 +14441,7 @@ local killSoundsToggle = killSoundsTab:AddToggle('KillSoundsEnabled', {
     end,
 })
 
-local killSoundsDep = killSoundsTab:AddDependencyBox()
+local killSoundsDep = makeCompatBox(killSoundsTab)
 killSoundsDep:SetupDependencies({
     { killSoundsToggle, true },
 })
@@ -17785,156 +16788,3 @@ task.defer(function()
     getgenv().InstanceConfigLoading = false
 end)
 end)()
-
--- ===== MOBILE PATCH =====
-local UIS = game:GetService("UserInputService")
-if UIS.TouchEnabled then
-    task.defer(function()
-        for _, v in pairs(Library.ScreenGui:GetDescendants()) do
-            if v:IsA("Frame") and v.Name and v.Name:find("KeyPicker") then
-                v.Visible = false
-            end
-        end
-    end)
-
-    local mobileGroup
-    local function addMobileToggle(text, default, callback)
-        local tab = Tabs.Combat or Tabs.Misc
-        if not tab then return end
-        if not mobileGroup then
-            mobileGroup = tab:AddLeftGroupbox("Mobile")
-        end
-        if mobileGroup then
-            mobileGroup:AddToggle("Mobile_" .. text:gsub("%W", ""), {
-                Text = text,
-                Default = default == true,
-                Callback = callback or function() end
-            })
-        end
-    end
-
-    task.defer(function()
-        if silentAim then
-            addMobileToggle("Silent Aim", silentAim.enabled, function(v)
-                silentAim.enabled = v
-                if not v then curtarget = nil end
-            end)
-        end
-        if aimbot then
-            addMobileToggle("Aimbot", aimbot.enabled, function(v)
-                aimbot.enabled = v
-                if not v then clearAimbotLock() end
-                updaimbot()
-            end)
-        end
-        if config and config.target then
-            addMobileToggle("Ragebot", config.target.rageMasterOn, function(v)
-                config.target.rageMasterOn = v
-                if v then
-                    local target = config.target.locked and config.target.character or nearest()
-                    if target then
-                        config.target.manualkey = true
-                        settarget(target)
-                    end
-                else
-                    cleartarget()
-                end
-            end)
-            addMobileToggle("Lock Target", config.target.locked, function(v)
-                if v ~= config.target.locked then
-                    toggleLock()
-                end
-            end)
-        end
-        if _G then
-            addMobileToggle("Walkspeed", _G.cframeactive, function(v)
-                _G.cframeactive = v
-                _G.keyheldcframe = v
-            end)
-            addMobileToggle("Fly", _G.cframeflyactive, function(v)
-                _G.cframeflyactive = v
-                _G.keyheldcframefly = v
-                if not v then
-                    cleanupfly()
-                    local char = LocalPlayer.Character
-                    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-                    if hrp then hrp.AssemblyLinearVelocity = Vector3.zero end
-                end
-            end)
-        end
-        if _G.Features and _G.Features.QOL then
-            addMobileToggle("Shaders", _G.Features.QOL.Shaders, function(v)
-                _G.Features.QOL.Shaders = v
-                if v then applyultramodaurashadersminecraft() else removeshaders() end
-            end)
-        end
-        if Toggles and Toggles.AnimEnabled then
-            addMobileToggle("Animations", Toggles.AnimEnabled.Value, function(v)
-                Toggles.AnimEnabled:SetValue(v)
-                if v then getgenv()._animCmd = "Play" else getgenv()._animCmd = "Stop" end
-            end)
-        end
-    end)
-
-    local menuBtn = Instance.new("ImageButton")
-    menuBtn.Size = UDim2.fromOffset(50, 50)
-    menuBtn.Position = UDim2.new(1, -60, 0, 12)
-    menuBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-    menuBtn.BackgroundTransparency = 0.3
-    menuBtn.Image = "rbxassetid://6031091009"
-    menuBtn.ImageColor3 = Color3.fromRGB(255, 255, 255)
-    menuBtn.ZIndex = 999
-    menuBtn.Parent = game.CoreGui
-    menuBtn.InputBegan:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.Touch then
-            Library:Toggle()
-        end
-    end)
-
-    local lockBtn = Instance.new("ImageButton")
-    lockBtn.Size = UDim2.fromOffset(40, 40)
-    lockBtn.Position = UDim2.new(1, -55, 0, 70)
-    lockBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-    lockBtn.BackgroundTransparency = 0.3
-    lockBtn.Image = "rbxassetid://6031091009"
-    lockBtn.ImageColor3 = Color3.fromRGB(255, 255, 255)
-    lockBtn.ZIndex = 999
-    lockBtn.Parent = game.CoreGui
-    local uiLocked = false
-    lockBtn.InputBegan:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.Touch then
-            uiLocked = not uiLocked
-            if Window and Window.Holder then
-                Window.Holder.Active = not uiLocked
-                Window.Holder.Draggable = not uiLocked
-                Window.Holder.Selectable = not uiLocked
-            end
-            lockBtn.ImageColor3 = uiLocked and Color3.fromRGB(255, 50, 50) or Color3.fromRGB(255, 255, 255)
-        end
-    end)
-
-    local function fitMobileUI()
-        local cam = workspace.CurrentCamera
-        if not cam or not Window or not Window.Holder then return end
-        local vp = cam.ViewportSize
-        local w = math.min(vp.X * 0.92, 650)
-        local h = math.min(vp.Y * 0.78, 500)
-        Window.Holder.Size = UDim2.fromOffset(w, h)
-        Window.Holder.Position = UDim2.new(0.5, -w / 2, 0.5, -h / 2)
-        local scale = math.clamp(math.min(w / 700, h / 600), 0.72, 0.95)
-        local oldScale = Window.Holder:FindFirstChild("MobileUIScale")
-        if oldScale then oldScale.Scale = scale else
-            local uiScale = Instance.new("UIScale")
-            uiScale.Name = "MobileUIScale"
-            uiScale.Scale = scale
-            uiScale.Parent = Window.Holder
-        end
-    end
-
-    task.defer(fitMobileUI)
-    UIS:GetPropertyChangedSignal("TouchEnabled"):Connect(fitMobileUI)
-    if workspace.CurrentCamera then
-        workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(fitMobileUI)
-    end
-end
--- ===== END PATCH =====
