@@ -22,9 +22,6 @@ local Window = Library:CreateWindow({
 local Tabs = {
     Main = Window:AddTab("Main", "crosshair"),
     Combat = Window:AddTab("Combat", "sword"),
-    Character = Window:AddTab("Character", "user"),
-    Visuals = Window:AddTab("Visuals", "eye"),
-    World = Window:AddTab("World", "globe"),
     Misc = Window:AddTab("Misc", "settings"),
     ["UI Settings"] = Window:AddTab("UI Settings", "palette"),
 }
@@ -686,123 +683,6 @@ local function applyAllMods()
     applyNoFlash()
 end
 
--- =============================================
--- SILENT AIM (từ InstanceSource.lua.txt)
--- =============================================
-local silentAim = {
-    enabled = false,
-    hitPart = "Head",
-    fovRadius = 100,
-    autoShoot = false,
-    followMuzzle = false,
-    hitChance = 100,
-}
-
-local HPlist = {"Head","HumanoidRootPart","Torso","UpperTorso","LowerTorso","Left Arm","LeftHand","LeftLowerArm","LeftUpperArm","Right Arm","RightHand","RightLowerArm","RightUpperArm","Left Leg","LeftFoot","LeftLowerLeg","LeftUpperLeg","Right Leg","RightFoot","RightLowerLeg","RightUpperLeg","Neck","Back","Front","Closest","Random"}
-
-local silentFOVCfg = {
-    OutlineColor1 = Color3.fromRGB(255,255,255),
-    OutlineColor2 = Color3.fromRGB(255,255,255),
-    OutlineRotation = 0,
-    OutlineThickness = 1.5,
-    OutlineTransparency = 0,
-    FilledEnabled = false,
-    FilledColor1 = Color3.fromRGB(255,255,255),
-    FilledColor2 = Color3.fromRGB(0,0,0),
-    FilledRotation = 0,
-    FilledTransparency = 0.7,
-    FilledAnimated = false,
-    FilledSpeed = 1,
-    SpinOn = false,
-    SpinSpd = 1,
-}
-
-local fovScreenGui = Instance.new("ScreenGui")
-fovScreenGui.Name = "FOVScreenGui"
-fovScreenGui.DisplayOrder = 10
-fovScreenGui.ResetOnSpawn = false
-fovScreenGui.IgnoreGuiInset = true
-fovScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-fovScreenGui.Parent = game.CoreGui
-
-local function buildfov(name, cfg)
-    local container = Instance.new("Frame")
-    container.Name = name
-    container.BackgroundTransparency = 1
-    container.BorderSizePixel = 0
-    container.Visible = false
-    container.Parent = fovScreenGui
-
-    local fill = Instance.new("Frame")
-    fill.Size = UDim2.new(1,0,1,0)
-    fill.BackgroundColor3 = Color3.new(1,1,1)
-    fill.BackgroundTransparency = cfg.FilledTransparency
-    fill.BorderSizePixel = 0
-    fill.Visible = false
-    fill.ZIndex = 1
-    fill.Parent = container
-
-    local fillCorner = Instance.new("UICorner")
-    fillCorner.CornerRadius = UDim.new(1,0)
-    fillCorner.Parent = fill
-
-    local fillgrad = Instance.new("UIGradient")
-    fillgrad.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, cfg.FilledColor1),
-        ColorSequenceKeypoint.new(1, cfg.FilledColor2),
-    })
-    fillgrad.Rotation = cfg.FilledRotation
-    fillgrad.Parent = fill
-
-    local outline = Instance.new("Frame")
-    outline.Size = UDim2.new(1,0,1,0)
-    outline.BackgroundTransparency = 1
-    outline.BorderSizePixel = 0
-    outline.ZIndex = 2
-    outline.Parent = container
-
-    local outlineCorner = Instance.new("UICorner")
-    outlineCorner.CornerRadius = UDim.new(1,0)
-    outlineCorner.Parent = outline
-
-    local stroke = Instance.new("UIStroke")
-    stroke.Color = Color3.new(1,1,1)
-    stroke.Thickness = cfg.OutlineThickness
-    stroke.Transparency = cfg.OutlineTransparency
-    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    stroke.Parent = outline
-
-    local strokegrad = Instance.new("UIGradient")
-    strokegrad.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, cfg.OutlineColor1),
-        ColorSequenceKeypoint.new(1, cfg.OutlineColor2),
-    })
-    strokegrad.Rotation = cfg.OutlineRotation
-    strokegrad.Parent = stroke
-
-    return {container=container, fill=fill, fillgrad=fillgrad, stroke=stroke, strokegrad=strokegrad}
-end
-
-local sFOV = buildfov("SilentFOV", silentFOVCfg)
-local silentFOVContainer = sFOV.container
-local silentFOVFill = sFOV.fill
-local silentFOVFillGrad = sFOV.fillgrad
-local silentFOVStroke = sFOV.stroke
-local silentFOVStrokeGrad = sFOV.strokegrad
-
-local function silentlinegrad()
-    silentFOVStrokeGrad.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, silentFOVCfg.OutlineColor1),
-        ColorSequenceKeypoint.new(1, silentFOVCfg.OutlineColor2),
-    })
-end
-local function updsilentgrad()
-    silentFOVFillGrad.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, silentFOVCfg.FilledColor1),
-        ColorSequenceKeypoint.new(1, silentFOVCfg.FilledColor2),
-    })
-end
-
 local Utility = safeRequire(ReplicatedStorage.Modules.Utility)
 local EnumLibrary = safeRequire(ReplicatedStorage.Modules.EnumLibrary)
 local localFighter = nil
@@ -830,6 +710,17 @@ end
 
 local fighter = getFighterController()
 if fighter then localFighter = fighter.LocalFighter end
+
+local HPlist = {"Head","HumanoidRootPart","Torso","UpperTorso","LowerTorso","Left Arm","LeftHand","LeftLowerArm","LeftUpperArm","Right Arm","RightHand","RightLowerArm","RightUpperArm","Left Leg","LeftFoot","LeftLowerLeg","LeftUpperLeg","Right Leg","RightFoot","RightLowerLeg","RightUpperLeg","Neck","Back","Front","Closest","Random"}
+
+local silentAim = {
+    enabled = false,
+    hitPart = "Head",
+    fovRadius = 100,
+    autoShoot = false,
+    followMuzzle = false,
+    hitChance = 100,
+}
 
 local function weaponstricted(weaponName)
     local restricted = {"Flamethrower","Fists","Battle Axe","Chainsaw","Katana","Knife","Riot Shield","Scythe","Maul","Trowel","Grenade","Flashbang","Jump Pad","Molotov","Satchel","Smoke Grenade","War Horn","Medkit","Subspace Tripmine","Warpstone"}
@@ -888,7 +779,7 @@ end
 
 local function screenCenter()
     local cam = Workspace.CurrentCamera
-    return cam.ViewportSize/2
+    return cam.ViewportSize / 2
 end
 
 local function silentfovcenter()
@@ -950,7 +841,8 @@ local function closestplayerinfov(radius)
                         local dy = sp.Y - center.Y
                         local dist = math.sqrt(dx*dx + dy*dy)
                         if dist <= radius and dist < bestDist then
-                            best = char; bestDist = dist
+                            best = char
+                            bestDist = dist
                         end
                     end
                 end
@@ -963,7 +855,7 @@ end
 local function shouldHitTarget()
     if silentAim.hitChance >= 100 then return true end
     if silentAim.hitChance <= 0 then return false end
-    return math.random(1,100) <= silentAim.hitChance
+    return math.random(1, 100) <= silentAim.hitChance
 end
 
 local function firesilent()
@@ -1002,208 +894,28 @@ local function firesilent()
     end)
 end
 
+local clickRequest = false
+
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        clickRequest = true
+    end
+end)
+
 RunService.Heartbeat:Connect(function()
     if silentAim.enabled then
-        if silentAim.autoShoot or UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+        if silentAim.autoShoot then
             firesilent()
+        elseif clickRequest then
+            firesilent()
+            clickRequest = false
         end
     end
 end)
 
--- Silent Aim UI (đặt vào Combat tab, bên trái sau Aimbot)
-local silentTabbox = Tabs.Combat:AddLeftTabbox()
-local silentTab = silentTabbox:AddTab("Silent Aim")
-local silentCustomTab = silentTabbox:AddTab("Customization")
-
-silentTab:AddToggle("SilentAimEnabled", {
-    Text = "enable",
-    Default = false,
-    Callback = function(v)
-        silentAim.enabled = v
-        if not v then curtarget = nil end
-    end
-}):AddKeyPicker("SilentAimKey", {
-    Text = "Silent Aim",
-    Default = "None",
-    Mode = "Toggle",
-    NoUI = true,
-    SyncToggleState = false,
-    Callback = function(state)
-        silentAim.enabled = state
-        if not state then curtarget = nil end
-    end
-})
-
-silentTab:AddToggle("SilentAutoShoot", {
-    Text = "auto shoot",
-    Default = false,
-    Callback = function(v) silentAim.autoShoot = v end
-})
-
-silentTab:AddSlider("SilentHitChance", {
-    Text = "hit chance",
-    Default = 100,
-    Min = 0,
-    Max = 100,
-    Rounding = 0,
-    Compact = true,
-    Callback = function(v) silentAim.hitChance = v end
-})
-
-silentTab:AddDropdown("SilentHitPart", {
-    Text = "hit part",
-    Default = "Head",
-    Values = HPlist,
-    Callback = function(v) silentAim.hitPart = v end
-})
-
-silentTab:AddSlider("SilentFOVRadius", {
-    Text = "fov radius",
-    Default = 100,
-    Min = 10,
-    Max = 750,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(v) silentAim.fovRadius = v end
-})
-
-silentCustomTab:AddToggle("SilentShowFOV", {
-    Text = "show fov",
-    Default = false,
-    Callback = function(v) silentFOVContainer.Visible = v end
-}):AddColorPicker("SilentFOVColor1", {
-    Default = Color3.fromRGB(255,255,255),
-    Title = "outline color 1",
-    Callback = function(v) silentFOVCfg.OutlineColor1 = v; silentlinegrad() end
-}):AddColorPicker("SilentFOVColor2", {
-    Default = Color3.fromRGB(255,255,255),
-    Title = "outline color 2",
-    Callback = function(v) silentFOVCfg.OutlineColor2 = v; silentlinegrad() end
-})
-
-silentCustomTab:AddToggle("SilentFOVFilled", {
-    Text = "fov fill",
-    Default = false,
-    Callback = function(v) silentFOVCfg.FilledEnabled = v; silentFOVFill.Visible = v end
-}):AddColorPicker("SilentFOVFillColor1", {
-    Default = Color3.fromRGB(255,255,255),
-    Title = "fill color 1",
-    Callback = function(v) silentFOVCfg.FilledColor1 = v; updsilentgrad() end
-}):AddColorPicker("SilentFOVFillColor2", {
-    Default = Color3.fromRGB(0,0,0),
-    Title = "fill color 2",
-    Callback = function(v) silentFOVCfg.FilledColor2 = v; updsilentgrad() end
-})
-
-silentCustomTab:AddToggle("SilentFOVFillAnimated", {
-    Text = "animated fill",
-    Default = false,
-    Callback = function(v)
-        silentFOVCfg.FilledAnimated = v
-        if not v then silentFOVFillGrad.Rotation = silentFOVCfg.FilledRotation end
-    end
-})
-
-silentCustomTab:AddSlider("SilentFOVOutlineThickness", {
-    Text = "outline thickness",
-    Default = 1.5,
-    Min = 0.5,
-    Max = 5,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(v) silentFOVCfg.OutlineThickness = v; silentFOVStroke.Thickness = v end
-})
-
-silentCustomTab:AddSlider("SilentFOVOutlineTransparency", {
-    Text = "outline transparency",
-    Default = 0,
-    Min = 0,
-    Max = 1,
-    Rounding = 2,
-    Compact = true,
-    Callback = function(v) silentFOVCfg.OutlineTransparency = v; silentFOVStroke.Transparency = v end
-})
-
-silentCustomTab:AddSlider("SilentFOVOutlineRotation", {
-    Text = "outline rotation",
-    Default = 0,
-    Min = 0,
-    Max = 360,
-    Rounding = 0,
-    Compact = true,
-    Callback = function(v) silentFOVCfg.OutlineRotation = v; silentFOVStrokeGrad.Rotation = v end
-})
-
-silentCustomTab:AddSlider("SilentFOVFillTransparency", {
-    Text = "fill transparency",
-    Default = 0.7,
-    Min = 0,
-    Max = 1,
-    Rounding = 2,
-    Compact = true,
-    Callback = function(v) silentFOVCfg.FilledTransparency = v; silentFOVFill.BackgroundTransparency = v end
-})
-
-silentCustomTab:AddSlider("SilentFOVFillRotation", {
-    Text = "fill rotation",
-    Default = 0,
-    Min = 0,
-    Max = 360,
-    Rounding = 0,
-    Compact = true,
-    Callback = function(v)
-        silentFOVCfg.FilledRotation = v
-        if not silentFOVCfg.FilledAnimated then silentFOVFillGrad.Rotation = v end
-    end
-})
-
-silentCustomTab:AddSlider("SilentFOVFillSpeed", {
-    Text = "fill speed",
-    Default = 1,
-    Min = 0.1,
-    Max = 10,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(v) silentFOVCfg.FilledSpeed = v end
-})
-
-silentCustomTab:AddToggle("SilentFOVSpin", {
-    Text = "fov spin",
-    Default = false,
-    Callback = function(v)
-        silentFOVCfg.SpinOn = v
-        if not v then
-            silentFOVStrokeGrad.Rotation = silentFOVCfg.OutlineRotation
-            if not silentFOVCfg.FilledAnimated then
-                silentFOVFillGrad.Rotation = silentFOVCfg.FilledRotation
-            end
-        end
-    end
-})
-
-silentCustomTab:AddSlider("SilentFOVSpinSpd", {
-    Text = "spin speed",
-    Default = 1,
-    Min = 0.1,
-    Max = 10,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(v) silentFOVCfg.SpinSpd = v end
-})
-
-silentCustomTab:AddToggle("SilentFOVFollowMuzzle", {
-    Text = "follow muzzle",
-    Default = false,
-    Callback = function(v) silentAim.followMuzzle = v end
-})
-
--- =============================================
--- RAGEBOT (từ InstanceSource.lua.txt)
--- =============================================
 Ragebot = {}
-do
-
-local replicatedstorage = cloneref(game:GetService("ReplicatedStorage"))
+dolocal replicatedstorage = cloneref(game:GetService("ReplicatedStorage"))
 local players = cloneref(game:GetService("Players"))
 local runsvc = cloneref(game:GetService("RunService"))
 local userinput = cloneref(game:GetService("UserInputService"))
@@ -2586,24 +2298,24 @@ runsvc.RenderStepped:Connect(function()
     if shouldSuppressGameplayOverlays() then
         tracerline.Visible = false
         traceroutline.Visible = false
-        if ragebot.hideRageStatus then
-            ragebot.hideRageStatus()
+        if Ragebot.hideRageStatus then
+            Ragebot.hideRageStatus()
         end
-        if ragebot.updateHitNotifications then
-            ragebot.updateHitNotifications(0)
+        if Ragebot.updateHitNotifications then
+            Ragebot.updateHitNotifications(0)
         end
         return
     end
     local now = tick()
     local hudDt = math.clamp(now - targetHudAnimLast, 0, 0.05)
     targetHudAnimLast = now
-    if config.ragestatus and config.ragestatus.enabled and ragebot.drawStatus then
-        ragebot.drawStatus()
-    elseif ragebot.hideRageStatus then
-        ragebot.hideRageStatus()
+    if config.ragestatus and config.ragestatus.enabled and Ragebot.drawStatus then
+        Ragebot.drawStatus()
+    elseif Ragebot.hideRageStatus then
+        Ragebot.hideRageStatus()
     end
-    if ragebot.updateHitNotifications then
-        ragebot.updateHitNotifications(hudDt)
+    if Ragebot.updateHitNotifications then
+        Ragebot.updateHitNotifications(hudDt)
     end
     if config.target.enabled and config.target.character and config.prediction.enabled then
         updatevel()
@@ -2907,552 +2619,7 @@ local function togglekey()
     end
 end
 end
-end -- end Ragebot do block
-
--- ===== RAGEBOT UI =====
-local rageTargetGroup = Tabs.Combat:AddRightTabbox()
-local ragebotTab = rageTargetGroup:AddTab("Ragebot")
-local ragebotVisualTab = rageTargetGroup:AddTab("Visualizer")
-
-local hitNotifTab = rageTargetGroup:AddTab("Hit Notif")
-
-ragebotTab:AddToggle("TargetOn", {
-    Text = "enable",
-    Default = false,
-    Callback = function(val)
-        config.target.rageMasterOn = val
-        if config.target.auto then return end
-        if val then
-            local target = nearest()
-            if target then
-                config.target.manualkey = true
-                settarget(target)
-            end
-        else
-            cleartarget()
-        end
-    end
-}):AddKeyPicker("TargetKey", {
-    Text = "Ragebot",
-    Default = "None",
-    Mode = "Toggle",
-    Callback = function() togglekey() end
-})
-
-ragebotTab:AddToggle("AutoTarget", {
-    Text = "auto target",
-    Default = false,
-    Callback = function(val) config.target.auto = val end
-})
-
-local attackUnderVisGate = { Type = "Toggle", Value = false }
-local attackCustomVisGate = { Type = "Toggle", Value = false }
-
-local function syncAtkDeps()
-    local mode = config.target.attackPosition or "default"
-    local custom = config.target.attackCustomEnabled == true
-    attackUnderVisGate.Value = (mode == "under" and not custom)
-    attackCustomVisGate.Value = custom
-    if attackUnderDep and attackUnderDep.Update then attackUnderDep:Update() end
-    if attackCustomDep and attackCustomDep.Update then attackCustomDep:Update() end
 end
-
-local attackPosDropdown = ragebotTab:AddDropdown("AutoTargetAttackPos", {
-    Text = "attack position",
-    Default = "default",
-    Values = { "default", "under" },
-    Callback = function(val)
-        config.target.attackPosition = val
-        syncAtkDeps()
-        if config.state.csyncactive and Ragebot.refreshAtk then
-            Ragebot.refreshAtk()
-        end
-    end,
-})
-
-ragebotTab:AddToggle("AttackCustomOverride", {
-    Text = "attack position",
-    Default = false,
-    Tooltip = "overrides attack position dropdown when enabled",
-    Callback = function(val)
-        config.target.attackCustomEnabled = val
-        syncAtkDeps()
-        if config.state.csyncactive and Ragebot.refreshAtk then
-            Ragebot.refreshAtk()
-        end
-    end,
-})
-
-local attackUnderDep = ragebotTab:AddDependencyBox()
-attackUnderDep:AddSlider("UnderAttackOffset", {
-    Text = "under offset",
-    Default = config.target.underOffset,
-    Min = 1,
-    Max = 25,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(val)
-        config.target.underOffset = val
-        if config.target.attackPosition == "under"
-            and not config.target.attackCustomEnabled
-            and config.state.csyncactive
-            and Ragebot.refreshAtk then
-            Ragebot.refreshAtk()
-        end
-    end,
-})
-attackUnderDep:SetupDependencies({
-    { attackUnderVisGate, true },
-})
-
-local attackCustomDep = ragebotTab:AddDependencyBox()
-local function onAtkCustom()
-    if config.target.attackCustomEnabled and config.state.csyncactive and Ragebot.refreshAtk then
-        Ragebot.refreshAtk()
-    end
-end
-attackCustomDep:AddSlider("CustomAttackHeight", {
-    Text = "orbit height",
-    Default = config.target.customHeight,
-    Min = -25,
-    Max = 30,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(val)
-        config.target.customHeight = val
-        onAtkCustom()
-    end,
-})
-attackCustomDep:AddSlider("CustomAttackFront", {
-    Text = "front offset",
-    Default = config.target.customFront,
-    Min = -20,
-    Max = 20,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(val)
-        config.target.customFront = val
-        onAtkCustom()
-    end,
-})
-attackCustomDep:AddSlider("CustomAttackSide", {
-    Text = "side offset",
-    Default = config.target.customSide,
-    Min = -20,
-    Max = 20,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(val)
-        config.target.customSide = val
-        onAtkCustom()
-    end,
-})
-attackCustomDep:AddSlider("CustomAttackVertical", {
-    Text = "vertical offset",
-    Default = config.target.customVertical,
-    Min = -25,
-    Max = 30,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(val)
-        config.target.customVertical = val
-        onAtkCustom()
-    end,
-})
-attackCustomDep:AddSlider("CustomAttackRadius", {
-    Text = "orbit radius",
-    Default = config.target.customRadius,
-    Min = 0,
-    Max = 25,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(val)
-        config.target.customRadius = val
-        onAtkCustom()
-    end,
-})
-attackCustomDep:SetupDependencies({
-    { attackCustomVisGate, true },
-})
-syncAtkDeps()
-task.defer(syncAtkDeps)
-
-ragebotTab:AddDropdown("RageWeaponPick", {
-    Text = "weapon",
-    Default = config.target.weaponPick or "primary",
-    Values = { "primary", "secondary", "melee" },
-    Callback = function(val)
-        config.target.weaponPick = val
-        if config.state.csyncactive and Ragebot.refreshAtk then
-            Ragebot.refreshAtk()
-        end
-        if Ragebot.eqSlot then
-            Ragebot.eqSlot()
-        end
-    end,
-})
-
-ragebotTab:AddSlider("ShootAttempts", {
-    Text = "shoot attempts",
-    Default = 1,
-    Min = 1,
-    Max = 3,
-    Rounding = 0,
-    Suffix = "x",
-    Callback = function(val)
-        config.target.shootAttempts = math.clamp(math.floor(tonumber(val) or 1), 1, 3)
-    end,
-})
-
-ragebotTab:AddDropdown("TargetPart", {
-    Text = "hit part",
-    Default = "Head",
-    Values = {"Head", "HumanoidRootPart", "Torso", "UpperTorso", "Closest", "Random"},
-    Callback = function(val) config.target.hitpart = val end
-})
-
-ragebotTab:AddToggle("PredictT", {
-    Text = "prediction",
-    Default = false,
-    Callback = function(val) config.prediction.enabled = val end
-})
-
-ragebotTab:AddSlider("PredictMul", {
-    Text = "prediction mult",
-    Default = 1.2,
-    Min = 0.1,
-    Max = 10,
-    Rounding = 0.1,
-    Callback = function(val) config.prediction.multiplier = val end
-})
-
-ragebotTab:AddToggle("VoidSpam", {
-    Text = "voidspam",
-    Default = false,
-    Callback = function(val)
-        config.voidspam.enabled = val
-        if val then
-            if config.target.immune then
-                config.voidspam.phase = nil
-                return
-            end
-            if isSling(getweapon()) then
-                config.voidspam.lastswitch = tick()
-                config.voidspam.phase = "shoot"
-                config.voidspam.currentduration = randVs(config.voidspam.shoot_min, config.voidspam.shoot_max)
-            else
-                config.voidspam.phase = nil
-            end
-        else
-            config.voidspam.phase = nil
-            if Ragebot.clrVoidSnap then
-                Ragebot.clrVoidSnap()
-            end
-        end
-    end
-})
-
-ragebotTab:AddDualSlider('VoidShootTime', 'VoidHideTime', {
-    Default = 0.5,
-    Text = "attack",
-    Min = 0,
-    Max = 2,
-    Rounding = 0.1,
-    Compact = true,
-    Callback = function(val)
-        val = clampVs(val)
-        config.voidspam.shoot_min = val
-        config.voidspam.shoot_max = val
-    end
-}, {
-    Default = 0.5,
-    Text = "hide",
-    Min = 0,
-    Max = 1,
-    Rounding = 0.1,
-    Compact = true,
-    Callback = function(val)
-        val = clampVs(val)
-        config.voidspam.hide_min = val
-        config.voidspam.hide_max = val
-    end
-})
-
-local rageStatusToggle = ragebotVisualTab:AddToggle("RageStatus", {
-    Text = "rage status",
-    Default = config.ragestatus.enabled,
-    Callback = function(val)
-        config.ragestatus.enabled = val
-        if val then
-            if Ragebot.drawStatus then
-                Ragebot.drawStatus()
-            end
-        else
-            if Ragebot.hideRageStatus then
-                Ragebot.hideRageStatus()
-            end
-        end
-    end,
-}):AddColorPicker("RageStatusColor", {
-    Title = "text color",
-    Default = config.ragestatus.color,
-    Callback = function(val)
-        config.ragestatus.color = val
-        if Ragebot.ragePerf then
-            Ragebot.ragePerf.lastRageColor = nil
-        end
-    end,
-})
-
-local rageStatusDep = ragebotVisualTab:AddDependencyBox()
-rageStatusDep:SetupDependencies({
-    { rageStatusToggle, true },
-})
-rageStatusDep:AddDropdown("RageStatusMode", {
-    Text = "position",
-    Default = "static",
-    Values = { "static", "muzzle" },
-    Callback = function(val)
-        config.ragestatus.mode = val
-    end,
-})
-rageStatusDep:AddSlider("RageStatusStaticX", {
-    Text = "static x",
-    Default = config.ragestatus.staticOffsetX,
-    Min = -500,
-    Max = 500,
-    Rounding = 0,
-    Compact = true,
-    Callback = function(val)
-        config.ragestatus.staticOffsetX = val
-    end,
-})
-rageStatusDep:AddSlider("RageStatusStaticY", {
-    Text = "static y",
-    Default = config.ragestatus.staticOffsetY,
-    Min = -500,
-    Max = 500,
-    Rounding = 0,
-    Compact = true,
-    Callback = function(val)
-        config.ragestatus.staticOffsetY = val
-    end,
-})
-rageStatusDep:AddToggle("RageStatusAmmo", {
-    Text = "show ammo line",
-    Default = true,
-    Callback = function(val)
-        config.ragestatus.showAmmo = val
-    end,
-})
-rageStatusDep:AddToggle("RageStatusReloadHide", {
-    Text = "hide while reloading",
-    Default = true,
-    Callback = function(val)
-        config.ragestatus.hideOnReload = val
-    end,
-})
-
-ragebotVisualTab:AddToggle("VisEnabled", {
-    Text = "enable",
-    Default = false,
-    Callback = function(val) config.visualizer.enabled = val end
-})
-
-ragebotVisualTab:AddToggle("VisTracerEnabled", {
-    Text = "tracer",
-    Default = false,
-    Callback = function(val) config.visualizer.tracer.enabled = val end
-}):AddColorPicker("VisTracerColor", {
-    Default = config.visualizer.tracer.color,
-    Callback = function(val) config.visualizer.tracer.color = val end
-})
-
-ragebotVisualTab:AddDropdown("VisTracerStart", {
-    Text = "tracer start",
-    Default = "cursor",
-    Values = {"cursor", "muzzle"},
-    Callback = function(val) config.visualizer.tracer.start_point = val end
-})
-
-ragebotVisualTab:AddToggle("VisTracerOutline", {
-    Text = "tracer outline",
-    Default = true,
-    Callback = function(val) config.visualizer.tracer.outline = val end
-})
-
-ragebotVisualTab:AddSlider("VisTracerThickness", {
-    Text = "tracer thickness",
-    Default = 1,
-    Min = 0.1,
-    Max = 3,
-    Rounding = 1,
-    Callback = function(val) config.visualizer.tracer.thickness = val end
-})
-
--- Hit Notifications (từ ragebot)
-local rbHitCfg = config.hitNotifications
-
-local hitNotificationsToggle = hitNotifTab:AddToggle('HitNotifications', {
-    Text = 'hit notifications',
-    Default = false,
-    Callback = function(val)
-        rbHitCfg.enabled = val
-        if not val and Ragebot.clearHitNotifications then
-            Ragebot.clearHitNotifications()
-        end
-    end
-}):AddColorPicker('HitNotificationsColor', {
-    Default = rbHitCfg.color,
-    Title = 'text color',
-    Callback = function(val)
-        rbHitCfg.color = val
-    end
-})
-
-local hitNotifDepBox = hitNotifTab:AddDependencyBox()
-hitNotifDepBox:AddSlider('HitNotifDuration', {
-    Text = 'duration',
-    Default = rbHitCfg.duration,
-    Min = 1,
-    Max = 8,
-    Rounding = 1,
-    Compact = true,
-    Suffix = 's',
-    Callback = function(val)
-        rbHitCfg.duration = val
-    end
-})
-hitNotifDepBox:AddSlider('HitNotifTextSize', {
-    Text = 'text size',
-    Default = rbHitCfg.textSize,
-    Min = 10,
-    Max = 24,
-    Rounding = 0,
-    Compact = true,
-    Callback = function(val)
-        rbHitCfg.textSize = val
-    end
-})
-hitNotifDepBox:AddSlider('HitNotifMaxVisible', {
-    Text = 'max on screen',
-    Default = rbHitCfg.maxVisible,
-    Min = 1,
-    Max = 25,
-    Rounding = 0,
-    Compact = true,
-    Callback = function(val)
-        rbHitCfg.maxVisible = math.clamp(val, 1, 25)
-    end
-})
-local hitNotifPositionDropdown = hitNotifDepBox:AddDropdown('HitNotifPosition', {
-    Text = 'position',
-    Default = rbHitCfg.position or 'Top Left',
-    Values = {
-        'Top Left', 'Top Center', 'Top Right',
-        'Center Left', 'Center', 'Center Right',
-        'Bottom Left', 'Bottom Center', 'Bottom Right',
-        'Custom',
-    },
-    Callback = function(val)
-        rbHitCfg.position = val
-        if Ragebot.applyHitNotifRootPosition then
-            Ragebot.applyHitNotifRootPosition()
-        end
-        if Library.UpdateDependencyBoxes then
-            Library:UpdateDependencyBoxes()
-        end
-    end
-})
-
-local hitNotifPosDepBox = hitNotifDepBox:AddDependencyBox()
-hitNotifPosDepBox:AddSlider('HitNotifOffsetX', {
-    Text = 'custom x',
-    Default = rbHitCfg.offsetX,
-    Min = 0,
-    Max = 1200,
-    Rounding = 0,
-    Compact = true,
-    Callback = function(val)
-        rbHitCfg.offsetX = val
-        if Ragebot.applyHitNotifRootPosition then
-            Ragebot.applyHitNotifRootPosition()
-        end
-    end
-})
-hitNotifPosDepBox:AddSlider('HitNotifOffsetY', {
-    Text = 'custom y',
-    Default = rbHitCfg.offsetY,
-    Min = 0,
-    Max = 800,
-    Rounding = 0,
-    Compact = true,
-    Callback = function(val)
-        rbHitCfg.offsetY = val
-        if Ragebot.applyHitNotifRootPosition then
-            Ragebot.applyHitNotifRootPosition()
-        end
-    end
-})
-hitNotifPosDepBox:SetupDependencies({
-    { hitNotifPositionDropdown, 'Custom' },
-})
-
-hitNotifDepBox:AddSlider('HitNotifStackGap', {
-    Text = 'stack gap',
-    Default = rbHitCfg.stackGap,
-    Min = 2,
-    Max = 24,
-    Rounding = 0,
-    Compact = true,
-    Callback = function(val)
-        rbHitCfg.stackGap = val
-    end
-})
-local hitNotifAnimStyles = {"fade", "slide left", "slide right", "slide down", "bounce", "fade bounce", "scale"}
-hitNotifDepBox:AddDropdown('HitNotifInAnim', {
-    Text = 'in animation',
-    Default = rbHitCfg.inAnimation,
-    Values = hitNotifAnimStyles,
-    Callback = function(val)
-        rbHitCfg.inAnimation = val
-    end
-})
-hitNotifDepBox:AddDropdown('HitNotifOutAnim', {
-    Text = 'out animation',
-    Default = rbHitCfg.outAnimation,
-    Values = hitNotifAnimStyles,
-    Callback = function(val)
-        rbHitCfg.outAnimation = val
-    end
-})
-hitNotifDepBox:AddSlider('HitNotifInSpeed', {
-    Text = 'in speed',
-    Default = rbHitCfg.animInDuration,
-    Min = 0.15,
-    Max = 1.5,
-    Rounding = 2,
-    Compact = true,
-    Suffix = 's',
-    Callback = function(val)
-        rbHitCfg.animInDuration = val
-    end
-})
-hitNotifDepBox:AddSlider('HitNotifOutSpeed', {
-    Text = 'out speed',
-    Default = rbHitCfg.animOutDuration,
-    Min = 0.15,
-    Max = 1.5,
-    Rounding = 2,
-    Compact = true,
-    Suffix = 's',
-    Callback = function(val)
-        rbHitCfg.animOutDuration = val
-    end
-})
-hitNotifDepBox:SetupDependencies({
-    { hitNotificationsToggle, true }
-})
 
 local LeftGroupBox = Tabs.Main:AddLeftGroupbox("Aimbot", "crosshair")
 LeftGroupBox:AddToggle("AimbotEnabled", {
@@ -3474,15 +2641,15 @@ LeftGroupBox:AddSlider("AimbotFOV", {
     Text = "FOV",
     Default = 360,
     Min = 1,
-    Max = 360,
-    Rounding = 1,
+    Max = 360000000,
+    Rounding = 0,
     Callback = function(v) Aimbot:setFOV(v) end
 })
 LeftGroupBox:AddSlider("AimbotMaxDist", {
     Text = "Max Distance",
     Default = 9999,
     Min = 100,
-    Max = 9999999999999,
+    Max = 99999999999999,
     Rounding = 0,
     Callback = function(v) Aimbot:setMaxDist(v) end
 })
@@ -3490,8 +2657,8 @@ LeftGroupBox:AddSlider("AimbotPrediction", {
     Text = "Prediction",
     Default = 0,
     Min = 0,
-    Max = 1,
-    Rounding = 0.1,
+    Max = 3,
+    Rounding = 1,
     Callback = function(v) Aimbot:setPrediction(v) end
 })
 LeftGroupBox:AddSlider("AimbotSmoothing", {
@@ -3532,7 +2699,7 @@ RightGroupBox:AddSlider("UndergroundDepth", {
     Text = "Depth",
     Default = 2.5,
     Min = 2.5,
-    Max = 30,
+    Max = 50,
     Rounding = 1,
     Suffix = " studs",
     Callback = function(v)
@@ -3682,6 +2849,190 @@ DeviceGroup:AddDropdown("DeviceType", {
         ModSettings.DeviceType = v
         if ModSettings.DeviceSpoof then applyDeviceSpoof() end
     end
+})
+
+local RageGroupBox = Tabs.Combat:AddLeftGroupbox("Ragebot", "sword")
+RageGroupBox:AddToggle("RagebotEnabled", {
+    Text = "Enable Ragebot",
+    Default = false,
+    Callback = function(v)
+        Ragebot.enabled = v
+        Ragebot.config.target.rageMasterOn = v
+        Ragebot.config.target.auto = v
+        Ragebot.config.target.autoshoot = v
+        if v then
+            Ragebot.config.voidspam.enabled = true
+            local target = Ragebot.nearest()
+            if target then
+                Ragebot.settarget(target)
+            end
+        else
+            Ragebot.config.voidspam.enabled = false
+            Ragebot.cleartarget()
+        end
+    end
+})-
+RageGroupBox:AddDropdown("RagebotWeapon", {
+    Text = "Weapon Slot",
+    Values = {"primary", "secondary", "melee"},
+    Default = 1,
+    Callback = function(v)
+        Ragebot.config.target.weaponPick = v
+    end
+})
+RageGroupBox:AddSlider("RagebotHide", {
+    Text = "Hide",
+    Default = 0.5,
+    Min = 0,
+    Max = 1,
+    Rounding = 0.1,
+    Callback = function(v)
+        if v == 0 then
+            Ragebot.config.voidspam.hide_min = 0.1
+            Ragebot.config.voidspam.hide_max = 0.1
+        else
+            Ragebot.config.voidspam.hide_min = v - 0.25
+            Ragebot.config.voidspam.hide_max = v + 0.25
+        end
+        Ragebot.config.voidspam.enabled = true
+    end
+})
+RageGroupBox:AddSlider("RagebotAttack", {
+    Text = "Attack",
+    Default = 1,
+    Min = 0,
+    Max = 2,
+    Rounding = 0.1,
+    Callback = function(v)
+        if v == 0 then
+            Ragebot.config.voidspam.shoot_min = 0.1
+            Ragebot.config.voidspam.shoot_max = 0.1
+        else
+            Ragebot.config.voidspam.shoot_min = v - 0.25
+            Ragebot.config.voidspam.shoot_max = v + 0.25
+        end
+        Ragebot.config.voidspam.enabled = true
+    end
+})
+
+local SilentGroupBox = Tabs.Combat:AddLeftGroupbox("Silent Aim", "target")
+SilentGroupBox:AddToggle("SilentAimEnabled", {
+    Text = "Enable Silent Aim",
+    Default = false,
+    Callback = function(v)
+        silentAim.enabled = v
+        if not v then curtarget = nil end
+    end
+}):AddKeyPicker("SilentAimKey", {
+    Text = "Silent Aim",
+    Default = "None",
+    Mode = "Toggle",
+    NoUI = true,
+    SyncToggleState = false,
+    Callback = function(state)
+        silentAim.enabled = state
+        if not state then curtarget = nil end
+    end
+})
+SilentGroupBox:AddToggle("SilentAutoShoot", {
+    Text = "Auto Shoot",
+    Default = false,
+    Callback = function(v) silentAim.autoShoot = v end
+})
+SilentGroupBox:AddSlider("SilentHitChance", {
+    Text = "Hit Chance",
+    Default = 100,
+    Min = 0,
+    Max = 100,
+    Rounding = 0,
+    Compact = true,
+    Callback = function(v) silentAim.hitChance = v end
+})
+SilentGroupBox:AddDropdown("SilentHitPart", {
+    Text = "Hit Part",
+    Default = "Head",
+    Values = HPlist,
+    Callback = function(v) silentAim.hitPart = v end
+})
+SilentGroupBox:AddSlider("SilentFOVRadius", {
+    Text = "FOV Radius",
+    Default = 100,
+    Min = 10,
+    Max = 750,
+    Rounding = 1,
+    Compact = true,
+    Callback = function(v) silentAim.fovRadius = v end
+})
+SilentGroupBox:AddToggle("SilentFollowMuzzle", {
+    Text = "Follow Muzzle",
+    Default = false,
+    Callback = function(v) silentAim.followMuzzle = v end
+})
+
+local ModsGroupBox = Tabs.Combat:AddLeftGroupbox("Gun Mods", "gun")
+ModsGroupBox:AddToggle("NoCooldown", {
+    Text = "Rapid Fire",
+    Default = false,
+    Callback = function(v)
+        ModSettings.RapidFire = v
+        if v then applyRapidFire() end
+    end
+})
+ModsGroupBox:AddToggle("NoSpread", {
+    Text = "No Spread",
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoSpread = v
+        if v then applyNoSpread() end
+    end
+})
+ModsGroupBox:AddToggle("NoRecoil", {
+    Text = "No Recoil",
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoRecoil = v
+        if v then applyNoRecoil() end
+    end
+})
+ModsGroupBox:AddToggle("MaxAccuracy", {
+    Text = "Max Accuracy",
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoSpread = v
+        if v then applyNoSpread() end
+    end
+})
+ModsGroupBox:AddToggle("RapidAttack", {
+    Text = "Rapid Attack",
+    Default = false,
+    Callback = function(v)
+        ModSettings.RapidFire = v
+        if v then applyRapidFire() end
+    end
+})
+ModsGroupBox:AddToggle("NoMuzzleFlash", {
+    Text = "No Muzzle Flash",
+    Default = false,
+    Callback = function(v) end
+})
+
+local MiscGroupBox = Tabs.Combat:AddLeftGroupbox("Misc Combat", "settings")
+MiscGroupBox:AddToggle("AntiKatana", {
+    Text = "Anti Katana",
+    Default = false,
+    Callback = function(v) antikatana = v end
+})
+MiscGroupBox:AddToggle("BackshootToggle", {
+    Text = "Backshoot",
+    Default = false,
+    Callback = function(v) end
+}):AddKeyPicker("SelectTargetKey", {
+    Text = "Backshoot",
+    Default = "None",
+    Mode = "Toggle",
+    NoUI = true,
+    SyncToggleState = false,
+    Callback = function(state) end
 })
 
 ThemeManager:SetLibrary(Library)
