@@ -33,6 +33,9 @@ local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local lp = Players.LocalPlayer
 
+local antikatana = false
+local curtarget = nil
+
 local function safeRequire(obj)
     local success, res = pcall(require, obj)
     if success then return res end
@@ -385,7 +388,21 @@ function stopVoidSpam()
     voidFirstRun = true
 end
 
-local ModSettings = {}
+local ModSettings = {
+    NoMeleeAnimation = false,
+    NoDashCooldown = false,
+    NoMeleeCooldown = false,
+    NoShootAnimation = false,
+    NoEquipAnimation = false,
+    InstantADS = false,
+    RapidFire = false,
+    NoSpread = false,
+    NoSmoke = false,
+    NoRecoil = false,
+    DeviceSpoof = false,
+    DeviceType = "VR",
+    NoFlash = false,
+}
 
 local function applyMeleeAnimation()
     if ModSettings.NoMeleeAnimation then
@@ -584,6 +601,7 @@ local function applyNoSpread()
         task.spawn(function()
             local ok, GameplayUtility = pcall(function() return require(ReplicatedStorage.Modules.GameplayUtility) end)
             if ok and GameplayUtility then
+                local old = GameplayUtility.GetSpread
                 GameplayUtility.GetSpread = function() return CFrame.identity end
             end
             local FighterController = require(lp.PlayerScripts.Controllers.FighterController)
@@ -607,6 +625,7 @@ local function applyNoSmoke()
         task.spawn(function()
             local ok, SmokeScreen = pcall(function() return require(lp.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.FighterInterface.SmokeScreen) end)
             if ok and SmokeScreen and SmokeScreen.Update then
+                local old = SmokeScreen.Update
                 SmokeScreen.Update = function(self)
                     self._smoke_cloud_spring.Target = 0
                     self._smoke_cloud_cover.Transparency = 1
@@ -616,6 +635,7 @@ local function applyNoSmoke()
             end
             local ok2, SmokeCloud = pcall(function() return require(lp.PlayerScripts.Modules.SmokeCloud) end)
             if ok2 and SmokeCloud and SmokeCloud.Update then
+                local old2 = SmokeCloud.Update
                 SmokeCloud.Update = function(self)
                     if self.Model then self.Model:Destroy() end
                     return true
@@ -644,6 +664,7 @@ local function applyDeviceSpoof()
             local controllers = lp.PlayerScripts.Controllers
             local ok, fighterController = pcall(function() return require(controllers:WaitForChild("FighterController", 10)) end)
             if ok and fighterController and fighterController._ReplicateControls then
+                local old = fighterController._ReplicateControls
                 fighterController._ReplicateControls = function(self)
                     remote:FireServer(device)
                     if not self._last_controls_replicated_time then
@@ -662,31 +683,16 @@ local function applyNoFlash()
         task.spawn(function()
             local ok, Flashed = pcall(function() return require(lp.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.FighterInterface.Flashed) end)
             if ok and Flashed and Flashed.Flash then
+                local old = Flashed.Flash
                 Flashed.Flash = function() return end
             end
         end)
     end
 end
 
-local function applyAllMods()
-    applyMeleeAnimation()
-    applyDashCooldown()
-    applyMeleeCooldown()
-    applyShootAnimation()
-    applyEquipAnimation()
-    applyInstantADS()
-    applyRapidFire()
-    applyNoSpread()
-    applyNoSmoke()
-    applyNoRecoil()
-    applyDeviceSpoof()
-    applyNoFlash()
-end
-
 local Utility = safeRequire(ReplicatedStorage.Modules.Utility)
 local EnumLibrary = safeRequire(ReplicatedStorage.Modules.EnumLibrary)
 local localFighter = nil
-local camController = nil
 
 local function getFighterController()
     local ps = lp:FindFirstChild("PlayerScripts")
@@ -697,11 +703,6 @@ local function getFighterController()
             if fc then
                 local ok, res = pcall(require, fc)
                 if ok then return res end
-            end
-            local cc = ctrl:FindFirstChild("CameraController")
-            if cc then
-                local ok, res = pcall(require, cc)
-                if ok then camController = res end
             end
         end
     end
@@ -915,7 +916,8 @@ RunService.Heartbeat:Connect(function()
 end)
 
 Ragebot = {}
-dolocal replicatedstorage = cloneref(game:GetService("ReplicatedStorage"))
+do
+local replicatedstorage = cloneref(game:GetService("ReplicatedStorage"))
 local players = cloneref(game:GetService("Players"))
 local runsvc = cloneref(game:GetService("RunService"))
 local userinput = cloneref(game:GetService("UserInputService"))
@@ -1558,8 +1560,7 @@ local function nearest()
             if valid(char) then
                 local root = char:FindFirstChild("HumanoidRootPart")
                 if root then
-                    local wts = getgenv().InstanceWorldToScreen or worldToScreen
-                    local screenpos, onscreen = wts(root.Position, camera)
+                    local screenpos, onscreen = worldToScreen(root.Position)
                     if onscreen and screenpos then
                         local distance = (Vector2.new(screenpos.X, screenpos.Y) - cursorpos).Magnitude
                         if distance < bestdistance then
@@ -2871,7 +2872,7 @@ RageGroupBox:AddToggle("RagebotEnabled", {
             Ragebot.cleartarget()
         end
     end
-})-
+})
 RageGroupBox:AddDropdown("RagebotWeapon", {
     Text = "Weapon Slot",
     Values = {"primary", "secondary", "melee"},
@@ -2891,8 +2892,8 @@ RageGroupBox:AddSlider("RagebotHide", {
             Ragebot.config.voidspam.hide_min = 0.1
             Ragebot.config.voidspam.hide_max = 0.1
         else
-            Ragebot.config.voidspam.hide_min = v - 0.25
-            Ragebot.config.voidspam.hide_max = v + 0.25
+            Ragebot.config.voidspam.hide_min = 0.1
+            Ragebot.config.voidspam.hide_max = 0.1
         end
         Ragebot.config.voidspam.enabled = true
     end
@@ -2908,8 +2909,8 @@ RageGroupBox:AddSlider("RagebotAttack", {
             Ragebot.config.voidspam.shoot_min = 0.1
             Ragebot.config.voidspam.shoot_max = 0.1
         else
-            Ragebot.config.voidspam.shoot_min = v - 0.25
-            Ragebot.config.voidspam.shoot_max = v + 0.25
+            Ragebot.config.voidspam.shoot_min = 0.1
+            Ragebot.config.voidspam.shoot_max = 0.1
         end
         Ragebot.config.voidspam.enabled = true
     end
