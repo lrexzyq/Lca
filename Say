@@ -794,7 +794,9 @@ end
 local function hitpartfromname(target, partName)
     if partName == "Closest" then
         local mypos = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
-        if not mypos then return target:FindFirstChild("Head")
+        if not mypos then
+            return target:FindFirstChild("Head")
+        end
         local closest, dist = nil, math.huge
         for _, part in pairs(target:GetChildren()) do
             if part:IsA("BasePart") then
@@ -2892,15 +2894,15 @@ RageGroupBox:AddSlider("RagebotHide", {
             Ragebot.config.voidspam.hide_min = 0.1
             Ragebot.config.voidspam.hide_max = 0.1
         else
-            Ragebot.config.voidspam.hide_min = 0.1
-            Ragebot.config.voidspam.hide_max = 0.1
+            Ragebot.config.voidspam.hide_min = v - 0.25
+            Ragebot.config.voidspam.hide_max = v + 0.25
         end
         Ragebot.config.voidspam.enabled = true
     end
 })
 RageGroupBox:AddSlider("RagebotAttack", {
     Text = "Attack",
-    Default = 1,
+    Default = 0.5,
     Min = 0,
     Max = 2,
     Rounding = 0.1,
@@ -2909,8 +2911,8 @@ RageGroupBox:AddSlider("RagebotAttack", {
             Ragebot.config.voidspam.shoot_min = 0.1
             Ragebot.config.voidspam.shoot_max = 0.1
         else
-            Ragebot.config.voidspam.shoot_min = 0.1
-            Ragebot.config.voidspam.shoot_max = 0.1
+            Ragebot.config.voidspam.shoot_min = v - 0.25
+            Ragebot.config.voidspam.shoot_max = v + 0.25
         end
         Ragebot.config.voidspam.enabled = true
     end
