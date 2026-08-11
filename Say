@@ -11,7 +11,7 @@ Library.ShowToggleFrameInKeybinds = true
 
 local Window = Library:CreateWindow({
     Title = "Skiding",
-    Footer = "phatskidslord",
+    Footer = "PhSkids",
     Icon = 95816097006870,
     Center = true,
     AutoShow = true,
@@ -21,6 +21,7 @@ local Window = Library:CreateWindow({
 
 local Tabs = {
     Main = Window:AddTab("Main", "crosshair"),
+    Bots = Window:AddTab("Bots", "target"),
     Combat = Window:AddTab("Combat", "sword"),
     Misc = Window:AddTab("Misc", "settings"),
     ["UI Settings"] = Window:AddTab("UI Settings", "palette"),
@@ -2623,6 +2624,53 @@ local function togglekey()
 end
 end
 end
+
+local TargetbotGroup = Tabs.Bots:AddLeftGroupbox("Targetbot", "target")
+TargetbotGroup:AddToggle("TargetbotEnabled", {
+    Text = "Enable Targetbot",
+    Default = false,
+})
+TargetbotGroup:AddDropdown("TargetbotMode", {
+    Values = { "Closest", "FOV", "Distance" },
+    Default = 1,
+    Text = "Target mode",
+})
+TargetbotGroup:AddSlider("TargetbotFOV", {
+    Text = "FOV",
+    Default = 100,
+    Min = 10,
+    Max = 500,
+    Rounding = 0,
+})
+
+local KnifeRageGroup = Tabs.Bots:AddLeftGroupbox("Knife Ragebot", "sword")
+KnifeRageGroup:AddToggle("KnifeRageEnabled", {
+    Text = "Enable Knife Ragebot",
+    Default = false,
+})
+KnifeRageGroup:AddDropdown("KnifeRageTarget", {
+    Values = { "Closest", "Lowest Health", "Nearest" },
+    Default = 1,
+    Text = "Target priority",
+})
+
+local RagebotGroup = Tabs.Bots:AddRightGroupbox("Ragebot", "crosshair")
+RagebotGroup:AddToggle("RagebotEnabledUI", {
+    Text = "Enable Ragebot",
+    Default = false,
+})
+RagebotGroup:AddDropdown("RagebotModeUI", {
+    Values = { "Closest", "FOV", "Distance" },
+    Default = 1,
+    Text = "Target mode",
+})
+RagebotGroup:AddSlider("RagebotFOVUI", {
+    Text = "FOV",
+    Default = 100,
+    Min = 10,
+    Max = 500,
+    Rounding = 0,
+})
 
 local LeftGroupBox = Tabs.Main:AddLeftGroupbox("Aimbot", "crosshair")
 LeftGroupBox:AddToggle("AimbotEnabled", {
