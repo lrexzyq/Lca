@@ -11,7 +11,7 @@ Library.ShowToggleFrameInKeybinds = true
 
 local Window = Library:CreateWindow({
     Title = "Skiding",
-    Footer = "PhSHs",
+    Footer = "PhSkids",
     Icon = 95816097006870,
     Center = true,
     AutoShow = true,
@@ -21,6 +21,7 @@ local Window = Library:CreateWindow({
 
 local Tabs = {
     Main = Window:AddTab("Main", "crosshair"),
+    Bots = Window:AddTab("Bots", "target"),
     Combat = Window:AddTab("Combat", "sword"),
     Misc = Window:AddTab("Misc", "settings"),
     ["UI Settings"] = Window:AddTab("UI Settings", "palette"),
@@ -2265,7 +2266,7 @@ local function updatesling()
             sling.enabled = false
             stopslingTP()
         end
-        if not Toggles.AntiAimUnderground.Value then
+        if not (Toggles.AntiAimUnderground and Toggles.AntiAimUnderground.Value) then
             if getgenv().InstanceSetUnderground then
                 getgenv().InstanceSetUnderground(false)
             end
@@ -2286,6 +2287,10 @@ local function fflag()
             setfflag("TargetTimeDelayFacctorTenths", "1")
         end)
     end
+end
+
+local function shouldSuppressGameplayOverlays()
+    return false
 end
 
 local targetHudAnimLast = tick()
@@ -2624,6 +2629,53 @@ end
 end
 end
 
+local TargetbotGroup = Tabs.Bots:AddLeftGroupbox("Targetbot", "target")
+TargetbotGroup:AddToggle("TargetbotEnabled", {
+    Text = "Enable Targetbot",
+    Default = false,
+})
+TargetbotGroup:AddDropdown("TargetbotMode", {
+    Values = { "Closest", "FOV", "Distance" },
+    Default = 1,
+    Text = "Target mode",
+})
+TargetbotGroup:AddSlider("TargetbotFOV", {
+    Text = "FOV",
+    Default = 100,
+    Min = 10,
+    Max = 500,
+    Rounding = 0,
+})
+
+local KnifeRageGroup = Tabs.Bots:AddLeftGroupbox("Knife Ragebot", "sword")
+KnifeRageGroup:AddToggle("KnifeRageEnabled", {
+    Text = "Enable Knife Ragebot",
+    Default = false,
+})
+KnifeRageGroup:AddDropdown("KnifeRageTarget", {
+    Values = { "Closest", "Lowest Health", "Nearest" },
+    Default = 1,
+    Text = "Target priority",
+})
+
+local RagebotGroup = Tabs.Bots:AddRightGroupbox("Ragebot", "crosshair")
+RagebotGroup:AddToggle("RagebotEnabledUI", {
+    Text = "Enable Ragebot",
+    Default = false,
+})
+RagebotGroup:AddDropdown("RagebotModeUI", {
+    Values = { "Closest", "FOV", "Distance" },
+    Default = 1,
+    Text = "Target mode",
+})
+RagebotGroup:AddSlider("RagebotFOVUI", {
+    Text = "FOV",
+    Default = 100,
+    Min = 10,
+    Max = 500,
+    Rounding = 0,
+})
+
 local LeftGroupBox = Tabs.Main:AddLeftGroupbox("Aimbot", "crosshair")
 LeftGroupBox:AddToggle("AimbotEnabled", {
     Text = "Enable Aimbot",
@@ -2644,7 +2696,7 @@ LeftGroupBox:AddSlider("AimbotFOV", {
     Text = "FOV",
     Default = 360,
     Min = 1,
-    Max = 360,
+    Max = 360000000,
     Rounding = 0,
     Callback = function(v) Aimbot:setFOV(v) end
 })
@@ -2652,7 +2704,7 @@ LeftGroupBox:AddSlider("AimbotMaxDist", {
     Text = "Max Distance",
     Default = 9999,
     Min = 100,
-    Max = 999999999,
+    Max = 99999999999999,
     Rounding = 0,
     Callback = function(v) Aimbot:setMaxDist(v) end
 })
@@ -2702,8 +2754,8 @@ RightGroupBox:AddSlider("UndergroundDepth", {
     Text = "Depth",
     Default = 2.5,
     Min = 2.5,
-    Max = 20,
-    Rounding = 0.1,
+    Max = 50,
+    Rounding = 1,
     Suffix = " studs",
     Callback = function(v)
         undergroundDepth = v
@@ -2854,7 +2906,7 @@ DeviceGroup:AddDropdown("DeviceType", {
     end
 })
 
-local RageGroupBox = Tabs.Main:AddRightGroupbox("Ragebot", "sword")
+local RageGroupBox = Tabs.Combat:AddLeftGroupbox("Ragebot", "sword")
 RageGroupBox:AddToggle("RagebotEnabled", {
     Text = "Enable Ragebot",
     Default = false,
@@ -2889,14 +2941,13 @@ RageGroupBox:AddSlider("RagebotHide", {
     Min = 0,
     Max = 1,
     Rounding = 0.1,
-    Compact = false,
     Callback = function(v)
         if v == 0 then
             Ragebot.config.voidspam.hide_min = 0.1
             Ragebot.config.voidspam.hide_max = 0.1
         else
-            Ragebot.config.voidspam.hide_min = math.max(0.1, v - 0.25)
-            Ragebot.config.voidspam.hide_max = math.min(1, v + 0.25)
+            Ragebot.config.voidspam.hide_min = v - 0.25
+            Ragebot.config.voidspam.hide_max = v + 0.25
         end
         Ragebot.config.voidspam.enabled = true
     end
@@ -2907,7 +2958,6 @@ RageGroupBox:AddSlider("RagebotAttack", {
     Min = 0,
     Max = 2,
     Rounding = 0.1,
-    Compact = false,
     Callback = function(v)
         if v == 0 then
             Ragebot.config.voidspam.shoot_min = 0.1
