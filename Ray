@@ -11,7 +11,7 @@ Library.ShowToggleFrameInKeybinds = true
 
 local Window = Library:CreateWindow({
     Title = "Skiding",
-    Footer = "PhSkids",
+    Footer = "PhP1001sd",
     Icon = 95816097006870,
     Center = true,
     AutoShow = true,
@@ -3074,9 +3074,9 @@ RageGroupBox:AddToggle("RagebotVoidSpam", {
     end
 })
 
-RageGroupBox:AddDualSlider("RagebotShootTime", "RagebotHideTime", {
-    Default = Ragebot.config.voidspam.shoot_min or 1,
+RageGroupBox:AddSlider("RagebotAttack", {
     Text = "Attack",
+    Default = Ragebot.config.voidspam.shoot_min or 1,
     Min = 0,
     Max = 2,
     Rounding = 1,
@@ -3086,9 +3086,11 @@ RageGroupBox:AddDualSlider("RagebotShootTime", "RagebotHideTime", {
         Ragebot.config.voidspam.shoot_min = v
         Ragebot.config.voidspam.shoot_max = v
     end
-}, {
-    Default = Ragebot.config.voidspam.hide_min or 1,
+})
+
+RageGroupBox:AddSlider("RagebotHide", {
     Text = "Hide",
+    Default = Ragebot.config.voidspam.hide_min or 1,
     Min = 0,
     Max = 2,
     Rounding = 1,
