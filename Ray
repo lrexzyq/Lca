@@ -1,0 +1,1024 @@
+import ctypes
+import hashlib
+import struct
+import sys
+
+from ctypes import wintypes, windll, byref, sizeof, c_void_p, c_size_t, POINTER
+
+NTSTATUS = ctypes.c_long
+
+PROCESS_VM_READ = 0x0010
+PROCESS_QUERY_INFORMATION = 0x0400
+
+ntdll = ctypes.WinDLL("ntdll")
+
+NtReadVirtualMemory = ntdll.NtReadVirtualMemory
+NtReadVirtualMemory.restype = NTSTATUS
+NtReadVirtualMemory.argtypes = [
+    wintypes.HANDLE, wintypes.LPVOID, wintypes.LPVOID,
+    ctypes.c_size_t, POINTER(ctypes.c_size_t),
+]
+
+MEM_COMMIT = 0x1000
+PAGE_GUARD = 0x100
+PAGE_NOACCESS = 0x01
+
+READABLE_PROTECTIONS = (0x02, 0x04, 0x08, 0x20, 0x40, 0x80)
+
+
+class MEMORY_BASIC_INFORMATION64(ctypes.Structure):
+    _fields_ = [
+        ("BaseAddress", ctypes.c_ulonglong),
+        ("AllocationBase", ctypes.c_ulonglong),
+        ("AllocationProtect", ctypes.c_ulong),
+        ("__alignment1", ctypes.c_ulong),
+        ("RegionSize", ctypes.c_ulonglong),
+        ("State", ctypes.c_ulong),
+        ("Protect", ctypes.c_ulong),
+        ("Type", ctypes.c_ulong),
+        ("__alignment2", ctypes.c_ulong),
+    ]
+
+
+# Raycast Constants
+TARGET = "Raycast"
+ANCHORS = ("FindPartOnRay", "Blockcast", "Spherecast", "Shapecast")
+MIN_ANCHORS = 2  # â† CHANGED: require at least 2 anchors instead of all 4
+FN_OFFS = (0x80, 0x78, 0x88, 0x70, 0x90, 0x68, 0x98)
+
+# FastCluster Constants
+FIELD_OFFSETS = {
+    "ContextPtr": 0x08,
+    "RenderQueueId": 0x10,
+    "AlphaByte": 0x14,
+    "MaterialPtr": 0x20,
+    "DecalMaterialPtr": 0x48,
+    "TechniqueArrayPtr": 0x70,
+    "PrimitiveIndexArrayPtr": 0x80,
+    "BBoxMinX": 0x98,
+    "BBoxMinY": 0x9C,
+    "BBoxMinZ": 0xA0,
+    "BBoxMaxX": 0xA4,
+    "BBoxMaxY": 0xA8,
+    "BBoxMaxZ": 0xAC,
+}
+TECHNIQUE_ARRAY = {"BeginOffset": 0x00, "EndOffset": 0x08, "EntryStride": 136}
+MATERIAL_LAYER = {
+    "Stride": 136,
+    "FillModeByte": 0x11,
+    "MatFlags": 0x18,
+    "Param": 0x1C,
+    "Flags2": 0x20,
+    "ColorData": 0x24,
+}
+RENDER_QUEUE_ALWAYS_ON_TOP = 13
+
+TYPE_PREFIX = b".?AVFastClusterEntity@"
+COL_TYPE_DESCRIPTOR_RVA = 0x0C
+COL_CLASS_DESCRIPTOR_RVA = 0x10
+TYPE_DESCRIPTOR_NAME_OFFSET = 0x10
+
+g_image = b""
+g_base = 0
+
+
+def q(ea):
+    offset = ea - g_base
+    if 0 <= offset <= len(g_image) - 8:
+        return struct.unpack_from("<Q", g_image, offset)[0]
+    return 0
+
+
+def cstr(ea, n=96):
+    if not ea:
+        return ""
+    offset = ea - g_base
+    if 0 <= offset < len(g_image):
+        limit = min(n, len(g_image) - offset)
+        chunk = g_image[offset : offset + limit]
+        zero_idx = chunk.find(b"\x00")
+        if zero_idx != -1:
+            chunk = chunk[:zero_idx]
+        if all(32 <= c < 127 for c in chunk):
+            try:
+                return chunk.decode('ascii')
+            except Exception:
+                pass
+    return ""
+
+
+def find_all(haystack, needle, start=0):
+    pos = haystack.find(needle, start)
+    while pos != -1:
+        yield pos
+        pos = haystack.find(needle, pos + 1)
+
+
+def parse_sections(image):
+    try:
+        if image[:2] != b"MZ":
+            return {}
+        pe = struct.unpack_from("<I", image, 0x3C)[0]
+        if image[pe:pe + 4] != b"PE\0\0":
+            return {}
+        count = struct.unpack_from("<H", image, pe + 6)[0]
+        opt_size = struct.unpack_from("<H", image, pe + 20)[0]
+        table = pe + 24 + opt_size
+        out = {}
+        for i in range(count):
+            entry = table + i * 40
+            if entry + 40 > len(image):
+                break
+            name = image[entry:entry + 8].rstrip(b"\0").decode("latin-1")
+            vsize = struct.unpack_from("<I", image, entry + 8)[0]
+            vaddr = struct.unpack_from("<I", image, entry + 12)[0]
+            characteristics = struct.unpack_from("<I", image, entry + 36)[0]
+            out[name] = {
+                "start": vaddr,
+                "end": vaddr + vsize,
+                "characteristics": characteristics
+            }
+        return out
+    except Exception:
+        return {}
+
+
+def pe_fingerprint(image):
+    try:
+        if image[:2] != b"MZ":
+            return None
+        pe = struct.unpack_from("<I", image, 0x3C)[0]
+        if image[pe:pe + 4] != b"PE\0\0":
+            return None
+        timestamp = struct.unpack_from("<I", image, pe + 8)[0]
+        opt = pe + 24
+        entry = struct.unpack_from("<I", image, opt + 0x10)[0]
+        size_of_image = struct.unpack_from("<I", image, opt + 0x38)[0]
+        checksum = struct.unpack_from("<I", image, opt + 0x40)[0]
+        blob = struct.pack("<IIII", timestamp, entry, size_of_image, checksum)
+        return {
+            "timestamp": timestamp,
+            "entry_point": entry,
+            "size_of_image": size_of_image,
+            "checksum": checksum,
+            "id": hashlib.sha256(blob).hexdigest()[:16],
+        }
+    except Exception:
+        return None
+
+
+def is_exec(ea, base, sections):
+    rva = ea - base
+    for name, info in sections.items():
+        if info["start"] <= rva < info["end"]:
+            if info["characteristics"] & 0x20000000:
+                return True
+    return False
+
+
+def bin_find_all(image, base, needle, limit=128):
+    out = []
+    start = 0
+    while len(out) < limit:
+        pos = image.find(needle, start)
+        if pos == -1:
+            break
+        va = base + pos
+        if (va & 7) == 0:
+            out.append(va)
+        start = pos + 1
+    return out
+
+
+def bin_find_all_32(image, base, needle, limit=256):
+    """Find all 4-byte aligned occurrences of a 32-bit needle."""
+    out = []
+    start = 0
+    while len(out) < limit:
+        pos = image.find(needle, start)
+        if pos == -1:
+            break
+        va = base + pos
+        if (va & 3) == 0:
+            out.append(va)
+        start = pos + 1
+    return out
+
+
+# ================= Raycast Dumper Logic =================
+
+def walk_worldroot_methods(image, base, start_ea, mode="cm", ptr_size=8):
+    """Walk method-name table entries.
+    
+    NEW: ptr_size parameter supports both:
+      - ptr_size=8: 64-bit pointer pairs (stride 16) [original]
+      - ptr_size=4: 32-bit RVA pairs (stride 8) [newer builds]
+    """
+    stride = ptr_size * 2
+    names = []
+    ea = start_ea
+
+    for _ in range(512):
+        if ptr_size == 8:
+            a = cstr(q(ea))
+            b = cstr(q(ea + 8))
+        else:
+            off = ea - base
+            if off < 0 or off + 8 > len(image):
+                break
+            a_rva = struct.unpack_from("<I", image, off)[0]
+            b_rva = struct.unpack_from("<I", image, off + 4)[0]
+            a = cstr(base + a_rva) if a_rva else ""
+            b = cstr(base + b_rva) if b_rva else ""
+
+        if mode == "cm":
+            if a != "WorldRoot" or not b:
+                break
+            names.append(b)
+        else:
+            if b != "WorldRoot" or not a:
+                break
+            names.append(a)
+        ea += stride
+
+    return names
+
+
+def find_worldroot_method_table(image, base):
+    """Find the WorldRoot method-name table.
+    
+    CHANGES from original:
+      1. Tries 64-bit pointers AND 32-bit RVAs
+      2. Searches ALL occurrences of "WorldRoot" string (not just first)
+      3. Relaxed anchor requirement (MIN_ANCHORS instead of all)
+      4. Tries scanning backwards from each hit to find table start
+    """
+    wr_positions = list(find_all(image, b"WorldRoot\x00"))
+    if not wr_positions:
+        raise RuntimeError('exact string "WorldRoot" not found')
+
+    best = None
+
+    for wr_pos in wr_positions[:8]:  # limit string occurrences
+        wr = base + wr_pos
+
+        # ---- Strategy 1: 64-bit pointer references ----
+        needle64 = struct.pack("<Q", wr)
+        hits64 = bin_find_all(image, base, needle64, limit=256)
+
+        for hit in hits64:
+            # Try walking forward from hit
+            for mode in ("cm", "mc"):
+                names = walk_worldroot_methods(image, base, hit, mode, ptr_size=8)
+                if TARGET not in names:
+                    continue
+                anchor_count = sum(1 for a in ANCHORS if a in names)
+                if anchor_count < MIN_ANCHORS:
+                    continue
+                score = (len(names), anchor_count, -hit)
+                if best is None or score > best[0]:
+                    best = (score, hit, mode, names)
+
+            # CHANGED: Also try walking backwards to find table start
+            # Sometimes the hit is in the middle of the table
+            for back_offset in range(16, 256, 16):
+                back_hit = hit - back_offset
+                if back_hit < base:
+                    break
+                for mode in ("cm", "mc"):
+                    names = walk_worldroot_methods(image, base, back_hit, mode, ptr_size=8)
+                    if TARGET not in names:
+                        continue
+                    anchor_count = sum(1 for a in ANCHORS if a in names)
+                    if anchor_count < MIN_ANCHORS:
+                        continue
+                    score = (len(names), anchor_count, -back_hit)
+                    if best is None or score > best[0]:
+                        best = (score, back_hit, mode, names)
+
+        # ---- Strategy 2: 32-bit RVA references ----
+        rva = wr - base
+        if 0 <= rva < 0x100000000:
+            needle32 = struct.pack("<I", rva)
+            hits32 = bin_find_all_32(image, base, needle32, limit=256)
+
+            for hit in hits32:
+                for mode in ("cm", "mc"):
+                    names = walk_worldroot_methods(image, base, hit, mode, ptr_size=4)
+                    if TARGET not in names:
+                        continue
+                    anchor_count = sum(1 for a in ANCHORS if a in names)
+                    if anchor_count < MIN_ANCHORS:
+                        continue
+                    score = (len(names), anchor_count, -hit)
+                    if best is None or score > best[0]:
+                        best = (score, hit, mode, names)
+
+                # Also try backwards for 32-bit
+                for back_offset in range(8, 128, 8):
+                    back_hit = hit - back_offset
+                    if back_hit < base:
+                        break
+                    for mode in ("cm", "mc"):
+                        names = walk_worldroot_methods(image, base, back_hit, mode, ptr_size=4)
+                        if TARGET not in names:
+                            continue
+                        anchor_count = sum(1 for a in ANCHORS if a in names)
+                        if anchor_count < MIN_ANCHORS:
+                            continue
+                        score = (len(names), anchor_count, -back_hit)
+                        if best is None or score > best[0]:
+                            best = (score, back_hit, mode, names)
+
+    # ---- Strategy 3: Direct string proximity scan ----
+    # If the above failed, try finding "Raycast" string and working backwards
+    if not best:
+        best = _find_method_table_by_proximity(image, base)
+
+    if not best:
+        raise RuntimeError("WorldRoot method-name table not found")
+
+    score, ea, mode, names = best
+    return ea, mode, names
+
+
+def _find_method_table_by_proximity(image, base):
+    """Fallback: find the method table by looking for Raycast string
+    references near WorldRoot string references in .rdata."""
+    raycast_positions = list(find_all(image, b"Raycast\x00"))
+    wr_positions = list(find_all(image, b"WorldRoot\x00"))
+
+    if not raycast_positions or not wr_positions:
+        return None
+
+    best = None
+
+    for rc_pos in raycast_positions[:4]:
+        rc_va = base + rc_pos
+
+        # Look for 64-bit pointers to "Raycast" string
+        needle64 = struct.pack("<Q", rc_va)
+        for rc_hit in bin_find_all(image, base, needle64, limit=64):
+            # Check nearby for WorldRoot pointer
+            for offset in range(-512, 512, 8):
+                check_va = rc_hit + offset
+                if check_va < base or check_va + 8 > base + len(image):
+                    continue
+                s = cstr(q(check_va))
+                if s != "WorldRoot":
+                    continue
+                # Found WorldRoot near Raycast - try walking from here
+                table_start = check_va
+                for mode in ("cm", "mc"):
+                    for ps in (8, 4):
+                        names = walk_worldroot_methods(image, base, table_start, mode, ptr_size=ps)
+                        if TARGET not in names:
+                            continue
+                        anchor_count = sum(1 for a in ANCHORS if a in names)
+                        if anchor_count < 1:
+                            continue
+                        score = (len(names), anchor_count, -table_start)
+                        if best is None or score > best[0]:
+                            best = (score, table_start, mode, names)
+
+    return best
+
+
+def is_valid_vtable(vtable_va, base, sections):
+    if not (base <= vtable_va < base + len(g_image)):
+        return False
+    if is_exec(vtable_va, base, sections):
+        return False
+    first_fn = q(vtable_va)
+    if first_fn and is_exec(first_fn, base, sections):
+        return True
+    return False
+
+
+def find_raycast_descriptor_by_brute_force(reader, image, base, sections):
+    """Find the Raycast C++ descriptor by scanning .rdata for structures
+    that look like binding descriptors with 'Raycast' as the name.
+    
+    This function works INDEPENDENTLY of the method-name table.
+    """
+    def read_live_cstr(ea, n=96):
+        if not ea:
+            return ""
+        data = reader.try_read(ea, n)
+        if data:
+            zero_idx = data.find(b"\x00")
+            if zero_idx != -1:
+                data = data[:zero_idx]
+            if all(32 <= c < 127 for c in data):
+                try:
+                    return data.decode('ascii')
+                except Exception:
+                    pass
+        return ""
+
+    candidates = []
+    for sec_name, info in sections.items():
+        if info["characteristics"] & 0x20000000:
+            continue
+
+        start_rva = info["start"]
+        end_rva = info["end"]
+
+        for rva in range(start_rva, end_rva - 128, 8):
+            va = base + rva
+            vtable = q(va)
+            if not is_valid_vtable(vtable, base, sections):
+                continue
+
+            for fn_off in FN_OFFS:
+                fn_ptr = q(va + fn_off)
+                if fn_ptr and is_exec(fn_ptr, base, sections):
+                    candidates.append((va, vtable, fn_off, fn_ptr, sec_name))
+                    break
+
+    # CHANGED: Also search for "Raycast" string directly in the image
+    # and try to find descriptor structures that reference it
+    raycast_str_positions = list(find_all(image, b"Raycast\x00"))
+    
+    resolved_layout = None
+    for va, vtable, fn_off, fn_ptr, sec_name in candidates:
+        matched = False
+        name_offset = 0
+        is_sso = False
+        is_name_32 = False
+
+        # Check 64-bit pointer references to "Raycast" string
+        for offset in range(8, 64, 8):
+            val = q(va + offset)
+            s = read_live_cstr(val)
+            if s == TARGET:
+                matched = True
+                name_offset = offset
+                is_sso = False
+                is_name_32 = False
+                break
+
+            # CHANGED: Also try reading string directly from image (not live process)
+            s_img = cstr(val)
+            if s_img == TARGET:
+                matched = True
+                name_offset = offset
+                is_sso = False
+                is_name_32 = False
+                break
+
+            val_32 = struct.unpack_from("<I", image, va + offset - base)[0]
+            val_32_va = base + val_32
+            s = read_live_cstr(val_32_va)
+            if s == TARGET:
+                matched = True
+                name_offset = offset
+                is_sso = False
+                is_name_32 = True
+                break
+
+            # CHANGED: Also try image-based string read for 32-bit
+            s_img = cstr(val_32_va)
+            if s_img == TARGET:
+                matched = True
+                name_offset = offset
+                is_sso = False
+                is_name_32 = True
+                break
+
+        if not matched:
+            # Check inline SSO strings
+            for offset in range(8, 64, 8):
+                s = read_live_cstr(va + offset, n=15)
+                if s == TARGET:
+                    matched = True
+                    name_offset = offset
+                    is_sso = True
+                    is_name_32 = False
+                    break
+
+                # CHANGED: Also try image-based read for SSO
+                s_img = cstr(va + offset, n=15)
+                if s_img == TARGET:
+                    matched = True
+                    name_offset = offset
+                    is_sso = True
+                    is_name_32 = False
+                    break
+
+        if matched:
+            resolved_layout = {
+                "desc_va": va,
+                "name_offset": name_offset,
+                "is_name_32": is_name_32,
+                "is_sso": is_sso,
+                "fn_offset": fn_off,
+                "is_fn_32": False,
+            }
+            break
+
+    # CHANGED: If still not found, try a broader search using the
+    # Raycast string positions directly
+    if not resolved_layout and raycast_str_positions:
+        resolved_layout = _find_descriptor_from_string_positions(
+            reader, image, base, sections, raycast_str_positions
+        )
+
+    return resolved_layout, candidates
+
+
+def _find_descriptor_from_string_positions(reader, image, base, sections, str_positions):
+    """Fallback: find Raycast descriptor by looking for cross-references
+    from candidate descriptors to known 'Raycast' string positions."""
+    def read_live_cstr(ea, n=96):
+        if not ea:
+            return ""
+        data = reader.try_read(ea, n)
+        if data:
+            zero_idx = data.find(b"\x00")
+            if zero_idx != -1:
+                data = data[:zero_idx]
+            if all(32 <= c < 127 for c in data):
+                try:
+                    return data.decode('ascii')
+                except Exception:
+                    pass
+        return ""
+
+    for rc_pos in str_positions[:4]:
+        rc_va = base + rc_pos
+
+        # Find all 64-bit pointers to this "Raycast" string
+        needle64 = struct.pack("<Q", rc_va)
+        for ref_pos in find_all(image, needle64):
+            ref_va = base + ref_pos
+
+            # The reference might be the name field of a descriptor.
+            # Walk backwards to find the descriptor base (with vtable at offset 0)
+            for back in range(0, 64, 8):
+                desc_va = ref_va - back
+                if desc_va < base:
+                    break
+
+                vtable = q(desc_va)
+                if not is_valid_vtable(vtable, base, sections):
+                    continue
+
+                # Check if there's a function pointer at a known offset
+                for fn_off in FN_OFFS:
+                    fn_ptr = q(desc_va + fn_off)
+                    if fn_ptr and is_exec(fn_ptr, base, sections):
+                        # Verify the name field points to "Raycast"
+                        name_va = q(desc_va + back)
+                        s = read_live_cstr(name_va) or cstr(name_va)
+                        if s == TARGET:
+                            return {
+                                "desc_va": desc_va,
+                                "name_offset": back,
+                                "is_name_32": False,
+                                "is_sso": False,
+                                "fn_offset": fn_off,
+                                "is_fn_32": False,
+                            }
+
+        # Also try 32-bit RVA references
+        rva = rc_va - base
+        if 0 <= rva < 0x100000000:
+            needle32 = struct.pack("<I", rva)
+            for ref_pos in find_all(image, needle32):
+                ref_va = base + ref_pos
+
+                for back in range(0, 32, 4):
+                    desc_va = ref_va - back
+                    if desc_va < base:
+                        break
+
+                    vtable = q(desc_va)
+                    if not is_valid_vtable(vtable, base, sections):
+                        continue
+
+                    for fn_off in FN_OFFS:
+                        fn_ptr = q(desc_va + fn_off)
+                        if fn_ptr and is_exec(fn_ptr, base, sections):
+                            name_rva = struct.unpack_from("<I", image, ref_va - base)[0]
+                            s = cstr(base + name_rva)
+                            if s == TARGET:
+                                return {
+                                    "desc_va": desc_va,
+                                    "name_offset": back,
+                                    "is_name_32": True,
+                                    "is_sso": False,
+                                    "fn_offset": fn_off,
+                                    "is_fn_32": False,
+                                }
+
+    return None
+
+
+# ================= FastCluster Dumper Logic =================
+
+def read_mangled_name(image, pos, limit=256):
+    end = image.find(b"\x00", pos, pos + limit)
+    if end == -1:
+        return None
+    return image[pos:end]
+
+
+def _in_any(ranges, offset):
+    for start, end in ranges:
+        if start <= offset < end:
+            return True
+    return False
+
+
+def find_type_descriptors(image, base, name=TYPE_PREFIX):
+    out = []
+    seen = set()
+    for pos in find_all(image, name):
+        full = read_mangled_name(image, pos)
+        if not full:
+            continue
+        if name.endswith(b"@") and not full.endswith(b"@@"):
+            continue
+        descriptor = pos - TYPE_DESCRIPTOR_NAME_OFFSET
+        if descriptor < 0 or descriptor in seen:
+            continue
+        seen.add(descriptor)
+        out.append(base + descriptor)
+    return out
+
+
+def find_complete_object_locators(image, base, descriptor_va, sections=None):
+    key = struct.pack("<I", descriptor_va - base)
+    out = []
+    for pos in find_all(image, key):
+        col = pos - COL_TYPE_DESCRIPTOR_RVA
+        if col < 0 or col + 24 > len(image):
+            continue
+        signature = struct.unpack_from("<I", image, col)[0]
+        if signature not in (0, 1):
+            continue
+        chd = struct.unpack_from("<I", image, col + COL_CLASS_DESCRIPTOR_RVA)[0]
+        if chd == 0 or chd >= len(image):
+            continue
+        if sections and not _in_any(sections, col):
+            continue
+        out.append(base + col)
+    return out
+
+
+def find_vtables(image, base, locator_va, sections=None, code=None):
+    key = struct.pack("<Q", locator_va)
+    out = []
+    for pos in find_all(image, key):
+        vtable = pos + 8
+        if vtable + 8 > len(image):
+            continue
+        first = struct.unpack_from("<Q", image, vtable)[0]
+        if not (base <= first < base + len(image)):
+            continue
+        if code and not _in_any(code, first - base):
+            continue
+        locator_off = locator_va - base
+        if locator_off <= pos < locator_off + 0x20:
+            continue
+        if sections and not _in_any(sections, pos):
+            continue
+        out.append(base + vtable)
+    return out
+
+
+def resolve_fastcluster_vtable(image, base):
+    result = {"vtable_rva": None, "error": None, "mangled_name": None}
+
+    sec_map = parse_sections(image)
+    rdata = [(v["start"], v["end"]) for k, v in sec_map.items() if k == ".rdata"]
+    code = [(v["start"], v["end"]) for k, v in sec_map.items() if k == ".text"]
+
+    descriptors = find_type_descriptors(image, base, TYPE_PREFIX)
+    if descriptors:
+        first = descriptors[0] - base + TYPE_DESCRIPTOR_NAME_OFFSET
+        full = read_mangled_name(image, first)
+        if full:
+            result["mangled_name"] = full.decode("latin-1")
+    if not descriptors:
+        result["error"] = "FastClusterEntity RTTI not found"
+        return result
+
+    locators = []
+    for descriptor in descriptors:
+        locators.extend(find_complete_object_locators(image, base, descriptor, rdata))
+    if not locators:
+        result["error"] = "complete object locator not found"
+        return result
+
+    vtables = []
+    for locator in locators:
+        vtables.extend(find_vtables(image, base, locator, rdata, code))
+    if not vtables:
+        result["error"] = "vtable not found"
+        return result
+
+    result["vtable_rva"] = vtables[0] - base
+    return result
+
+
+# ================= System / Memory Utilities =================
+
+def find_roblox_process(name=b"RobloxPlayerBeta.exe"):
+    try:
+        import pymem.process
+        for p in pymem.process.list_processes():
+            try:
+                if name in p.szExeFile:
+                    return p.th32ProcessID
+            except Exception:
+                continue
+        return None
+    except ImportError:
+        return _find_process_toolhelp(name)
+
+
+def _find_process_toolhelp(name=b"RobloxPlayerBeta.exe"):
+    TH32CS_SNAPPROCESS = 0x00000002
+
+    class PROCESSENTRY32(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", ctypes.c_ulong),
+            ("cntUsage", ctypes.c_ulong),
+            ("th32ProcessID", ctypes.c_ulong),
+            ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+            ("th32ModuleID", ctypes.c_ulong),
+            ("cntThreads", ctypes.c_ulong),
+            ("th32ParentProcessID", ctypes.c_ulong),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", ctypes.c_ulong),
+            ("szExeFile", ctypes.c_char * 260),
+        ]
+
+    snapshot = windll.kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if snapshot == -1:
+        return None
+    try:
+        entry = PROCESSENTRY32()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32)
+        if not windll.kernel32.Process32First(snapshot, byref(entry)):
+            return None
+        while True:
+            if name in entry.szExeFile:
+                return entry.th32ProcessID
+            if not windll.kernel32.Process32Next(snapshot, byref(entry)):
+                return None
+    finally:
+        windll.kernel32.CloseHandle(snapshot)
+
+
+def get_module_base(pid):
+    handle = windll.kernel32.OpenProcess(0x0410, False, pid)
+    if not handle:
+        return None
+    try:
+        modules = (c_void_p * 1)()
+        needed = c_size_t()
+        if windll.psapi.EnumProcessModules(
+                handle, byref(modules), sizeof(modules), byref(needed)):
+            return int(modules[0])
+    finally:
+        windll.kernel32.CloseHandle(handle)
+    return None
+
+
+class Reader:
+
+    def __init__(self, pid):
+        self.process_id = pid
+        self.handle = windll.kernel32.OpenProcess(
+            PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, False, pid)
+        if not self.handle:
+            raise Exception("failed to open process")
+        self.base_address = get_module_base(pid)
+        if not self.base_address:
+            raise Exception("failed to get base address")
+
+    def try_read(self, address, size):
+        if not self.handle or size <= 0:
+            return None
+        buffer = (ctypes.c_byte * size)()
+        got = ctypes.c_size_t(0)
+        NtReadVirtualMemory(self.handle, ctypes.c_void_p(address),
+                            ctypes.byref(buffer), size, ctypes.byref(got))
+        if got.value == 0:
+            return None
+        return bytes(bytearray(buffer)[:got.value])
+
+    def image_size(self):
+        header = self.try_read(self.base_address, 0x1000)
+        if not header or header[:2] != b"MZ":
+            return None
+        try:
+            pe = struct.unpack_from("<I", header, 0x3C)[0]
+            if header[pe:pe + 4] != b"PE\0\0":
+                return None
+            return struct.unpack_from("<I", header, pe + 24 + 0x38)[0]
+        except Exception:
+            return None
+
+    def read_headers(self):
+        return self.try_read(self.base_address, 0x1000)
+
+    def module_regions(self):
+        size = self.image_size()
+        if not size:
+            return []
+        out = []
+        mbi = MEMORY_BASIC_INFORMATION64()
+        address = self.base_address
+        end_of_module = self.base_address + size
+        while address < end_of_module:
+            if not windll.kernel32.VirtualQueryEx(
+                    self.handle, ctypes.c_void_p(address),
+                    ctypes.byref(mbi), ctypes.sizeof(mbi)):
+                break
+            region_start = int(mbi.BaseAddress)
+            region_end = region_start + int(mbi.RegionSize)
+            if region_end <= address:
+                break
+            usable = (
+                mbi.State == MEM_COMMIT
+                and mbi.Protect in READABLE_PROTECTIONS
+                and not (mbi.Protect & PAGE_GUARD)
+                and not (mbi.Protect & PAGE_NOACCESS)
+            )
+            if usable:
+                lo = max(region_start, self.base_address)
+                hi = min(region_end, end_of_module)
+                if hi > lo:
+                    out.append((lo, hi - lo))
+            address = region_end
+        return out
+
+    def read_image(self, chunk=0x100000, page=0x1000):
+        size = self.image_size()
+        if not size:
+            return None, 0
+
+        out = bytearray(size)
+        covered = 0
+        spans = self.module_regions() or [(self.base_address, size)]
+
+        for span_start, span_size in spans:
+            offset = 0
+            while offset < span_size:
+                want = min(chunk, span_size - offset)
+                address = span_start + offset
+                data = self.try_read(address, want)
+                if data:
+                    dest = address - self.base_address
+                    out[dest:dest + len(data)] = data
+                    covered += len(data)
+                else:
+                    for sub in range(0, want, page):
+                        sub_size = min(page, want - sub)
+                        sub_data = self.try_read(address + sub, sub_size)
+                        if sub_data:
+                            dest = (address + sub) - self.base_address
+                            out[dest:dest + len(sub_data)] = sub_data
+                            covered += len(sub_data)
+                offset += want
+
+        return bytes(out), covered
+
+    def close(self):
+        if self.handle:
+            windll.kernel32.CloseHandle(self.handle)
+            self.handle = None
+
+
+# ================= Main Execution =================
+
+def main():
+    print()
+    print("  Unified Engine Offset Dumper")
+    print("  " + "-" * 44)
+
+    pid = find_roblox_process()
+    if not pid:
+        print("  [-] RobloxPlayerBeta.exe is not running")
+        return 1
+    print("  [+] Roblox pid %d" % pid)
+
+    try:
+        reader = Reader(pid)
+    except Exception as exc:
+        print("  [-] attach failed: %s" % exc)
+        return 1
+
+    try:
+        print("  [+] Base Address: 0x%X" % reader.base_address)
+
+        headers = reader.read_headers()
+        fingerprint = pe_fingerprint(headers) if headers else None
+        if fingerprint:
+            print("  [+] Build ID: %s" % fingerprint["id"])
+
+        image, covered = reader.read_image()
+        if not image:
+            print("  [-] failed to read process image")
+            return 1
+
+        global g_image, g_base
+        g_image = image
+        g_base = reader.base_address
+
+        sections = parse_sections(image)
+
+        # ============================================
+        print("\n  " + "=" * 44)
+        print("   1. DUMPING RAYCAST OFFSETS")
+        print("  " + "=" * 44)
+
+        # CHANGED: Decouple method table search from brute force.
+        # The method table confirms the class exists but isn't strictly
+        # required to find the C++ descriptor.
+        method_table_ok = False
+        try:
+            tbl_ea, mode, methods = find_worldroot_method_table(image, reader.base_address)
+            idx = methods.index(TARGET)
+            print("  [+] Found WorldRoot method table at 0x%X (mode=%s, %d methods)" % (tbl_ea, mode, len(methods)))
+            print("  [+] Raycast is method index %d" % idx)
+            if idx < len(FN_OFFS):
+                print("  [+] Expected FN_OFF index: %d -> 0x%X" % (idx, FN_OFFS[idx]))
+            method_table_ok = True
+        except Exception as e:
+            print("  [!] Method table scan failed: %s" % e)
+            print("  [!] Falling back to direct descriptor scan...")
+
+        # Always attempt the brute-force descriptor scan
+        layout, candidates = find_raycast_descriptor_by_brute_force(
+            reader, image, reader.base_address, sections
+        )
+
+        if not layout:
+            print("  [-] Failed to resolve Raycast C++ descriptor!")
+            if not method_table_ok:
+                print("  [-] Both method table and descriptor scans failed.")
+                print("  [-] Possible causes:")
+                print("  [-]   - Roblox descriptor layout changed (FN_OFFS needs update)")
+                print("  [-]   - 'Raycast' string storage changed (SSO/encryption)")
+                print("  [-]   - Process read incomplete (try running as admin)")
+        else:
+            desc_rva = layout["desc_va"] - reader.base_address
+            fn_off = layout["fn_offset"]
+
+            print("  namespace Raycast {")
+            print("      inline constexpr uintptr_t RaycastBoundDesc = 0x%X;" % desc_rva)
+            print("      inline constexpr uintptr_t RaycastBoundFn   = 0x%X;" % fn_off)
+            if layout["is_sso"]:
+                print("      // Note: name is SSO (inline string)")
+            if layout["is_name_32"]:
+                print("      // Note: name reference is 32-bit RVA")
+            print("  }")
+
+        # ============================================
+        print("\n  " + "=" * 44)
+        print("   2. DUMPING FASTCLUSTER OFFSETS")
+        print("  " + "=" * 44)
+
+        fc_result = resolve_fastcluster_vtable(image, reader.base_address)
+        if fc_result["error"]:
+            print("  [-] FastCluster Dump failed: %s" % fc_result["error"])
+        else:
+            print("  namespace FastClusterEntity {")
+            print("      inline constexpr uintptr_t VTableRva               = 0x%X;" % fc_result["vtable_rva"])
+            for key, val in FIELD_OFFSETS.items():
+                print("      inline constexpr uintptr_t %-23s = 0x%X;" % (key, val))
+            print("  }")
+
+            print("  namespace TechniqueArray {")
+            for key, val in TECHNIQUE_ARRAY.items():
+                fmt = "%d" if key == "EntryStride" else "0x%X"
+                print(f"      inline constexpr uintptr_t {key:<23} = {fmt % val};")
+            print("  }")
+
+            print("  namespace MaterialLayer {")
+            for key, val in MATERIAL_LAYER.items():
+                fmt = "%d" if key == "Stride" else "0x%X"
+                print(f"      inline constexpr uintptr_t {key:<23} = {fmt % val};")
+            print("  }")
+
+        print("\n  Finished dumping.")
+        return 0
+
+    except Exception as exc:
+        print("  [-] Unexpected error occurred: %s" % exc)
+        return 1
+    finally:
+        reader.close()
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print("\n  cancelled")
+        sys.exit(1)
