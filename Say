@@ -1211,7 +1211,7 @@ local vhState = {
     lastTeleportTime = 0
 }
 
-local localfighter = modules.fighter.LocalFighter
+local localfighter = modules.fighter and modules.fighter.LocalFighter or nil
 local oldpos
 
 local indicator = Drawing.new("Circle")
@@ -2095,14 +2095,16 @@ local function autoshoot()
     end
 end
 
-local oldcamupdate = modules.camcontrol.Update
-modules.camcontrol.Update = function(...)
-    if getgenv().InstanceUndergroundEnabled then
+if modules.camcontrol and type(modules.camcontrol.Update) == "function" then
+    local oldcamupdate = modules.camcontrol.Update
+    modules.camcontrol.Update = function(...)
+        if getgenv().InstanceUndergroundEnabled then
+            return oldcamupdate(...)
+        elseif config.state.csyncactive and localfighter and localfighter.Entity and localfighter.Entity.RootPart and oldpos then
+            localfighter.Entity.RootPart.CFrame = oldpos
+        end
         return oldcamupdate(...)
-    elseif config.state.csyncactive and localfighter and localfighter.Entity and localfighter.Entity.RootPart and oldpos then
-        localfighter.Entity.RootPart.CFrame = oldpos
     end
-    return oldcamupdate(...)
 end
 
 local immuneList = {}
@@ -2272,7 +2274,7 @@ local function updatesling()
             sling.enabled = false
             stopslingTP()
         end
-        if not (Toggles.AntiAimUnderground and Toggles.AntiAimUnderground.Value == true) then
+        if not (Toggles.UndergroundEnabled and Toggles.UndergroundEnabled.Value == true) then
             if getgenv().InstanceSetUnderground then
                 getgenv().InstanceSetUnderground(false)
             end
@@ -2635,53 +2637,6 @@ end
 end
 end
 
-local TargetbotGroup = Tabs.Bots:AddLeftGroupbox("Targetbot", "target")
-TargetbotGroup:AddToggle("TargetbotEnabled", {
-    Text = "Enable Targetbot",
-    Default = false,
-})
-TargetbotGroup:AddDropdown("TargetbotMode", {
-    Values = { "Closest", "FOV", "Distance" },
-    Default = 1,
-    Text = "Target mode",
-})
-TargetbotGroup:AddSlider("TargetbotFOV", {
-    Text = "FOV",
-    Default = 100,
-    Min = 10,
-    Max = 500,
-    Rounding = 0,
-})
-
-local KnifeRageGroup = Tabs.Bots:AddLeftGroupbox("Knife Ragebot", "sword")
-KnifeRageGroup:AddToggle("KnifeRageEnabled", {
-    Text = "Enable Knife Ragebot",
-    Default = false,
-})
-KnifeRageGroup:AddDropdown("KnifeRageTarget", {
-    Values = { "Closest", "Lowest Health", "Nearest" },
-    Default = 1,
-    Text = "Target priority",
-})
-
-local RagebotGroup = Tabs.Bots:AddRightGroupbox("Ragebot", "crosshair")
-RagebotGroup:AddToggle("RagebotEnabledUI", {
-    Text = "Enable Ragebot",
-    Default = false,
-})
-RagebotGroup:AddDropdown("RagebotModeUI", {
-    Values = { "Closest", "FOV", "Distance" },
-    Default = 1,
-    Text = "Target mode",
-})
-RagebotGroup:AddSlider("RagebotFOVUI", {
-    Text = "FOV",
-    Default = 100,
-    Min = 10,
-    Max = 500,
-    Rounding = 0,
-})
-
 local LeftGroupBox = Tabs.Main:AddLeftGroupbox("Aimbot", "crosshair")
 LeftGroupBox:AddToggle("AimbotEnabled", {
     Text = "Enable Aimbot",
@@ -2742,6 +2697,61 @@ LeftGroupBox:AddDropdown("AimbotRunService", {
     Default = 1,
     Callback = function(v) setRunService(v) end
 })
+
+local SilentGroupBox = Tabs.Main:AddLeftGroupbox("Silent Aim", "target")
+SilentGroupBox:AddToggle("SilentAimEnabled", {
+    Text = "Enable Silent Aim",
+    Default = false,
+    Callback = function(v)
+        silentAim.enabled = v
+        if not v then curtarget = nil end
+    end
+}):AddKeyPicker("SilentAimKey", {
+    Text = "Silent Aim",
+    Default = "None",
+    Mode = "Toggle",
+    NoUI = true,
+    SyncToggleState = false,
+    Callback = function(state)
+        silentAim.enabled = state
+        if not state then curtarget = nil end
+    end
+})
+SilentGroupBox:AddToggle("SilentAutoShoot", {
+    Text = "Auto Shoot",
+    Default = false,
+    Callback = function(v) silentAim.autoShoot = v end
+})
+SilentGroupBox:AddSlider("SilentHitChance", {
+    Text = "Hit Chance",
+    Default = 100,
+    Min = 0,
+    Max = 100,
+    Rounding = 0,
+    Compact = true,
+    Callback = function(v) silentAim.hitChance = v end
+})
+SilentGroupBox:AddDropdown("SilentHitPart", {
+    Text = "Hit Part",
+    Default = "Head",
+    Values = HPlist,
+    Callback = function(v) silentAim.hitPart = v end
+})
+SilentGroupBox:AddSlider("SilentFOVRadius", {
+    Text = "FOV Radius",
+    Default = 100,
+    Min = 10,
+    Max = 750,
+    Rounding = 1,
+    Compact = true,
+    Callback = function(v) silentAim.fovRadius = v end
+})
+SilentGroupBox:AddToggle("SilentFollowMuzzle", {
+    Text = "Follow Muzzle",
+    Default = false,
+    Callback = function(v) silentAim.followMuzzle = v end
+})
+
 
 local RightGroupBox = Tabs.Main:AddRightGroupbox("Movement", "move")
 RightGroupBox:AddToggle("UndergroundEnabled", {
@@ -2974,60 +2984,6 @@ RageGroupBox:AddSlider("RagebotAttack", {
         end
         Ragebot.config.voidspam.enabled = true
     end
-})
-
-local SilentGroupBox = Tabs.Combat:AddLeftGroupbox("Silent Aim", "target")
-SilentGroupBox:AddToggle("SilentAimEnabled", {
-    Text = "Enable Silent Aim",
-    Default = false,
-    Callback = function(v)
-        silentAim.enabled = v
-        if not v then curtarget = nil end
-    end
-}):AddKeyPicker("SilentAimKey", {
-    Text = "Silent Aim",
-    Default = "None",
-    Mode = "Toggle",
-    NoUI = true,
-    SyncToggleState = false,
-    Callback = function(state)
-        silentAim.enabled = state
-        if not state then curtarget = nil end
-    end
-})
-SilentGroupBox:AddToggle("SilentAutoShoot", {
-    Text = "Auto Shoot",
-    Default = false,
-    Callback = function(v) silentAim.autoShoot = v end
-})
-SilentGroupBox:AddSlider("SilentHitChance", {
-    Text = "Hit Chance",
-    Default = 100,
-    Min = 0,
-    Max = 100,
-    Rounding = 0,
-    Compact = true,
-    Callback = function(v) silentAim.hitChance = v end
-})
-SilentGroupBox:AddDropdown("SilentHitPart", {
-    Text = "Hit Part",
-    Default = "Head",
-    Values = HPlist,
-    Callback = function(v) silentAim.hitPart = v end
-})
-SilentGroupBox:AddSlider("SilentFOVRadius", {
-    Text = "FOV Radius",
-    Default = 100,
-    Min = 10,
-    Max = 750,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(v) silentAim.fovRadius = v end
-})
-SilentGroupBox:AddToggle("SilentFollowMuzzle", {
-    Text = "Follow Muzzle",
-    Default = false,
-    Callback = function(v) silentAim.followMuzzle = v end
 })
 
 local ModsGroupBox = Tabs.Combat:AddLeftGroupbox("Gun Mods", "gun")
