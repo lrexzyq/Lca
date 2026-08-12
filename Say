@@ -21,7 +21,6 @@ local Window = Library:CreateWindow({
 
 local Tabs = {
     Main = Window:AddTab("Main", "crosshair"),
-    Bots = Window:AddTab("Bots", "target"),
     Combat = Window:AddTab("Combat", "sword"),
     Misc = Window:AddTab("Misc", "settings"),
     ["UI Settings"] = Window:AddTab("UI Settings", "palette"),
@@ -49,15 +48,22 @@ local function worldToScreen(pos)
     return Vector2.new(vec.X, vec.Y), onScreen
 end
 
+local startUnderground
+local stopUnderground
+
 getgenv().InstanceWorldToScreen = worldToScreen
 getgenv().InstanceUndergroundEnabled = false
 getgenv().InstanceTrackDrawingText = function(drawing) return drawing end
 getgenv().InstanceSetUnderground = function(v)
     getgenv().InstanceUndergroundEnabled = v
     if v then
-        startUnderground()
+        if startUnderground then
+            startUnderground()
+        end
     else
-        stopUnderground()
+        if stopUnderground then
+            stopUnderground()
+        end
     end
 end
 
@@ -196,7 +202,7 @@ local undergroundOldAngVel = nil
 local undergroundOldCamCF = nil
 local undergroundFirstRun = true
 
-local function startUnderground()
+startUnderground = function()
     if undergroundConn then return end
     undergroundFirstRun = true
     undergroundConn = RunService.Heartbeat:Connect(function()
@@ -247,7 +253,7 @@ local function startUnderground()
     end)
 end
 
-local function stopUnderground()
+stopUnderground = function()
     if undergroundConn then
         undergroundConn:Disconnect()
         undergroundConn = nil
@@ -2266,7 +2272,7 @@ local function updatesling()
             sling.enabled = false
             stopslingTP()
         end
-        if not (Toggles.AntiAimUnderground and Toggles.AntiAimUnderground.Value) then
+        if not (Toggles.AntiAimUnderground and Toggles.AntiAimUnderground.Value == true) then
             if getgenv().InstanceSetUnderground then
                 getgenv().InstanceSetUnderground(false)
             end
@@ -2906,7 +2912,7 @@ DeviceGroup:AddDropdown("DeviceType", {
     end
 })
 
-local RageGroupBox = Tabs.Combat:AddLeftGroupbox("Ragebot", "sword")
+local RageGroupBox = Tabs.Main:AddRightGroupbox("Ragebot", "sword")
 RageGroupBox:AddToggle("RagebotEnabled", {
     Text = "Enable Ragebot",
     Default = false,
