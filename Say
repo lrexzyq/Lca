@@ -11,7 +11,7 @@ Library.ShowToggleFrameInKeybinds = true
 
 local Window = Library:CreateWindow({
     Title = "Skiding",
-    Footer = "PhSkids",
+    Footer = "PhHh",
     Icon = 95816097006870,
     Center = true,
     AutoShow = true,
@@ -21,7 +21,6 @@ local Window = Library:CreateWindow({
 
 local Tabs = {
     Main = Window:AddTab("Main", "crosshair"),
-    Bots = Window:AddTab("Bots", "target"),
     Combat = Window:AddTab("Combat", "sword"),
     Misc = Window:AddTab("Misc", "settings"),
     ["UI Settings"] = Window:AddTab("UI Settings", "palette"),
@@ -2902,7 +2901,7 @@ DeviceGroup:AddDropdown("DeviceType", {
     end
 })
 
-local RageGroupBox = Tabs.Combat:AddLeftGroupbox("Ragebot", "sword")
+local RageGroupBox = Tabs.Main:AddRightGroupbox("Ragebot", "sword")
 RageGroupBox:AddToggle("RagebotEnabled", {
     Text = "Enable Ragebot",
     Default = false,
@@ -2936,7 +2935,7 @@ RageGroupBox:AddSlider("RagebotHide", {
     Default = 0.5,
     Min = 0,
     Max = 1,
-    Rounding = 0.1,
+    Rounding = 1,
     Callback = function(v)
         if v == 0 then
             Ragebot.config.voidspam.hide_min = 0.1
@@ -2953,7 +2952,7 @@ RageGroupBox:AddSlider("RagebotAttack", {
     Default = 0.5,
     Min = 0,
     Max = 2,
-    Rounding = 0.1,
+    Rounding = 1,
     Callback = function(v)
         if v == 0 then
             Ragebot.config.voidspam.shoot_min = 0.1
