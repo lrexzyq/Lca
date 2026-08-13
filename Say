@@ -2002,7 +2002,11 @@ local function startsync()
 
         eqSlot()
 
-        if reloadHide(checksling) then return end
+        if reloadHide(checksling) then
+            config.orbit.positionReady = false
+            config.orbit.positionReadyAt = 0
+            return
+        end
 
         if not checksling and config.voidspam.enabled and not config.target.immune then
             tickVoidSpam()
@@ -2034,6 +2038,8 @@ local function startsync()
         end
 
         if config.state.outofammo and not checksling and _weapon and not isInfiniteWeapon() then
+            config.orbit.positionReady = false
+            config.orbit.positionReadyAt = 0
             local hrp = voidHrp()
             if hrp then
                 snapVoid(hrp)
@@ -2058,17 +2064,21 @@ local function startsync()
         )
         config.orbit.serverpos = targetpos + offset
 
-        if not getgenv().InstanceUndergroundEnabled then
-            if localfighter and localfighter.Entity and localfighter.Entity.RootPart then
-                local currentPos = localfighter.Entity.RootPart.CFrame
-                local newPos = CFrame.new(config.orbit.serverpos)
-                local distance = (newPos.Position - currentPos.Position).Magnitude
-                if distance < 2000 then
+        if localfighter and localfighter.Entity and localfighter.Entity.RootPart then
+            local currentPos = localfighter.Entity.RootPart.CFrame
+            local newPos = CFrame.new(config.orbit.serverpos)
+            local distance = (newPos.Position - currentPos.Position).Magnitude
+
+            if distance < 2000 then
+                if not getgenv().InstanceUndergroundEnabled then
                     localfighter.Entity.RootPart.CFrame = newPos
                     config.orbit.savedpos = currentPos
-                    config.orbit.positionReady = true
-                    config.orbit.positionReadyAt = tick()
                 end
+
+                -- In Underground mode the local CFrame write is intentionally
+                -- suppressed, but serverpos is still the CSync firing origin.
+                config.orbit.positionReady = true
+                config.orbit.positionReadyAt = tick()
             end
         end
     end)
