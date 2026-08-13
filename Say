@@ -1804,6 +1804,8 @@ end
 local function refreshAtk()
     setOrbH(getweapon())
     setOrbR()
+    config.orbit.positionReady = false
+    config.orbit.positionReadyAt = 0
 end
 
 local function stopsync()
@@ -1829,6 +1831,8 @@ local function stopsync()
     config.orbit.serverpos = nil
     config.orbit.savedpos = nil
     config.orbit.positionReady = false
+    config.orbit.positionReadyAt = 0
+    config.orbit.lastSyncWeapon = nil
     config.voidspam.phase = nil
     config.voidspam.shotIssued = false
     config.voidspam.shotIssuedAt = 0
@@ -1912,53 +1916,6 @@ local function voidOk(sling)
     return config.voidspam.enabled or config.state.outofammo
 end
 
-local function tickVoid(sling, root)
-    if sling then
-        clrVoidSnap()
-        return false
-    end
-    if not voidOk(sling) then
-        clrVoidSnap()
-        return false
-    end
-    local isHiding = config.state.outofammo or (config.voidspam.enabled and config.voidspam.phase == "hide")
-    if isHiding then
-        if config.voidspam.enabled and config.voidspam.phase == "hide" and not config.state.outofammo then
-            local elapsed = tick() - config.voidspam.lastswitch
-            if elapsed >= config.voidspam.currentduration then
-                config.voidspam.phase = "shoot"
-                config.voidspam.currentduration = randVs(config.voidspam.shoot_min, config.voidspam.shoot_max)
-                config.voidspam.lastswitch = tick()
-                clrVoidSnap()
-                return false
-            end
-        end
-        clrVoidSnap()
-        local hrp = voidHrp()
-        if hrp then
-            snapVoid(hrp)
-        else
-            if config.state.csyncactive then
-                return true
-            end
-            local randomX = math.random(-10000, 10000)
-            local randomZ = math.random(-10000, 10000)
-            config.orbit.serverpos = Vector3.new(randomX, -99999999999, randomZ)
-        end
-        return true
-    end
-    if config.voidspam.enabled and config.voidspam.phase == "shoot" then
-        local elapsed = tick() - config.voidspam.lastswitch
-        if elapsed >= config.voidspam.currentduration then
-            config.voidspam.phase = "hide"
-            config.voidspam.currentduration = randVs(config.voidspam.hide_min, config.voidspam.hide_max)
-            config.voidspam.lastswitch = tick()
-        end
-    end
-    clrVoidSnap()
-    return false
-end
-
 local function hideShot()
     if not config.voidspam.enabled then return end
     if isSling(getweapon()) then return end
@@ -2022,7 +1979,6 @@ local function startsync()
 
         setOrbR()
         oldpos = localfighter.Entity.RootPart.CFrame
-        config.orbit.positionReady = false
 
         local function isQuickSwapActive()
             if pickMelee() then return false end
@@ -2034,6 +1990,13 @@ local function startsync()
 
         local _weapon = getweapon()
         local checksling = isSling(_weapon)
+
+        if config.orbit.lastSyncWeapon ~= _weapon then
+            config.orbit.lastSyncWeapon = _weapon
+            config.orbit.positionReady = false
+            config.orbit.positionReadyAt = 0
+            refreshAtk()
+        end
 
         if isQuickSwapActive() then return end
 
@@ -2104,6 +2067,7 @@ local function startsync()
                     localfighter.Entity.RootPart.CFrame = newPos
                     config.orbit.savedpos = currentPos
                     config.orbit.positionReady = true
+                    config.orbit.positionReadyAt = tick()
                 end
             end
         end
@@ -2129,6 +2093,10 @@ local function autoshoot()
         if not config.state.csyncactive
             or not config.orbit.serverpos
             or not config.orbit.positionReady then
+            return
+        end
+
+        if tick() - (config.orbit.positionReadyAt or 0) < 0.035 then
             return
         end
     end
@@ -2284,6 +2252,8 @@ local function settarget(char)
     config.target.lastchar = char
     config.target.lastplayer = targetplr
     config.target.immune = false
+    config.orbit.positionReady = false
+    config.orbit.positionReadyAt = 0
     indicator.Color = Color3.fromRGB(255, 50, 50)
     local root = char:FindFirstChild("HumanoidRootPart")
     if root and root:FindFirstChild("Attachment") then
@@ -2568,7 +2538,7 @@ end
 
 local function inVoid()
     if vhState.active then return true end
-    if config.voidspam.enabled and config.voidspam.phase == "hide" and isSling(getweapon()) then
+    if config.voidspam.enabled and config.voidspam.phase == "hide" then
         return true
     end
     if config.state.reloading and config.ragestatus.hideOnReload ~= false then
@@ -3042,6 +3012,14 @@ RageGroupBox:AddToggle("RagebotEnabled", {
         Ragebot.config.target.rageMasterOn = v
         Ragebot.config.target.auto = v
         Ragebot.config.target.autoshoot = v
+
+        if not v then
+            Ragebot.cleartarget()
+            Ragebot.config.voidspam.phase = nil
+            Ragebot.config.voidspam.shotIssued = false
+            Ragebot.config.orbit.positionReady = false
+            Ragebot.config.orbit.positionReadyAt = 0
+        end
     end
 }):AddKeyPicker("RagebotKey", {
     Text = "Ragebot",
