@@ -458,139 +458,85 @@ stopUnderground = function()
 end
 
 local voidSpamEnabled = false
-local range = math.huge
-local voidHrp = nil
-local voidClientc, voidClientv, voidClientva = nil, nil, nil
-local voidHeartbeatConn, voidRenderConn = nil, nil
-local voidOldCF = nil
-local voidOldVel = nil
-local voidOldAngVel = nil
-local voidOldCamCF = nil
-local voidFirstRun = true
+local voidSpamHrp = nil
+local voidSpamClientC, voidSpamClientV, voidSpamClientVA = nil, nil, nil
+local voidSpamHeartbeat = nil
 
-local function betterRandom(mi, ma, dmi, dma)
-    local val = math.random(mi, ma)
-    local attempts = 0
-    while (val >= dmi and val <= dma) and attempts < 100 do
-        val = math.random(mi, ma)
-        attempts = attempts + 1
-    end
-    return val
-end
+local RAND_MAX = 214748364656
+local RAND_MIN = -114748364656
 
-function startVoidSpam()
-    if voidHeartbeatConn then return end
-    voidFirstRun = true
-    voidHeartbeatConn = RunService.Heartbeat:Connect(function()
+local function startVoidSpam()
+    if voidSpamHeartbeat then return end
+
+    voidSpamHeartbeat = runService.Heartbeat:Connect(function()
         if not voidSpamEnabled then return end
-
-        -- Do not let the standalone Void Spam overwrite Ragebot CSync
-        -- while Ragebot is actively controlling a valid target.
-        if Ragebot
-            and Ragebot.config
-            and Ragebot.config.state
-            and Ragebot.config.target
-            and Ragebot.config.state.csyncactive
-            and Ragebot.config.target.enabled
-            and Ragebot.config.target.character
-            and Ragebot.valid
-            and Ragebot.valid(Ragebot.config.target.character) then
-            return
-        end
 
         pcall(function()
             local char = lp.Character
             if not char then return end
-            voidHrp = char:FindFirstChild("HumanoidRootPart")
-            if not voidHrp then return end
-            if voidFirstRun then
-                voidOldCF = voidHrp.CFrame
-                voidOldVel = voidHrp.AssemblyLinearVelocity
-                voidOldAngVel = voidHrp.AssemblyAngularVelocity
-                voidOldCamCF = Workspace.CurrentCamera.CFrame
-                voidFirstRun = false
-            end
-            voidClientc = voidHrp.CFrame
-            voidClientv = voidHrp.AssemblyLinearVelocity
-            voidClientva = voidHrp.AssemblyAngularVelocity
-            local range = voidRange
-            voidHrp.CFrame = CFrame.new(
-                betterRandom(-range, range, -range/2, range/2),
-                betterRandom(-range, range, -range/2, range/2),
-                betterRandom(-range, range, -range/2, range/2)
+
+            voidSpamHrp = char:FindFirstChild("HumanoidRootPart")
+            if not voidSpamHrp then return end
+
+            voidSpamClientC = voidSpamHrp.CFrame
+            voidSpamClientV = voidSpamHrp.AssemblyLinearVelocity
+            voidSpamClientVA = voidSpamHrp.AssemblyAngularVelocity
+
+            voidSpamHrp.CFrame = CFrame.new(
+                betterRandom(-2147483646,2147483646,-1147483646,1147483646),
+                betterRandom(-2147483646,2147483646,-1147483646,1147483646),
+                betterRandom(-2147483646,2147483646,-1147483646,1147483646)
             ) * CFrame.Angles(math.pi, math.pi, math.pi)
-            voidHrp.AssemblyLinearVelocity = Vector3.new(
-                betterRandom(-range, range, -range/2, range/2),
-                betterRandom(-range, range, -range/2, range/2),
-                betterRandom(-range, range, -range/2, range/2)
+
+            voidSpamHrp.AssemblyLinearVelocity = Vector3.new(
+                betterRandom(-2147483646,2147483646,-1147483646,1147483646),
+                betterRandom(-2147483646,2147483646,-1147483646,1147483646),
+                betterRandom(-2147483646,2147483646,-1147483646,1147483646)
             )
-            voidHrp.AssemblyAngularVelocity = Vector3.new(
-                betterRandom(-range, range, -range/2, range/2),
-                betterRandom(-range, range, -range/2, range/2),
-                betterRandom(-range, range, -range/2, range/2)
+
+            voidSpamHrp.AssemblyAngularVelocity = Vector3.new(
+                betterRandom(-2147483646,2147483646,-1147483646,1147483646),
+                betterRandom(-2147483646,2147483646,-1147483646,1147483646),
+                betterRandom(-2147483646,2147483646,-1147483646,1147483646)
             )
         end)
     end)
-    voidRenderConn = RunService:BindToRenderStep("VoidSpamSync", Enum.RenderPriority.First.Value, function()
-        if not (voidSpamEnabled and voidHrp) then return end
 
-        -- Same arbitration rule as Heartbeat: Ragebot CSync owns the
-        -- character position while it has an active valid target.
-        if Ragebot
-            and Ragebot.config
-            and Ragebot.config.state
-            and Ragebot.config.target
-            and Ragebot.config.state.csyncactive
-            and Ragebot.config.target.enabled
-            and Ragebot.config.target.character
-            and Ragebot.valid
-            and Ragebot.valid(Ragebot.config.target.character) then
-            return
+    pcall(function()
+        runService:UnbindFromRenderStep("VoidSpamSync")
+    end)
+
+    runService:BindToRenderStep(
+        "VoidSpamSync",
+        Enum.RenderPriority.First.Value,
+        function()
+            if voidSpamEnabled and voidSpamHrp then
+                pcall(function()
+                    voidSpamHrp.CFrame = voidSpamClientC
+                    voidSpamHrp.AssemblyLinearVelocity = voidSpamClientV
+                    voidSpamHrp.AssemblyAngularVelocity = voidSpamClientVA
+                end)
+            end
         end
-
-        pcall(function()
-            voidHrp.CFrame = voidClientc
-            voidHrp.AssemblyLinearVelocity = voidClientv
-            voidHrp.AssemblyAngularVelocity = voidClientva
-        end)
-    end)
+    )
 end
 
-function stopVoidSpam()
+local function stopVoidSpam()
     voidSpamEnabled = false
-    if voidHeartbeatConn then
-        voidHeartbeatConn:Disconnect()
-        voidHeartbeatConn = nil
+
+    if voidSpamHeartbeat then
+        voidSpamHeartbeat:Disconnect()
+        voidSpamHeartbeat = nil
     end
-    if voidRenderConn then
-        pcall(function() RunService:UnbindFromRenderStep("VoidSpamSync") end)
-        voidRenderConn = nil
-    end
-    if voidOldCF then
-        pcall(function()
-            local char = lp.Character
-            if char then
-                local hrp = char:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    hrp.CFrame = voidOldCF
-                    hrp.AssemblyLinearVelocity = voidOldVel or Vector3.zero
-                    hrp.AssemblyAngularVelocity = voidOldAngVel or Vector3.zero
-                end
-            end
-            if voidOldCamCF then
-                Workspace.CurrentCamera.CFrame = voidOldCamCF
-            end
-        end)
-        voidOldCF = nil
-        voidOldVel = nil
-        voidOldAngVel = nil
-        voidOldCamCF = nil
-    end
-    voidHrp = nil
-    voidClientc = nil
-    voidClientv = nil
-    voidClientva = nil
-    voidFirstRun = true
+
+    pcall(function()
+        runService:UnbindFromRenderStep("VoidSpamSync")
+    end)
+
+    voidSpamHrp = nil
+    voidSpamClientC = nil
+    voidSpamClientV = nil
+    voidSpamClientVA = nil
 end
 
 local ModSettings = {
@@ -2916,7 +2862,7 @@ LeftGroupBox:AddSlider("AimbotMaxDist", {
     Text = "Max Distance",
     Default = 9999,
     Min = 10,
-    Max = 99999999999,
+    Max = 999999,
     Rounding = 0,
     Callback = function(v) Aimbot:setMaxDist(v) end
 })
@@ -2924,7 +2870,7 @@ LeftGroupBox:AddSlider("AimbotPrediction", {
     Text = "Prediction",
     Default = 0,
     Min = 0,
-    Max = 2,
+    Max = 3,
     Rounding = 1,
     Callback = function(v) Aimbot:setPrediction(v) end
 })
@@ -3098,11 +3044,7 @@ CharacterGroupBox:AddToggle("VoidSpamEnabled", {
     Default = false,
     Callback = function(v)
         voidSpamEnabled = v
-        if v then
-            startVoidSpam()
-        else
-            stopVoidSpam()
-        end
+        if v then startVoidSpam() else stopVoidSpam() end
     end
 })
 
