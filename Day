@@ -21,6 +21,7 @@ local Window = Library:CreateWindow({
 
 local Tabs = {
     Main = Window:AddTab("Main", "crosshair"),
+    Character = Window:AddTab("Character", "user"),
     Combat = Window:AddTab("Combat", "sword"),
     Misc = Window:AddTab("Misc", "settings"),
     ["UI Settings"] = Window:AddTab("UI Settings", "palette"),
@@ -70,24 +71,7 @@ end
 local runServiceType = "Heartbeat"
 local runServiceConnection = nil
 
-local function setRunService(type)
-    runServiceType = type
-    if runServiceConnection then
-        runServiceConnection:Disconnect()
-        runServiceConnection = nil
-    end
-    if type == "Heartbeat" then
-        runServiceConnection = RunService.Heartbeat:Connect(function() Aimbot:update() end)
-    elseif type == "RenderStepped" then
-        runServiceConnection = RunService.RenderStepped:Connect(function() Aimbot:update() end)
-    elseif type == "PreSimulation" then
-        runServiceConnection = RunService.PreSimulation:Connect(function() Aimbot:update() end)
-    end
-end
-
-local hitPartsList = {"Head", "UpperTorso", "LowerTorso", "HumanoidRootPart"}
-
-Aimbot = {
+local Aimbot = {
     enabled = false,
     visCheck = true,
     teamCheck = true,
@@ -95,97 +79,282 @@ Aimbot = {
     maxDist = math.huge,
     prediction = 0,
     smoothing = 0,
-    cc = nil,
     hitPart = "Head",
 
-    getCC = function(self)
-        if not self.cc then
-            self.cc = safeRequire(lp.PlayerScripts.Controllers.CameraController)
+    -- Flick bot
+    flickEnabled = false,
+    flickDuration = 0.3,
+    flickCurvature = 0.5,
+    flickHumanness = 0.3,
+    cooldown = 0.2,
+
+    _state = "Idle",
+    _trajectory = nil,
+    _trajectoryIndex = 1,
+    _elapsed = 0,
+    _total = 0,
+    _selected = nil,
+    _cc = nil,
+}
+
+function Aimbot:getCC()
+    if not self._cc then
+        self._cc = safeRequire(lp.PlayerScripts.Controllers.CameraController)
+    end
+    return self._cc
+end
+
+function Aimbot:setEnabled(v)
+    self.enabled = v
+    if not v then
+        self._state = "Idle"
+        self._trajectory = nil
+        self._selected = nil
+    end
+end
+function Aimbot:setVisibleCheck(v) self.visCheck = v end
+function Aimbot:setTeamCheck(v) self.teamCheck = v end
+function Aimbot:setFOV(v) self.fov = v end
+function Aimbot:setMaxDist(v) self.maxDist = v end
+function Aimbot:setPrediction(v) self.prediction = v end
+function Aimbot:setSmoothing(v) self.smoothing = v end
+function Aimbot:setHitPart(v) self.hitPart = v end
+
+function Aimbot:_getBestTarget()
+    local cam = Workspace.CurrentCamera
+    if not cam then return nil end
+
+    local myPos = cam.CFrame.Position
+    local myTeam = lp:GetAttribute("TeamID")
+    local myEnv = lp:GetAttribute("EnvironmentID")
+    local viewport = cam.ViewportSize
+    local center = Vector2.new(viewport.X / 2, viewport.Y / 2)
+
+    local best, bestScore = nil, math.huge
+
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p == lp then continue end
+        if p:GetAttribute("EnvironmentID") ~= myEnv then continue end
+        if self.teamCheck and myTeam ~= nil and p:GetAttribute("TeamID") == myTeam then continue end
+
+        local char = p.Character
+        if not char then continue end
+
+        local part = char:FindFirstChild(self.hitPart)
+        if not part then
+            part = char:FindFirstChild("Head")
         end
-        return self.cc
-    end,
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not part or not hum or hum.Health <= 0 then continue end
 
-    setEnabled = function(self, state) self.enabled = state; if not state then self.cc = nil end end,
-    setVisibleCheck = function(self, v) self.visCheck = v end,
-    setTeamCheck = function(self, v) self.teamCheck = v end,
-    setFOV = function(self, v) self.fov = v end,
-    setMaxDist = function(self, v) self.maxDist = v end,
-    setPrediction = function(self, v) self.prediction = v end,
-    setSmoothing = function(self, v) self.smoothing = v end,
-    setHitPart = function(self, v) self.hitPart = v end,
-
-    update = function(self)
-        if not self.enabled then return end
-        local c = self:getCC()
-        if not c or not c._current_subject then return end
-
-        local myEnv = lp:GetAttribute("EnvironmentID")
-        local myTeam = lp:GetAttribute("TeamID")
-        local cam = Workspace.CurrentCamera
-        local camPos = cam.CFrame.Position
-        local cx, cy = cam.ViewportSize.X/2, cam.ViewportSize.Y/2
-
-        local best, bestDist = nil, math.huge
-
-        for _, p in ipairs(Players:GetPlayers()) do
-            if p == lp then continue end
-            if p:GetAttribute("EnvironmentID") ~= myEnv then continue end
-            if self.teamCheck and myTeam ~= nil and p:GetAttribute("TeamID") == myTeam then continue end
-
-            local char = p.Character
-            if not char then continue end
-
-            local targetPart
-            if self.hitPart == "HumanoidRootPart" then
-                targetPart = char:FindFirstChild("HumanoidRootPart")
-            else
-                targetPart = char:FindFirstChild(self.hitPart)
-            end
-            if not targetPart then
-                targetPart = char:FindFirstChild("Head")
-                if not targetPart then continue end
-            end
-
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if not hum or hum.Health <= 0 then continue end
-
-            local aimPos = targetPart.Position
-            if self.prediction > 0 then
-                local vel = targetPart.AssemblyLinearVelocity
-                if vel.Magnitude < 500 then
-                    aimPos = targetPart.Position + vel * self.prediction
-                end
-            end
-
-            local dist = (aimPos - camPos).Magnitude
-            if dist > self.maxDist then continue end
-
-            local sp, vis = cam:WorldToViewportPoint(aimPos)
-            if not vis then continue end
-
-            if ((sp.X - cx)^2 + (sp.Y - cy)^2)^0.5 > self.fov then continue end
-
-            if self.visCheck then
-                local rp = RaycastParams.new()
-                rp.FilterDescendantsInstances = { lp.Character, char }
-                rp.FilterType = Enum.RaycastFilterType.Exclude
-                local result = Workspace:Raycast(camPos, (aimPos - camPos).Unit * 1000, rp)
-                if result and not result.Instance:IsDescendantOf(char) then continue end
-            end
-
-            if dist < bestDist then
-                bestDist = dist
-                best = { pos = aimPos, camPos = camPos, char = char }
+        local aimPos = part.Position
+        if self.prediction > 0 then
+            local vel = part.AssemblyLinearVelocity
+            if vel.Magnitude < 500 then
+                aimPos += vel * self.prediction
             end
         end
 
-        if best then
-            pcall(function()
-                c:MimicRotation(CFrame.lookAt(best.camPos, best.pos).Rotation)
-            end)
+        local delta = aimPos - myPos
+        local dist = delta.Magnitude
+        if dist > self.maxDist or dist <= 0 then continue end
+
+        local screen, onScreen = cam:WorldToViewportPoint(aimPos)
+        if not onScreen then continue end
+
+        local screenDelta = Vector2.new(screen.X, screen.Y) - center
+        local fovDist = screenDelta.Magnitude
+        if fovDist > self.fov then continue end
+
+        if self.visCheck then
+            local params = RaycastParams.new()
+            params.FilterDescendantsInstances = {lp.Character, char}
+            params.FilterType = Enum.RaycastFilterType.Exclude
+            local hit = Workspace:Raycast(myPos, delta, params)
+            if hit and not hit.Instance:IsDescendantOf(char) then
+                continue
+            end
+        end
+
+        local score = fovDist * 0.7 + (dist / 1000) * 0.3
+        if score < bestScore then
+            bestScore = score
+            best = {
+                character = char,
+                part = part,
+                position = aimPos,
+                screenPos = Vector2.new(screen.X, screen.Y),
+            }
         end
     end
-}
+
+    return best
+end
+
+function Aimbot:_generateTrajectory(targetScreenPos)
+    local cam = Workspace.CurrentCamera
+    if not cam then return nil end
+
+    local viewport = cam.ViewportSize
+    local startPos = Vector2.new(viewport.X / 2, viewport.Y / 2)
+    local duration = math.max(0.05, self.flickDuration)
+    local steps = math.max(10, math.floor(duration * 60))
+    local trajectory = {}
+
+    for i = 0, steps do
+        local t = i / steps
+        local eased = t ^ (1 + self.flickCurvature * 0.5)
+        local x = startPos.X + (targetScreenPos.X - startPos.X) * eased
+        local y = startPos.Y + (targetScreenPos.Y - startPos.Y) * eased
+
+        if self.flickHumanness > 0 and i < steps then
+            local noise = (math.random() - 0.5) * self.flickHumanness * 12
+            x += noise
+            y += noise
+        end
+
+        local ray = cam:ViewportPointToRay(x, y)
+        trajectory[#trajectory + 1] = {
+            direction = ray.Direction,
+            t = t * duration,
+        }
+    end
+
+    local finalRay = cam:ViewportPointToRay(targetScreenPos.X, targetScreenPos.Y)
+    trajectory[#trajectory].direction = finalRay.Direction
+    return trajectory
+end
+
+function Aimbot:_startFlick(target)
+    self._trajectory = self:_generateTrajectory(target.screenPos)
+    if not self._trajectory then return end
+
+    self._trajectoryIndex = 1
+    self._elapsed = 0
+    self._total = self._trajectory[#self._trajectory].t
+    self._selected = target
+    self._state = "Flicking"
+end
+
+function Aimbot:_finishFlick()
+    self._trajectory = nil
+    self._selected = nil
+    self._state = "Cooldown"
+    self._elapsed = 0
+end
+
+function Aimbot:_updateNormal(dt, target)
+    if not target then return end
+    local cam = Workspace.CurrentCamera
+    local cc = self:getCC()
+    if not cam or not cc then return end
+
+    local targetCF = CFrame.lookAt(cam.CFrame.Position, target.position)
+    if self.smoothing > 0 then
+        local alpha = math.clamp(dt * (1 / (self.smoothing / 100 + 0.01)), 0, 1)
+        targetCF = cam.CFrame:Lerp(targetCF, alpha)
+    end
+
+    pcall(function()
+        cc:MimicRotation(targetCF.Rotation)
+    end)
+end
+
+function Aimbot:_updateFlick(dt)
+    local target = self._selected
+    local cam = Workspace.CurrentCamera
+    local cc = self:getCC()
+
+    if not target or not target.character or not target.character.Parent or not target.part.Parent
+        or not cam or not cc then
+        self:_finishFlick()
+        return
+    end
+
+    self._elapsed += dt
+    local traj = self._trajectory
+    if not traj then
+        self:_finishFlick()
+        return
+    end
+
+    local idx = self._trajectoryIndex
+    while idx < #traj and traj[idx + 1].t <= self._elapsed do
+        idx += 1
+    end
+    self._trajectoryIndex = idx
+
+    if idx >= #traj then
+        local pos = target.part.Position
+        pcall(function()
+            cc:MimicRotation(CFrame.lookAt(cam.CFrame.Position, pos).Rotation)
+        end)
+        self:_finishFlick()
+        return
+    end
+
+    local a, b = traj[idx], traj[idx + 1]
+    local alpha = 0
+    if b.t > a.t then
+        alpha = math.clamp((self._elapsed - a.t) / (b.t - a.t), 0, 1)
+    end
+
+    local dir = a.direction:Lerp(b.direction, alpha)
+    pcall(function()
+        cc:MimicRotation(CFrame.lookAt(cam.CFrame.Position, cam.CFrame.Position + dir * 100).Rotation)
+    end)
+end
+
+function Aimbot:update(dt)
+    if not self.enabled then return end
+    dt = tonumber(dt) or 0.016
+
+    if self._state == "Cooldown" then
+        self._elapsed += dt
+        if self._elapsed >= self.cooldown then
+            self._elapsed = 0
+            self._state = "Idle"
+        end
+        return
+    end
+
+    if self._state == "Flicking" then
+        self:_updateFlick(dt)
+        return
+    end
+
+    local target = self:_getBestTarget()
+    if not target then return end
+
+    if self.flickEnabled then
+        self:_startFlick(target)
+    else
+        self:_updateNormal(dt, target)
+    end
+end
+
+local function setRunService(type)
+    runServiceType = type
+    if runServiceConnection then
+        runServiceConnection:Disconnect()
+        runServiceConnection = nil
+    end
+
+    local signal
+    if type == "Heartbeat" then
+        signal = RunService.Heartbeat
+    elseif type == "RenderStepped" then
+        signal = RunService.RenderStepped
+    elseif type == "PreSimulation" then
+        signal = RunService.PreSimulation
+    end
+
+    if signal then
+        runServiceConnection = signal:Connect(function(dt)
+            Aimbot:update(dt)
+        end)
+    end
+end
 
 setRunService("Heartbeat")
 
@@ -289,7 +458,7 @@ stopUnderground = function()
 end
 
 local voidSpamEnabled = false
-local voidRange = math.huge
+local range = math.huge
 local voidHrp = nil
 local voidClientc, voidClientv, voidClientva = nil, nil, nil
 local voidHeartbeatConn, voidRenderConn = nil, nil
@@ -1167,7 +1336,8 @@ local config = {
         hide_max = 1,
         phase = nil,
         lastswitch = 0,
-        currentduration = 0
+        currentduration = 0,
+        shotIssued = false
     },
     visualizer = {
         enabled = true,
@@ -1827,6 +1997,7 @@ local function stopsync()
     config.orbit.active = false
     clrVoidSnap()
     config.voidspam.phase = nil
+    config.voidspam.shotIssued = false
     if config.orbit.savedpos and localfighter and localfighter.Entity and localfighter.Entity.RootPart and not getgenv().InstanceUndergroundEnabled then
         local ok, pos = pcall(function() return config.orbit.savedpos end)
         if ok and pos then
@@ -1840,6 +2011,7 @@ local function stopsync()
     config.orbit.serverpos = nil
     config.orbit.savedpos = nil
     config.voidspam.phase = nil
+    config.voidspam.shotIssued = false
     oldpos = nil
 end
 
@@ -1853,6 +2025,7 @@ local function tickVoidSpam()
     -- No target = no Hide and no VoidSpam phase.
     if not config.target.character or not valid(config.target.character) then
         config.voidspam.phase = nil
+        config.voidspam.shotIssued = false
         return
     end
 
@@ -1862,7 +2035,14 @@ local function tickVoidSpam()
     if config.voidspam.phase == "shoot" then
         -- Attack is only the maximum time for the current attack attempt.
         -- If nothing was fired, stay in shoot/retry instead of hiding.
-        if elapsed >= config.voidspam.currentduration then
+        if config.voidspam.shotIssued then
+            config.voidspam.phase = "hide"
+            config.voidspam.currentduration = randVs(
+                config.voidspam.hide_min,
+                config.voidspam.hide_max
+            )
+            config.voidspam.lastswitch = now
+        elseif elapsed >= config.voidspam.currentduration then
             config.voidspam.currentduration = randVs(
                 config.voidspam.shoot_min,
                 config.voidspam.shoot_max
@@ -1872,6 +2052,7 @@ local function tickVoidSpam()
     elseif config.voidspam.phase == "hide" then
         if elapsed >= config.voidspam.currentduration then
             config.voidspam.phase = "shoot"
+            config.voidspam.shotIssued = false
             config.voidspam.currentduration = randVs(
                 config.voidspam.shoot_min,
                 config.voidspam.shoot_max
@@ -1880,6 +2061,7 @@ local function tickVoidSpam()
         end
     else
         config.voidspam.phase = "shoot"
+        config.voidspam.shotIssued = false
         config.voidspam.currentduration = randVs(
             config.voidspam.shoot_min,
             config.voidspam.shoot_max
@@ -1945,8 +2127,11 @@ local function hideShot()
     if isSling(getweapon()) then return end
     if not config.target.character or not valid(config.target.character) then
         config.voidspam.phase = nil
+        config.voidspam.shotIssued = false
         return
     end
+
+    if not config.voidspam.shotIssued then return end
 
     config.voidspam.phase = "hide"
     config.voidspam.currentduration = randVs(
@@ -2095,12 +2280,9 @@ local function startsync()
 end
 
 local function autoshoot()
-    if not isSling(getweapon()) and config.voidspam.enabled and config.voidspam.phase == "hide" then return end
     if not config.target.enabled or not config.target.character or not valid(config.target.character) or not config.target.autoshoot then return end
+    if config.voidspam.enabled and config.voidspam.phase == "hide" then return end
     if config.target.immune then return end
-    if config.voidspam.enabled and config.voidspam.phase == "hide" then return end
-    if not isSling(getweapon()) and config.voidspam.enabled and config.voidspam.phase == "hide" then return end
-    if config.voidspam.enabled and config.voidspam.phase == "hide" then return end
     local weapon = getweapon()
     local checksling = isSling(weapon)
     eqSlot()
@@ -2153,6 +2335,11 @@ local function autoshoot()
                     nil
                 )
             end)
+        end
+
+        if config.voidspam.enabled and not isSling(getweapon())
+            and config.voidspam.phase == "shoot" then
+            config.voidspam.shotIssued = true
         end
         hideShot()
     end
@@ -2701,6 +2888,7 @@ end
 end
 
 local LeftGroupBox = Tabs.Main:AddLeftGroupbox("Aimbot", "crosshair")
+
 LeftGroupBox:AddToggle("AimbotEnabled", {
     Text = "Enable Aimbot",
     Default = false,
@@ -2728,7 +2916,7 @@ LeftGroupBox:AddSlider("AimbotMaxDist", {
     Text = "Max Distance",
     Default = 9999,
     Min = 10,
-    Max = 999999999999,
+    Max = 99999999999,
     Rounding = 0,
     Callback = function(v) Aimbot:setMaxDist(v) end
 })
@@ -2736,7 +2924,7 @@ LeftGroupBox:AddSlider("AimbotPrediction", {
     Text = "Prediction",
     Default = 0,
     Min = 0,
-    Max = 3,
+    Max = 2,
     Rounding = 1,
     Callback = function(v) Aimbot:setPrediction(v) end
 })
@@ -2750,15 +2938,56 @@ LeftGroupBox:AddSlider("AimbotSmoothing", {
 })
 LeftGroupBox:AddDropdown("AimbotHitPart", {
     Text = "Hit Part",
-    Values = hitPartsList,
-    Default = 1,
+    Values = {"Head", "UpperTorso", "LowerTorso", "HumanoidRootPart"},
+    Default = "Head",
     Callback = function(v) Aimbot:setHitPart(v) end
 })
 LeftGroupBox:AddDropdown("AimbotRunService", {
     Text = "Update Mode",
     Values = {"Heartbeat", "RenderStepped", "PreSimulation"},
-    Default = 1,
+    Default = "Heartbeat",
     Callback = function(v) setRunService(v) end
+})
+
+local FlickGroupBox = Tabs.Main:AddRightGroupbox("Flick Bot", "crosshair")
+FlickGroupBox:AddToggle("FlickEnabled", {
+    Text = "Enable Flick",
+    Default = false,
+    Callback = function(v) Aimbot.flickEnabled = v end
+})
+FlickGroupBox:AddSlider("FlickDuration", {
+    Text = "Duration",
+    Default = 0.3,
+    Min = 0.05,
+    Max = 1,
+    Rounding = 2,
+    Suffix = " s",
+    Callback = function(v) Aimbot.flickDuration = v end
+})
+FlickGroupBox:AddSlider("FlickCurvature", {
+    Text = "Curvature",
+    Default = 0.5,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Callback = function(v) Aimbot.flickCurvature = v end
+})
+FlickGroupBox:AddSlider("FlickHumanness", {
+    Text = "Humanness",
+    Default = 0.3,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Callback = function(v) Aimbot.flickHumanness = v end
+})
+FlickGroupBox:AddSlider("FlickCooldown", {
+    Text = "Cooldown",
+    Default = 0.2,
+    Min = 0.05,
+    Max = 1,
+    Rounding = 2,
+    Suffix = " s",
+    Callback = function(v) Aimbot.cooldown = v end
 })
 
 local SilentGroupBox = Tabs.Main:AddLeftGroupbox("Silent Aim", "target")
@@ -2816,8 +3045,9 @@ SilentGroupBox:AddToggle("SilentFollowMuzzle", {
 })
 
 
-local RightGroupBox = Tabs.Main:AddRightGroupbox("Movement", "move")
-RightGroupBox:AddToggle("UndergroundEnabled", {
+local CharacterGroupBox = Tabs.Character:AddLeftGroupbox("Character", "user")
+
+CharacterGroupBox:AddToggle("UndergroundEnabled", {
     Text = "Underground",
     Default = false,
     Callback = function(v)
@@ -2829,7 +3059,7 @@ RightGroupBox:AddToggle("UndergroundEnabled", {
         end
     end
 })
-RightGroupBox:AddSlider("UndergroundDepth", {
+CharacterGroupBox:AddSlider("UndergroundDepth", {
     Text = "Depth",
     Default = 2.5,
     Min = 2.5,
@@ -2844,7 +3074,7 @@ RightGroupBox:AddSlider("UndergroundDepth", {
         end
     end
 })
-RightGroupBox:AddInput("UndergroundCustomDepth", {
+CharacterGroupBox:AddInput("UndergroundCustomDepth", {
     Text = "Custom Depth",
     Default = "2.5",
     Placeholder = "Enter number...",
@@ -2863,7 +3093,7 @@ RightGroupBox:AddInput("UndergroundCustomDepth", {
         end
     end
 })
-RightGroupBox:AddToggle("VoidSpamEnabled", {
+CharacterGroupBox:AddToggle("VoidSpamEnabled", {
     Text = "Void Spam",
     Default = false,
     Callback = function(v)
