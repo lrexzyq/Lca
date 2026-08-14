@@ -457,88 +457,6 @@ stopUnderground = function()
     undergroundFirstRun = true
 end
 
-local voidSpamEnabled = false
-local voidSpamHrp = nil
-local voidSpamClientC, voidSpamClientV, voidSpamClientVA = nil, nil, nil
-local voidSpamHeartbeat = nil
-
-local RAND_MAX = 214748364656
-local RAND_MIN = -114748364656
-
-local function startVoidSpam()
-    if voidSpamHeartbeat then return end
-
-    voidSpamHeartbeat = runService.Heartbeat:Connect(function()
-        if not voidSpamEnabled then return end
-
-        pcall(function()
-            local char = lp.Character
-            if not char then return end
-
-            voidSpamHrp = char:FindFirstChild("HumanoidRootPart")
-            if not voidSpamHrp then return end
-
-            voidSpamClientC = voidSpamHrp.CFrame
-            voidSpamClientV = voidSpamHrp.AssemblyLinearVelocity
-            voidSpamClientVA = voidSpamHrp.AssemblyAngularVelocity
-
-            voidSpamHrp.CFrame = CFrame.new(
-                betterRandom(-2147483646,2147483646,-1147483646,1147483646),
-                betterRandom(-2147483646,2147483646,-1147483646,1147483646),
-                betterRandom(-2147483646,2147483646,-1147483646,1147483646)
-            ) * CFrame.Angles(math.pi, math.pi, math.pi)
-
-            voidSpamHrp.AssemblyLinearVelocity = Vector3.new(
-                betterRandom(-2147483646,2147483646,-1147483646,1147483646),
-                betterRandom(-2147483646,2147483646,-1147483646,1147483646),
-                betterRandom(-2147483646,2147483646,-1147483646,1147483646)
-            )
-
-            voidSpamHrp.AssemblyAngularVelocity = Vector3.new(
-                betterRandom(-2147483646,2147483646,-1147483646,1147483646),
-                betterRandom(-2147483646,2147483646,-1147483646,1147483646),
-                betterRandom(-2147483646,2147483646,-1147483646,1147483646)
-            )
-        end)
-    end)
-
-    pcall(function()
-        runService:UnbindFromRenderStep("VoidSpamSync")
-    end)
-
-    runService:BindToRenderStep(
-        "VoidSpamSync",
-        Enum.RenderPriority.First.Value,
-        function()
-            if voidSpamEnabled and voidSpamHrp then
-                pcall(function()
-                    voidSpamHrp.CFrame = voidSpamClientC
-                    voidSpamHrp.AssemblyLinearVelocity = voidSpamClientV
-                    voidSpamHrp.AssemblyAngularVelocity = voidSpamClientVA
-                end)
-            end
-        end
-    )
-end
-
-local function stopVoidSpam()
-    voidSpamEnabled = false
-
-    if voidSpamHeartbeat then
-        voidSpamHeartbeat:Disconnect()
-        voidSpamHeartbeat = nil
-    end
-
-    pcall(function()
-        runService:UnbindFromRenderStep("VoidSpamSync")
-    end)
-
-    voidSpamHrp = nil
-    voidSpamClientC = nil
-    voidSpamClientV = nil
-    voidSpamClientVA = nil
-end
-
 local ModSettings = {
     NoMeleeAnimation = false,
     NoDashCooldown = false,
@@ -1642,13 +1560,17 @@ local function tickAmmo()
         config.state.reloadStartedAt = 0
         return
     end
+
     local current, maxAmmo, melee = getammo()
     local wasOutOfAmmo = config.state.outofammo
+    local wasReloading = config.state.reloading
+
     if melee then
         config.state.outofammo = false
     else
         config.state.outofammo = (tonumber(current) or 0) <= 0
     end
+
     local reloading = itemReload()
     if reloading and not config.state.reloading then
         config.state.reloadStartedAt = tick()
@@ -1656,16 +1578,41 @@ local function tickAmmo()
         config.state.reloadStartedAt = 0
     end
     config.state.reloading = reloading
-    if config.state.outofammo and not wasOutOfAmmo then
-        if isSling(getweapon()) then
+
+    -- Empty magazine: lock the state in Hide until ammo is actually restored.
+    if config.state.outofammo and not melee then
+        if config.voidspam.enabled then
             config.voidspam.phase = "hide"
+            config.voidspam.shotIssued = false
+            config.voidspam.lastswitch = tick()
         end
-    elseif not config.state.outofammo and wasOutOfAmmo then
+        return
+    end
+
+    -- Reload completed with usable ammo: allow the next attack immediately.
+    if not melee and wasOutOfAmmo and not config.state.outofammo and (tonumber(current) or 0) > 0 then
         if config.voidspam.enabled then
             config.voidspam.phase = "shoot"
+            config.voidspam.shotIssued = false
+            config.voidspam.currentduration = randVs(
+                config.voidspam.shoot_min,
+                config.voidspam.shoot_max
+            )
             config.voidspam.lastswitch = tick()
-        else
-            config.voidspam.phase = nil
+        end
+        return
+    end
+
+    -- Any reload completion also exits the reload-hide state when ammo is available.
+    if not reloading and wasReloading and not config.state.outofammo and (tonumber(current) or 0) > 0 then
+        if config.voidspam.enabled then
+            config.voidspam.phase = "shoot"
+            config.voidspam.shotIssued = false
+            config.voidspam.currentduration = randVs(
+                config.voidspam.shoot_min,
+                config.voidspam.shoot_max
+            )
+            config.voidspam.lastswitch = tick()
         end
     end
 end
@@ -1968,10 +1915,37 @@ end
 local function tickVoidSpam()
     if not config.voidspam.enabled then return end
 
-    -- No target = no Hide and no VoidSpam phase.
-    if not config.target.character or not valid(config.target.character) then
-        config.voidspam.phase = nil
+    local hasTarget = config.target.character and valid(config.target.character)
+
+    -- Hide is the safe/default state. No target never means "unhide".
+    if not hasTarget then
+        if config.voidspam.phase ~= "hide" then
+            config.voidspam.phase = "hide"
+            config.voidspam.shotIssued = false
+            config.voidspam.currentduration = math.huge
+            config.voidspam.lastswitch = tick()
+        end
+        return
+    end
+
+    -- A target appearing after the no-target Hide unlocks an attack window.
+    if config.voidspam.phase == "hide" and config.voidspam.currentduration == math.huge then
+        config.voidspam.phase = "shoot"
         config.voidspam.shotIssued = false
+        config.voidspam.currentduration = randVs(
+            config.voidspam.shoot_min,
+            config.voidspam.shoot_max
+        )
+        config.voidspam.lastswitch = tick()
+        return
+    end
+
+    -- Empty/reloading weapons stay hidden until ammo is usable again.
+    if config.state.outofammo or config.state.reloading then
+        config.voidspam.phase = "hide"
+        config.voidspam.shotIssued = false
+        config.voidspam.currentduration = math.huge
+        config.voidspam.lastswitch = tick()
         return
     end
 
@@ -1979,8 +1953,7 @@ local function tickVoidSpam()
     local elapsed = now - config.voidspam.lastswitch
 
     if config.voidspam.phase == "shoot" then
-        -- Attack is only the maximum time for the current attack attempt.
-        -- If nothing was fired, stay in shoot/retry instead of hiding.
+        -- A successful attack immediately starts a new hide window.
         if config.voidspam.shotIssued then
             config.voidspam.phase = "hide"
             config.voidspam.currentduration = randVs(
@@ -1989,6 +1962,7 @@ local function tickVoidSpam()
             )
             config.voidspam.lastswitch = now
         elseif elapsed >= config.voidspam.currentduration then
+            -- Keep retrying the attack window rather than hiding without a shot.
             config.voidspam.currentduration = randVs(
                 config.voidspam.shoot_min,
                 config.voidspam.shoot_max
@@ -2862,7 +2836,7 @@ LeftGroupBox:AddSlider("AimbotMaxDist", {
     Text = "Max Distance",
     Default = 9999,
     Min = 10,
-    Max = 999999,
+    Max = 99999999999,
     Rounding = 0,
     Callback = function(v) Aimbot:setMaxDist(v) end
 })
@@ -2870,7 +2844,7 @@ LeftGroupBox:AddSlider("AimbotPrediction", {
     Text = "Prediction",
     Default = 0,
     Min = 0,
-    Max = 3,
+    Max = 1,
     Rounding = 1,
     Callback = function(v) Aimbot:setPrediction(v) end
 })
@@ -2979,7 +2953,7 @@ SilentGroupBox:AddSlider("SilentFOVRadius", {
     Text = "FOV Radius",
     Default = 100,
     Min = 10,
-    Max = 750,
+    Max = 7500,
     Rounding = 1,
     Compact = true,
     Callback = function(v) silentAim.fovRadius = v end
@@ -3037,14 +3011,6 @@ CharacterGroupBox:AddInput("UndergroundCustomDepth", {
         elseif v ~= "" then
             Library:Notify("Invalid depth (min 2.5)")
         end
-    end
-})
-CharacterGroupBox:AddToggle("VoidSpamEnabled", {
-    Text = "Void Spam",
-    Default = false,
-    Callback = function(v)
-        voidSpamEnabled = v
-        if v then startVoidSpam() else stopVoidSpam() end
     end
 })
 
@@ -3273,7 +3239,7 @@ RageGroupBox:AddSlider("RagebotShootAttempts", {
     Text = "Shoot Attempts",
     Default = Ragebot.config.target.shootAttempts or 1,
     Min = 1,
-    Max = 3,
+    Max = 5,
     Rounding = 0,
     Suffix = "x",
     Callback = function(v)
@@ -3342,7 +3308,7 @@ RageGroupBox:AddSlider("RagebotHide", {
     Text = "Hide",
     Default = Ragebot.config.voidspam.hide_min or 1,
     Min = 0,
-    Max = 2,
+    Max = 1,
     Rounding = 1,
     Compact = true,
     Callback = function(v)
