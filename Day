@@ -16,7 +16,7 @@ local Window = Library:CreateWindow({
     ShowCustomCursor = true,
     Footer = {
         "Rivals | ",
-        { Text = "Ass+Shit = Skids", Copyable = true },
+        { Text = "Aimbot + Ragebot", Copyable = true },
     },
     CopyableFooter = true,
     FuzzySearch = true,
@@ -1186,13 +1186,17 @@ local config = {
         speed = 9000,
         height = 1,
         radius = 0,
-        originalpos = nil
+        originalpos = nil,
+        originalcam = nil,
+        originalvel = nil,
+        originalangvel = nil,
     },
     state = {
         reloading = false,
         outofammo = false,
         csyncactive = false,
         reloadStartedAt = 0,
+        restoreLock = false,
     },
     voidhide = {
         enabled = true,
@@ -1285,9 +1289,6 @@ local vhState = {
 
 local localfighter = modules.fighter and modules.fighter.LocalFighter or nil
 local oldpos
-local attackOriginCF = nil
-local attackOriginVel = nil
-local attackOriginAngVel = nil
 
 local indicator = Drawing.new("Circle")
 indicator.Thickness = 1.5
@@ -1564,8 +1565,6 @@ local function itemReload()
     return started > 0 and (tick() - started) < 1.75
 end
 
-local stopsync
-
 local function tickAmmo()
     if isInfiniteWeapon() then
         config.state.outofammo = false
@@ -1592,22 +1591,20 @@ local function tickAmmo()
     end
     config.state.reloading = reloading
 
-    -- Empty magazine: restore the attack origin immediately and end the attack cycle.
+    -- Empty magazine: lock the state in Hide until ammo is actually restored.
     if config.state.outofammo and not melee then
-        restoreAttackOrigin()
-        if config.state.csyncactive then
-            stopsync()
-        end
         if config.voidspam.enabled then
             config.voidspam.phase = "hide"
             config.voidspam.shotIssued = false
-            config.voidspam.currentduration = math.huge
             config.voidspam.lastswitch = tick()
         end
         return
     end
 
     -- Reload completed with usable ammo: allow the next attack immediately.
+    if not config.state.reloading and not config.state.outofammo and (tonumber(current) or 0) > 0 then
+        config.state.restoreLock = false
+    end
     if not melee and wasOutOfAmmo and not config.state.outofammo and (tonumber(current) or 0) > 0 then
         if config.voidspam.enabled then
             config.voidspam.phase = "shoot"
@@ -1898,41 +1895,50 @@ local function refreshAtk()
     setOrbR()
 end
 
-local function restoreAttackOrigin()
-    local rootPart = localfighter and localfighter.Entity and localfighter.Entity.RootPart
-    local pos = attackOriginCF or config.orbit.savedpos
-    if not rootPart or not pos then return false end
-
-    local ok = pcall(function()
-        rootPart.CFrame = pos
-        if attackOriginVel then rootPart.AssemblyLinearVelocity = attackOriginVel end
-        if attackOriginAngVel then rootPart.AssemblyAngularVelocity = attackOriginAngVel end
-    end)
-    return ok
-end
-
-stopsync = function()
+local function stopsync()
     if not config.state.csyncactive then return end
+
+    config.state.restoreLock = true
+
     if config.orbit.connection then
         config.orbit.connection:Disconnect()
         config.orbit.connection = nil
     end
+
     config.state.csyncactive = false
     config.orbit.active = false
     clrVoidSnap()
-    config.voidspam.phase = nil
-    config.voidspam.shotIssued = false
-    if not getgenv().InstanceUndergroundEnabled then
-        restoreAttackOrigin()
+
+    local root = localfighter and localfighter.Entity and localfighter.Entity.RootPart
+    if root and not getgenv().InstanceUndergroundEnabled then
+        local restorePos = config.orbit.originalpos or config.orbit.savedpos
+        if restorePos then
+            pcall(function()
+                root.CFrame = restorePos
+                root.AssemblyLinearVelocity = config.orbit.originalvel or Vector3.zero
+                root.AssemblyAngularVelocity = config.orbit.originalangvel or Vector3.zero
+            end)
+        end
     end
+
+    local cam = Workspace.CurrentCamera
+    if cam and config.orbit.originalcam and not getgenv().InstanceUndergroundEnabled then
+        pcall(function()
+            cam.CFrame = config.orbit.originalcam
+        end)
+    end
+
     config.orbit.serverpos = nil
     config.orbit.savedpos = nil
+    config.orbit.originalpos = nil
+    config.orbit.originalcam = nil
+    config.orbit.originalvel = nil
+    config.orbit.originalangvel = nil
     config.voidspam.phase = nil
     config.voidspam.shotIssued = false
     oldpos = nil
-    attackOriginCF = nil
-    attackOriginVel = nil
-    attackOriginAngVel = nil
+
+    config.state.restoreLock = false
 end
 
 local function isHidingPhase()
@@ -2115,12 +2121,20 @@ local function startsync()
     local weapon = getweapon()
     setOrbH(weapon)
     setOrbR()
-    if not config.orbit.savedpos and localfighter and localfighter.Entity and localfighter.Entity.RootPart then
-        local rootPart = localfighter.Entity.RootPart
-        config.orbit.savedpos = rootPart.CFrame
-        attackOriginCF = rootPart.CFrame
-        attackOriginVel = rootPart.AssemblyLinearVelocity
-        attackOriginAngVel = rootPart.AssemblyAngularVelocity
+    if not config.orbit.savedpos then
+        if localfighter and localfighter.Entity and localfighter.Entity.RootPart then
+            local root = localfighter.Entity.RootPart
+            config.orbit.savedpos = root.CFrame
+            config.orbit.originalpos = root.CFrame
+            config.orbit.originalvel = root.AssemblyLinearVelocity
+            config.orbit.originalangvel = root.AssemblyAngularVelocity
+        end
+    end
+    if not config.orbit.originalcam then
+        local cam = Workspace.CurrentCamera
+        if cam then
+            config.orbit.originalcam = cam.CFrame
+        end
     end
     config.orbit.connection = runsvc.Heartbeat:Connect(function(dt)
         if not config.state.csyncactive then return end
@@ -2130,8 +2144,29 @@ local function startsync()
 
         if config.target.immune then stopsync() return end
 
+        local root = localfighter.Entity.RootPart
+
+        -- Hard lock during reload / empty magazine: never run target teleport logic.
+        if config.state.reloading or config.state.outofammo then
+            config.state.restoreLock = true
+            local restorePos = config.orbit.originalpos or config.orbit.savedpos
+            if restorePos then
+                pcall(function()
+                    root.CFrame = restorePos
+                    root.AssemblyLinearVelocity = config.orbit.originalvel or Vector3.zero
+                    root.AssemblyAngularVelocity = config.orbit.originalangvel or Vector3.zero
+                end)
+            end
+            if config.orbit.originalcam and Workspace.CurrentCamera then
+                pcall(function() Workspace.CurrentCamera.CFrame = config.orbit.originalcam end)
+            end
+            config.orbit.serverpos = restorePos and restorePos.Position or nil
+            return
+        end
+
+        config.state.restoreLock = false
         setOrbR()
-        oldpos = localfighter.Entity.RootPart.CFrame
+        oldpos = root.CFrame
 
         local function isQuickSwapActive()
             if pickMelee() then return false end
@@ -2298,7 +2333,11 @@ if modules.camcontrol and type(modules.camcontrol.Update) == "function" then
     modules.camcontrol.Update = function(...)
         if getgenv().InstanceUndergroundEnabled then
             return oldcamupdate(...)
-        elseif config.state.csyncactive and localfighter and localfighter.Entity and localfighter.Entity.RootPart and oldpos then
+        elseif config.state.csyncactive
+            and not config.state.restoreLock
+            and not config.state.reloading
+            and not config.state.outofammo
+            and localfighter and localfighter.Entity and localfighter.Entity.RootPart and oldpos then
             localfighter.Entity.RootPart.CFrame = oldpos
         end
         return oldcamupdate(...)
