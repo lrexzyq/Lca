@@ -1,4 +1,4 @@
-local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
+local repo = "https://raw.githubusercontent.com/joustingmatch/ObsidianUltra/main/"
 local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
 local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
 local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
@@ -11,20 +11,28 @@ Library.ShowToggleFrameInKeybinds = true
 
 local Window = Library:CreateWindow({
     Title = "Skiding",
-    Footer = "PhP1001sd",
     Icon = 95816097006870,
-    Center = true,
-    AutoShow = true,
     NotifySide = "Right",
     ShowCustomCursor = true,
+    Footer = {
+        "Rivals | ",
+        { Text = "Aimbot + Ragebot", Copyable = true },
+    },
+    CopyableFooter = true,
+    FuzzySearch = true,
+    SearchValues = true,
+    SearchKeybind = Enum.KeyCode.F,
+    Minimizable = true,
+    MinimizeKeybind = Enum.KeyCode.RightBracket,
+    MinimizedWidth = 300,
 })
 
 local Tabs = {
-    Main = Window:AddTab("Main", "crosshair"),
-    Character = Window:AddTab("Character", "user"),
-    Combat = Window:AddTab("Combat", "sword"),
-    Misc = Window:AddTab("Misc", "settings"),
-    ["UI Settings"] = Window:AddTab("UI Settings", "palette"),
+    Main = Window:AddTab({ Name = "Main", Icon = "crosshair", Description = "Aimbot & Ragebot" }),
+    Character = Window:AddTab({ Name = "Character", Icon = "user", Description = "Character utilities" }),
+    Combat = Window:AddTab({ Name = "Combat", Icon = "sword", Description = "Combat utilities" }),
+    Misc = Window:AddTab({ Name = "Misc", Icon = "settings", Description = "Miscellaneous" }),
+    ["UI Settings"] = Window:AddTab({ Name = "UI Settings", Icon = "settings", Description = "Configure the menu" }),
 }
 
 local Players = game:GetService("Players")
@@ -2836,7 +2844,7 @@ LeftGroupBox:AddSlider("AimbotMaxDist", {
     Text = "Max Distance",
     Default = 9999,
     Min = 10,
-    Max = 99999999999,
+    Max = 999999,
     Rounding = 0,
     Callback = function(v) Aimbot:setMaxDist(v) end
 })
@@ -2844,7 +2852,7 @@ LeftGroupBox:AddSlider("AimbotPrediction", {
     Text = "Prediction",
     Default = 0,
     Min = 0,
-    Max = 1,
+    Max = 3,
     Rounding = 1,
     Callback = function(v) Aimbot:setPrediction(v) end
 })
@@ -2953,7 +2961,7 @@ SilentGroupBox:AddSlider("SilentFOVRadius", {
     Text = "FOV Radius",
     Default = 100,
     Min = 10,
-    Max = 7500,
+    Max = 750,
     Rounding = 1,
     Compact = true,
     Callback = function(v) silentAim.fovRadius = v end
@@ -3239,7 +3247,7 @@ RageGroupBox:AddSlider("RagebotShootAttempts", {
     Text = "Shoot Attempts",
     Default = Ragebot.config.target.shootAttempts or 1,
     Min = 1,
-    Max = 5,
+    Max = 3,
     Rounding = 0,
     Suffix = "x",
     Callback = function(v)
@@ -3308,7 +3316,7 @@ RageGroupBox:AddSlider("RagebotHide", {
     Text = "Hide",
     Default = Ragebot.config.voidspam.hide_min or 1,
     Min = 0,
-    Max = 1,
+    Max = 2,
     Rounding = 1,
     Compact = true,
     Callback = function(v)
@@ -3384,6 +3392,47 @@ MiscGroupBox:AddToggle("BackshootToggle", {
     SyncToggleState = false,
     Callback = function(state) end
 })
+
+local MenuGroup = Tabs["UI Settings"]:AddLeftGroupbox("Menu", "wrench")
+MenuGroup:AddToggle("KeybindMenuOpen", {
+    Default = Library.KeybindFrame.Visible,
+    Text = "Open Keybind Menu",
+    Callback = function(value)
+        Library.KeybindFrame.Visible = value
+    end,
+})
+MenuGroup:AddToggle("ShowCustomCursor", {
+    Text = "Custom Cursor",
+    Default = Library.ShowCustomCursor,
+    Callback = function(value)
+        Library.ShowCustomCursor = value
+    end,
+})
+MenuGroup:AddDropdown("NotificationSide", {
+    Values = { "Left", "Right" },
+    Default = "Right",
+    Text = "Notification Side",
+    Callback = function(value)
+        Library:SetNotifySide(value)
+    end,
+})
+MenuGroup:AddSlider("UICornerSlider", {
+    Text = "Corner Radius",
+    Default = Library.CornerRadius,
+    Min = 0,
+    Max = 20,
+    Rounding = 0,
+    Callback = function(value)
+        Window:SetCornerRadius(value)
+    end,
+})
+MenuGroup:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", {
+    Default = "RightShift",
+    NoUI = true,
+    Text = "Menu keybind",
+})
+
+Library.ToggleKeybind = Options.MenuKeybind
 
 ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
