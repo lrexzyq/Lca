@@ -1,4 +1,4 @@
-local repo = "https://raw.githubusercontent.com/joustingmatch/ObsidianUltra/main/"
+local repo = "https://raw.githubusercontent.com/rexzyq/ObsidianQui/main/"
 local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
 local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
 local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
@@ -1186,17 +1186,13 @@ local config = {
         speed = 9000,
         height = 1,
         radius = 0,
-        originalpos = nil,
-        originalcam = nil,
-        originalvel = nil,
-        originalangvel = nil,
+        originalpos = nil
     },
     state = {
         reloading = false,
         outofammo = false,
         csyncactive = false,
         reloadStartedAt = 0,
-        restoreLock = false,
     },
     voidhide = {
         enabled = true,
@@ -1602,9 +1598,6 @@ local function tickAmmo()
     end
 
     -- Reload completed with usable ammo: allow the next attack immediately.
-    if not config.state.reloading and not config.state.outofammo and (tonumber(current) or 0) > 0 then
-        config.state.restoreLock = false
-    end
     if not melee and wasOutOfAmmo and not config.state.outofammo and (tonumber(current) or 0) > 0 then
         if config.voidspam.enabled then
             config.voidspam.phase = "shoot"
@@ -2105,17 +2098,7 @@ local function startsync()
     setOrbR()
     if not config.orbit.savedpos then
         if localfighter and localfighter.Entity and localfighter.Entity.RootPart then
-            local root = localfighter.Entity.RootPart
-            config.orbit.savedpos = root.CFrame
-            config.orbit.originalpos = root.CFrame
-            config.orbit.originalvel = root.AssemblyLinearVelocity
-            config.orbit.originalangvel = root.AssemblyAngularVelocity
-        end
-    end
-    if not config.orbit.originalcam then
-        local cam = Workspace.CurrentCamera
-        if cam then
-            config.orbit.originalcam = cam.CFrame
+            config.orbit.savedpos = localfighter.Entity.RootPart.CFrame
         end
     end
     config.orbit.connection = runsvc.Heartbeat:Connect(function(dt)
@@ -2126,29 +2109,8 @@ local function startsync()
 
         if config.target.immune then stopsync() return end
 
-        local root = localfighter.Entity.RootPart
-
-        -- Hard lock during reload / empty magazine: never run target teleport logic.
-        if config.state.reloading or config.state.outofammo then
-            config.state.restoreLock = true
-            local restorePos = config.orbit.originalpos or config.orbit.savedpos
-            if restorePos then
-                pcall(function()
-                    root.CFrame = restorePos
-                    root.AssemblyLinearVelocity = config.orbit.originalvel or Vector3.zero
-                    root.AssemblyAngularVelocity = config.orbit.originalangvel or Vector3.zero
-                end)
-            end
-            if config.orbit.originalcam and Workspace.CurrentCamera then
-                pcall(function() Workspace.CurrentCamera.CFrame = config.orbit.originalcam end)
-            end
-            config.orbit.serverpos = restorePos and restorePos.Position or nil
-            return
-        end
-
-        config.state.restoreLock = false
         setOrbR()
-        oldpos = root.CFrame
+        oldpos = localfighter.Entity.RootPart.CFrame
 
         local function isQuickSwapActive()
             if pickMelee() then return false end
@@ -2238,6 +2200,7 @@ local function startsync()
                 local distance = (newPos.Position - currentPos.Position).Magnitude
                 if distance < 2000 then
                     localfighter.Entity.RootPart.CFrame = newPos
+                    config.orbit.savedpos = currentPos
                 end
             end
         end
@@ -2315,11 +2278,7 @@ if modules.camcontrol and type(modules.camcontrol.Update) == "function" then
     modules.camcontrol.Update = function(...)
         if getgenv().InstanceUndergroundEnabled then
             return oldcamupdate(...)
-        elseif config.state.csyncactive
-            and not config.state.restoreLock
-            and not config.state.reloading
-            and not config.state.outofammo
-            and localfighter and localfighter.Entity and localfighter.Entity.RootPart and oldpos then
+        elseif config.state.csyncactive and localfighter and localfighter.Entity and localfighter.Entity.RootPart and oldpos then
             localfighter.Entity.RootPart.CFrame = oldpos
         end
         return oldcamupdate(...)
