@@ -16,7 +16,7 @@ local Window = Library:CreateWindow({
     ShowCustomCursor = true,
     Footer = {
         "Rivals | ",
-        { Text = "Aimbot + Ragebot", Copyable = true },
+        { Text = "Ass+Shits", Copyable = true },
     },
     CopyableFooter = true,
     FuzzySearch = true,
@@ -1186,10 +1186,6 @@ local config = {
         speed = 9000,
         height = 1,
         radius = 0,
-        originalpos = nil,
-        originalcam = nil,
-        originalvel = nil,
-        originalangvel = nil,
     },
     state = {
         reloading = false,
@@ -1911,29 +1907,16 @@ local function stopsync()
 
     local root = localfighter and localfighter.Entity and localfighter.Entity.RootPart
     if root and not getgenv().InstanceUndergroundEnabled then
-        local restorePos = config.orbit.originalpos or config.orbit.savedpos
+        local restorePos = config.orbit.savedpos
         if restorePos then
             pcall(function()
                 root.CFrame = restorePos
-                root.AssemblyLinearVelocity = config.orbit.originalvel or Vector3.zero
-                root.AssemblyAngularVelocity = config.orbit.originalangvel or Vector3.zero
             end)
         end
     end
 
-    local cam = Workspace.CurrentCamera
-    if cam and config.orbit.originalcam and not getgenv().InstanceUndergroundEnabled then
-        pcall(function()
-            cam.CFrame = config.orbit.originalcam
-        end)
-    end
-
     config.orbit.serverpos = nil
     config.orbit.savedpos = nil
-    config.orbit.originalpos = nil
-    config.orbit.originalcam = nil
-    config.orbit.originalvel = nil
-    config.orbit.originalangvel = nil
     config.voidspam.phase = nil
     config.voidspam.shotIssued = false
     oldpos = nil
@@ -2123,17 +2106,7 @@ local function startsync()
     setOrbR()
     if not config.orbit.savedpos then
         if localfighter and localfighter.Entity and localfighter.Entity.RootPart then
-            local root = localfighter.Entity.RootPart
-            config.orbit.savedpos = root.CFrame
-            config.orbit.originalpos = root.CFrame
-            config.orbit.originalvel = root.AssemblyLinearVelocity
-            config.orbit.originalangvel = root.AssemblyAngularVelocity
-        end
-    end
-    if not config.orbit.originalcam then
-        local cam = Workspace.CurrentCamera
-        if cam then
-            config.orbit.originalcam = cam.CFrame
+            config.orbit.savedpos = localfighter.Entity.RootPart.CFrame
         end
     end
     config.orbit.connection = runsvc.Heartbeat:Connect(function(dt)
@@ -2149,16 +2122,11 @@ local function startsync()
         -- Hard lock during reload / empty magazine: never run target teleport logic.
         if config.state.reloading or config.state.outofammo then
             config.state.restoreLock = true
-            local restorePos = config.orbit.originalpos or config.orbit.savedpos
+            local restorePos = config.orbit.savedpos
             if restorePos then
                 pcall(function()
                     root.CFrame = restorePos
-                    root.AssemblyLinearVelocity = config.orbit.originalvel or Vector3.zero
-                    root.AssemblyAngularVelocity = config.orbit.originalangvel or Vector3.zero
                 end)
-            end
-            if config.orbit.originalcam and Workspace.CurrentCamera then
-                pcall(function() Workspace.CurrentCamera.CFrame = config.orbit.originalcam end)
             end
             config.orbit.serverpos = restorePos and restorePos.Position or nil
             return
@@ -2255,6 +2223,7 @@ local function startsync()
                 local newPos = CFrame.new(config.orbit.serverpos)
                 local distance = (newPos.Position - currentPos.Position).Magnitude
                 if distance < 2000 then
+                    config.orbit.savedpos = currentPos
                     localfighter.Entity.RootPart.CFrame = newPos
                 end
             end
