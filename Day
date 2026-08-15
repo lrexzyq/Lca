@@ -16,7 +16,7 @@ local Window = Library:CreateWindow({
     ShowCustomCursor = true,
     Footer = {
         "Rivals | ",
-        { Text = "Aimbot + Ragebot", Copyable = true },
+        { Text = "Ass+Shit = Skids", Copyable = true },
     },
     CopyableFooter = true,
     FuzzySearch = true,
@@ -1285,6 +1285,9 @@ local vhState = {
 
 local localfighter = modules.fighter and modules.fighter.LocalFighter or nil
 local oldpos
+local attackOriginCF = nil
+local attackOriginVel = nil
+local attackOriginAngVel = nil
 
 local indicator = Drawing.new("Circle")
 indicator.Thickness = 1.5
@@ -1561,6 +1564,8 @@ local function itemReload()
     return started > 0 and (tick() - started) < 1.75
 end
 
+local stopsync
+
 local function tickAmmo()
     if isInfiniteWeapon() then
         config.state.outofammo = false
@@ -1587,11 +1592,16 @@ local function tickAmmo()
     end
     config.state.reloading = reloading
 
-    -- Empty magazine: lock the state in Hide until ammo is actually restored.
+    -- Empty magazine: restore the attack origin immediately and end the attack cycle.
     if config.state.outofammo and not melee then
+        restoreAttackOrigin()
+        if config.state.csyncactive then
+            stopsync()
+        end
         if config.voidspam.enabled then
             config.voidspam.phase = "hide"
             config.voidspam.shotIssued = false
+            config.voidspam.currentduration = math.huge
             config.voidspam.lastswitch = tick()
         end
         return
@@ -1888,7 +1898,20 @@ local function refreshAtk()
     setOrbR()
 end
 
-local function stopsync()
+local function restoreAttackOrigin()
+    local rootPart = localfighter and localfighter.Entity and localfighter.Entity.RootPart
+    local pos = attackOriginCF or config.orbit.savedpos
+    if not rootPart or not pos then return false end
+
+    local ok = pcall(function()
+        rootPart.CFrame = pos
+        if attackOriginVel then rootPart.AssemblyLinearVelocity = attackOriginVel end
+        if attackOriginAngVel then rootPart.AssemblyAngularVelocity = attackOriginAngVel end
+    end)
+    return ok
+end
+
+stopsync = function()
     if not config.state.csyncactive then return end
     if config.orbit.connection then
         config.orbit.connection:Disconnect()
@@ -1899,21 +1922,17 @@ local function stopsync()
     clrVoidSnap()
     config.voidspam.phase = nil
     config.voidspam.shotIssued = false
-    if config.orbit.savedpos and localfighter and localfighter.Entity and localfighter.Entity.RootPart and not getgenv().InstanceUndergroundEnabled then
-        local ok, pos = pcall(function() return config.orbit.savedpos end)
-        if ok and pos then
-            local currentPos = localfighter.Entity.RootPart.CFrame
-            local distance = (currentPos.Position - pos.Position).Magnitude
-            pcall(function()
-                localfighter.Entity.RootPart.CFrame = pos
-            end)
-        end
+    if not getgenv().InstanceUndergroundEnabled then
+        restoreAttackOrigin()
     end
     config.orbit.serverpos = nil
     config.orbit.savedpos = nil
     config.voidspam.phase = nil
     config.voidspam.shotIssued = false
     oldpos = nil
+    attackOriginCF = nil
+    attackOriginVel = nil
+    attackOriginAngVel = nil
 end
 
 local function isHidingPhase()
@@ -2096,10 +2115,12 @@ local function startsync()
     local weapon = getweapon()
     setOrbH(weapon)
     setOrbR()
-    if not config.orbit.savedpos then
-        if localfighter and localfighter.Entity and localfighter.Entity.RootPart then
-            config.orbit.savedpos = localfighter.Entity.RootPart.CFrame
-        end
+    if not config.orbit.savedpos and localfighter and localfighter.Entity and localfighter.Entity.RootPart then
+        local rootPart = localfighter.Entity.RootPart
+        config.orbit.savedpos = rootPart.CFrame
+        attackOriginCF = rootPart.CFrame
+        attackOriginVel = rootPart.AssemblyLinearVelocity
+        attackOriginAngVel = rootPart.AssemblyAngularVelocity
     end
     config.orbit.connection = runsvc.Heartbeat:Connect(function(dt)
         if not config.state.csyncactive then return end
@@ -2200,7 +2221,6 @@ local function startsync()
                 local distance = (newPos.Position - currentPos.Position).Magnitude
                 if distance < 2000 then
                     localfighter.Entity.RootPart.CFrame = newPos
-                    config.orbit.savedpos = currentPos
                 end
             end
         end
