@@ -1896,31 +1896,28 @@ local function refreshAtk()
 end
 
 local function stopsync()
+    if not config.state.csyncactive then return end
     if config.orbit.connection then
         config.orbit.connection:Disconnect()
         config.orbit.connection = nil
     end
-
     config.state.csyncactive = false
     config.orbit.active = false
     clrVoidSnap()
     config.voidspam.phase = nil
-
-    -- Simple one-shot restore.
-    local saved = config.orbit.savedpos
-    config.orbit.savedpos = nil
-
-    if saved
-        and localfighter
-        and localfighter.Entity
-        and localfighter.Entity.RootPart
-        and not getgenv().InstanceUndergroundEnabled then
-        pcall(function()
-            localfighter.Entity.RootPart.CFrame = saved
-        end)
+    config.voidspam.shotIssued = false
+    if config.orbit.savedpos and localfighter and localfighter.Entity and localfighter.Entity.RootPart and not getgenv().InstanceUndergroundEnabled then
+        local ok, pos = pcall(function() return config.orbit.savedpos end)
+        if ok and pos then
+            local currentPos = localfighter.Entity.RootPart.CFrame
+            local distance = (currentPos.Position - pos.Position).Magnitude
+            pcall(function()
+                localfighter.Entity.RootPart.CFrame = pos
+            end)
+        end
     end
-
     config.orbit.serverpos = nil
+    config.orbit.savedpos = nil
     config.voidspam.phase = nil
     config.voidspam.shotIssued = false
     oldpos = nil
