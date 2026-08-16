@@ -1193,6 +1193,7 @@ local config = {
         outofammo = false,
         csyncactive = false,
         reloadStartedAt = 0,
+        reloadAttackDelayUntil = 0,
     },
     voidhide = {
         enabled = true,
@@ -1251,6 +1252,7 @@ local config = {
         staticOffsetY = 40,
         showAmmo = true,
         hideOnReload = true,
+        reloadAttackDelay = 0.5,
         textSize = 15,
         lineGap = 15,
         fontName = "gotham",
@@ -1566,6 +1568,7 @@ local function tickAmmo()
         config.state.outofammo = false
         config.state.reloading = false
         config.state.reloadStartedAt = 0
+        config.state.reloadAttackDelayUntil = 0
         return
     end
 
@@ -1582,46 +1585,59 @@ local function tickAmmo()
     local reloading = itemReload()
     if reloading and not config.state.reloading then
         config.state.reloadStartedAt = tick()
+        config.state.reloadAttackDelayUntil = 0
     elseif not reloading then
         config.state.reloadStartedAt = 0
     end
     config.state.reloading = reloading
 
-    -- Empty magazine: lock the state in Hide until ammo is actually restored.
+    -- Empty magazine: stay hidden until the magazine is actually refilled.
     if config.state.outofammo and not melee then
+        config.state.reloadAttackDelayUntil = 0
         if config.voidspam.enabled then
             config.voidspam.phase = "hide"
             config.voidspam.shotIssued = false
+            config.voidspam.currentduration = math.huge
             config.voidspam.lastswitch = tick()
         end
         return
     end
 
-    -- Reload completed with usable ammo: allow the next attack immediately.
-    if not melee and wasOutOfAmmo and not config.state.outofammo and (tonumber(current) or 0) > 0 then
+    if melee then
+        return
+    end
+
+    local ammo = tonumber(current) or 0
+    local capacity = tonumber(maxAmmo) or 0
+    local fullyLoaded = capacity > 0 and ammo >= capacity
+
+    -- Reload is considered usable only when the magazine is FULL.
+    -- Once full, force Hide for exactly 0.35s before allowing the next attack.
+    if (wasOutOfAmmo or wasReloading) and not config.state.outofammo and fullyLoaded then
+        config.state.reloadAttackDelayUntil = tick() + config.ragestatus.reloadAttackDelay
+
         if config.voidspam.enabled then
-            config.voidspam.phase = "shoot"
+            config.voidspam.phase = "hide"
             config.voidspam.shotIssued = false
-            config.voidspam.currentduration = randVs(
-                config.voidspam.shoot_min,
-                config.voidspam.shoot_max
-            )
+            config.voidspam.currentduration = config.ragestatus.reloadAttackDelay
             config.voidspam.lastswitch = tick()
         end
         return
     end
 
-    -- Any reload completion also exits the reload-hide state when ammo is available.
-    if not reloading and wasReloading and not config.state.outofammo and (tonumber(current) or 0) > 0 then
+    -- While the 0.35s post-reload gate is active, never enter the attack state.
+    if config.state.reloadAttackDelayUntil > tick() then
         if config.voidspam.enabled then
-            config.voidspam.phase = "shoot"
+            config.voidspam.phase = "hide"
             config.voidspam.shotIssued = false
-            config.voidspam.currentduration = randVs(
-                config.voidspam.shoot_min,
-                config.voidspam.shoot_max
-            )
+            config.voidspam.currentduration = config.ragestatus.reloadAttackDelay
             config.voidspam.lastswitch = tick()
         end
+        return
+    end
+
+    if config.state.reloadAttackDelayUntil > 0 then
+        config.state.reloadAttackDelayUntil = 0
     end
 end
 
@@ -1925,6 +1941,17 @@ local function tickVoidSpam()
 
     local hasTarget = config.target.character and valid(config.target.character)
 
+    -- After a full reload, remain hidden for 0.35s before any attack/TP is allowed.
+    if config.state.reloadAttackDelayUntil and config.state.reloadAttackDelayUntil > tick() then
+        config.voidspam.phase = "hide"
+        config.voidspam.shotIssued = false
+        config.voidspam.currentduration = config.ragestatus.reloadAttackDelay
+        config.voidspam.lastswitch = tick()
+        return
+    elseif config.state.reloadAttackDelayUntil and config.state.reloadAttackDelayUntil > 0 then
+        config.state.reloadAttackDelayUntil = 0
+    end
+
     -- Hide is the safe/default state. No target never means "unhide".
     if not hasTarget then
         if config.voidspam.phase ~= "hide" then
@@ -2012,7 +2039,10 @@ local function tickVoid(sling, root)
         clrVoidSnap()
         return false
     end
-    local isHiding = config.state.outofammo or (config.voidspam.enabled and config.voidspam.phase == "hide")
+    local postReloadGate = config.state.reloadAttackDelayUntil and config.state.reloadAttackDelayUntil > tick()
+    local isHiding = config.state.outofammo
+        or postReloadGate
+        or (config.voidspam.enabled and config.voidspam.phase == "hide")
     if isHiding then
         if config.voidspam.enabled and config.voidspam.phase == "hide" and not config.state.outofammo then
             local elapsed = tick() - config.voidspam.lastswitch
@@ -3372,6 +3402,18 @@ ModsGroupBox:AddToggle("NoMuzzleFlash", {
     Text = "No Muzzle Flash",
     Default = false,
     Callback = function(v) end
+})
+
+RagebotGroup:AddSlider("ReloadAttackDelay", {
+    Text = "Reload → Attack Delay",
+    Default = 0.5,
+    Min = 0.01,
+    Max = 1,
+    Rounding = 2,
+    Suffix = "s",
+    Callback = function(Value)
+        config.ragestatus.reloadAttackDelay = Value
+    end,
 })
 
 local MiscGroupBox = Tabs.Combat:AddLeftGroupbox("Misc Combat", "settings")
