@@ -78,6 +78,7 @@ end
 
 local runServiceType = "Heartbeat"
 local runServiceConnection = nil
+local getFighterController
 
 local Aimbot = {
     enabled = false,
@@ -94,7 +95,10 @@ local Aimbot = {
     flickDuration = 0.3,
     flickCurvature = 0.5,
     flickHumanness = 0.3,
+    shootAfterFlick = false,
+    shotDelay = 0.05,
     cooldown = 0.2,
+    fireMode = "FireServer",
 
     _state = "Idle",
     _trajectory = nil,
@@ -263,8 +267,80 @@ function Aimbot:_updateNormal(dt, target)
         targetCF = cam.CFrame:Lerp(targetCF, alpha)
     end
 
+    local ok = false
+    if cc and type(cc.MimicRotation) == "function" then
+        ok = pcall(function()
+            cc:MimicRotation(targetCF.Rotation)
+        end)
+    end
+
+    if not ok then
+        pcall(function()
+            cam.CFrame = targetCF
+        end)
+    end
+end
+
+function Aimbot:_applyFlickRotation(cam, cc, rotation)
+    local ok = false
+
+    if cc and type(cc.MimicRotation) == "function" then
+        ok = pcall(function()
+            cc:MimicRotation(rotation)
+        end)
+    end
+
+    if not ok then
+        pcall(function()
+            cam.CFrame = CFrame.new(cam.CFrame.Position) * rotation
+        end)
+    end
+end
+
+function Aimbot:_fireAfterFlick()
+    local target = self._selected
+    if not target or not target.part or not target.part.Parent then return end
+
+    if self.fireMode == "MouseClick" then
+        local click = mouse1click
+        if type(click) == "function" then
+            pcall(click)
+        end
+        return
+    end
+
     pcall(function()
-        cc:MimicRotation(targetCF.Rotation)
+        local fighterController = getFighterController()
+        local fighter = fighterController and fighterController.LocalFighter
+        local equipped = fighter and fighter.EquippedItem
+        if not equipped then return end
+
+        local objId = equipped:Get("ObjectID")
+        if not objId or not Utility or not EnumLibrary then return end
+
+        local char = lp.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+
+        local shootPos = root.Position
+        local targetPos = target.part.Position
+        local aimCF = CFrame.new(shootPos, targetPos)
+
+        local data = {
+            [utf8.char(1)] = {
+                [utf8.char(0)] = Utility:EncodeCFrame(aimCF),
+                [utf8.char(1)] = Utility:EncodeCFrame(aimCF),
+                [utf8.char(2)] = target.part,
+                [utf8.char(3)] = Utility:EncodeCFrame(CFrame.new(0.43, 0.25, 0.42)),
+            },
+        }
+
+        ReplicatedStorage.Remotes.Replication.Fighter.UseItem:FireServer(
+            objId,
+            EnumLibrary:ToEnum("StartShooting"),
+            data,
+            nil
+        )
     end)
 end
 
@@ -273,8 +349,9 @@ function Aimbot:_updateFlick(dt)
     local cam = Workspace.CurrentCamera
     local cc = self:getCC()
 
+    -- CameraController is optional: _applyFlickRotation has a camera fallback.
     if not target or not target.character or not target.character.Parent or not target.part.Parent
-        or not cam or not cc then
+        or not cam then
         self:_finishFlick()
         return
     end
@@ -294,10 +371,18 @@ function Aimbot:_updateFlick(dt)
 
     if idx >= #traj then
         local pos = target.part.Position
-        pcall(function()
-            cc:MimicRotation(CFrame.lookAt(cam.CFrame.Position, pos).Rotation)
-        end)
-        self:_finishFlick()
+        self:_applyFlickRotation(
+            cam,
+            cc,
+            CFrame.lookAt(cam.CFrame.Position, pos).Rotation
+        )
+
+        if self.shootAfterFlick then
+            self._state = "PostFlickShot"
+            self._elapsed = 0
+        else
+            self:_finishFlick()
+        end
         return
     end
 
@@ -308,9 +393,11 @@ function Aimbot:_updateFlick(dt)
     end
 
     local dir = a.direction:Lerp(b.direction, alpha)
-    pcall(function()
-        cc:MimicRotation(CFrame.lookAt(cam.CFrame.Position, cam.CFrame.Position + dir * 100).Rotation)
-    end)
+    self:_applyFlickRotation(
+        cam,
+        cc,
+        CFrame.lookAt(cam.CFrame.Position, cam.CFrame.Position + dir * 100).Rotation
+    )
 end
 
 function Aimbot:update(dt)
@@ -328,6 +415,15 @@ function Aimbot:update(dt)
 
     if self._state == "Flicking" then
         self:_updateFlick(dt)
+        return
+    end
+
+    if self._state == "PostFlickShot" then
+        self._elapsed += dt
+        if self._elapsed >= self.shotDelay then
+            self:_fireAfterFlick()
+            self:_finishFlick()
+        end
         return
     end
 
@@ -771,7 +867,7 @@ local Utility = safeRequire(ReplicatedStorage.Modules.Utility)
 local EnumLibrary = safeRequire(ReplicatedStorage.Modules.EnumLibrary)
 local localFighter = nil
 
-local function getFighterController()
+getFighterController = function()
     local ps = lp:FindFirstChild("PlayerScripts")
     if ps then
         local ctrl = ps:FindFirstChild("Controllers")
@@ -798,6 +894,7 @@ local silentAim = {
     autoShoot = false,
     followMuzzle = false,
     hitChance = 100,
+    fireMode = "ClickRequest",
 }
 
 local function weaponstricted(weaponName)
@@ -978,16 +1075,26 @@ local clickRequest = false
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+    -- Chỉ chuột trái tạo clickRequest.
+    -- Touch không kích hoạt Silent Aim để tránh chạm nhầm trên mobile.
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+        and silentAim.fireMode == "ClickRequest" then
         clickRequest = true
     end
 end)
 
 RunService.Heartbeat:Connect(function()
-    if silentAim.enabled then
+    if not silentAim.enabled then
+        clickRequest = false
+        return
+    end
+
+    if silentAim.fireMode == "FireServer" then
         if silentAim.autoShoot then
             firesilent()
-        elseif clickRequest then
+        end
+    elseif silentAim.fireMode == "ClickRequest" then
+        if clickRequest then
             firesilent()
             clickRequest = false
         end
@@ -1193,7 +1300,8 @@ local config = {
         outofammo = false,
         csyncactive = false,
         reloadStartedAt = 0,
-        reloadAttackDelayUntil = 0,
+        reloadReadyAt = 0,
+        reloadDelay = 0.5,
     },
     voidhide = {
         enabled = true,
@@ -1252,7 +1360,6 @@ local config = {
         staticOffsetY = 40,
         showAmmo = true,
         hideOnReload = true,
-        reloadAttackDelay = 0.5,
         textSize = 15,
         lineGap = 15,
         fontName = "gotham",
@@ -1365,8 +1472,8 @@ end
 local SLOTS = { primary = 1, secondary = 2, melee = 3 }
 local MELEE_NMS = {
     ["Battle Axe"] = true, ["Chainsaw"] = true, ["Daggers"] = true, ["Fists"] = true,
-    ["Gunblade"] = true, ["Katana"] = true, ["Knife"] = true,
-    ["Scythe"] = true, ["Trowel"] = true,
+    ["Gunblade"] = true, ["Katana"] = true, ["Knife"] = true, ["Spear"] = true,
+    ["Scythe"] = true, ["Trowel"] = true, ["Maul"] = true, ["Riot Shield"] = true,
 }
 local INFINITE_AMMO_WEAPONS = {
     ["Energy Rifle"] = true,
@@ -1568,13 +1675,14 @@ local function tickAmmo()
         config.state.outofammo = false
         config.state.reloading = false
         config.state.reloadStartedAt = 0
-        config.state.reloadAttackDelayUntil = 0
+        config.state.reloadReadyAt = 0
         return
     end
 
     local current, maxAmmo, melee = getammo()
     local wasOutOfAmmo = config.state.outofammo
     local wasReloading = config.state.reloading
+    local now = tick()
 
     if melee then
         config.state.outofammo = false
@@ -1583,66 +1691,57 @@ local function tickAmmo()
     end
 
     local reloading = itemReload()
-    if reloading and not config.state.reloading then
-        config.state.reloadStartedAt = tick()
-        config.state.reloadAttackDelayUntil = 0
+    if reloading and not wasReloading then
+        config.state.reloadStartedAt = now
+        config.state.reloadReadyAt = 0
     elseif not reloading then
         config.state.reloadStartedAt = 0
     end
     config.state.reloading = reloading
 
-    -- Empty magazine: stay hidden until the magazine is actually refilled.
+    -- Empty magazine: remain hidden until ammo is actually positive.
     if config.state.outofammo and not melee then
-        config.state.reloadAttackDelayUntil = 0
         if config.voidspam.enabled then
             config.voidspam.phase = "hide"
             config.voidspam.shotIssued = false
             config.voidspam.currentduration = math.huge
-            config.voidspam.lastswitch = tick()
+            config.voidspam.lastswitch = now
         end
         return
     end
 
-    if melee then
-        return
+    -- A reload has completed with usable ammo. Start a one-shot readiness timer.
+    -- This prevents the orbit from rushing out during the reload animation.
+    if not melee and not reloading and (wasReloading or wasOutOfAmmo) and (tonumber(current) or 0) > 0 then
+        config.state.reloadReadyAt = now + math.clamp(tonumber(config.state.reloadDelay) or 0.5, 0.01, 1)
     end
 
-    local ammo = tonumber(current) or 0
-    local capacity = tonumber(maxAmmo) or 0
-    local fullyLoaded = capacity > 0 and ammo >= capacity
-
-    -- Reload is considered usable only when the magazine is FULL.
-    -- Once full, force Hide for exactly 0.35s before allowing the next attack.
-    if (wasOutOfAmmo or wasReloading) and not config.state.outofammo and fullyLoaded then
-        config.state.reloadAttackDelayUntil = tick() + config.ragestatus.reloadAttackDelay
-
+    -- Until the post-reload delay expires, force the safe state.
+    if not melee and config.state.reloadReadyAt > now then
         if config.voidspam.enabled then
             config.voidspam.phase = "hide"
             config.voidspam.shotIssued = false
-            config.voidspam.currentduration = config.ragestatus.reloadAttackDelay
-            config.voidspam.lastswitch = tick()
+            config.voidspam.currentduration = math.huge
+            config.voidspam.lastswitch = now
         end
         return
     end
 
-    -- While the 0.35s post-reload gate is active, never enter the attack state.
-    if config.state.reloadAttackDelayUntil > tick() then
+    if config.state.reloadReadyAt > 0 and now >= config.state.reloadReadyAt then
+        config.state.reloadReadyAt = 0
         if config.voidspam.enabled then
-            config.voidspam.phase = "hide"
+            config.voidspam.phase = "shoot"
             config.voidspam.shotIssued = false
-            config.voidspam.currentduration = config.ragestatus.reloadAttackDelay
-            config.voidspam.lastswitch = tick()
+            config.voidspam.currentduration = randVs(config.voidspam.shoot_min, config.voidspam.shoot_max)
+            config.voidspam.lastswitch = now
         end
-        return
-    end
-
-    if config.state.reloadAttackDelayUntil > 0 then
-        config.state.reloadAttackDelayUntil = 0
     end
 end
 
 local function reloadHide(sling)
-    if not (config.state.reloading and config.ragestatus.hideOnReload) then
+    local now = tick()
+    local postReloadHold = (config.state.reloadReadyAt or 0) > now
+    if not ((config.state.reloading or postReloadHold) and config.ragestatus.hideOnReload) then
         return false
     end
     local hrp = voidHrp()
@@ -1941,17 +2040,6 @@ local function tickVoidSpam()
 
     local hasTarget = config.target.character and valid(config.target.character)
 
-    -- After a full reload, remain hidden for 0.35s before any attack/TP is allowed.
-    if config.state.reloadAttackDelayUntil and config.state.reloadAttackDelayUntil > tick() then
-        config.voidspam.phase = "hide"
-        config.voidspam.shotIssued = false
-        config.voidspam.currentduration = config.ragestatus.reloadAttackDelay
-        config.voidspam.lastswitch = tick()
-        return
-    elseif config.state.reloadAttackDelayUntil and config.state.reloadAttackDelayUntil > 0 then
-        config.state.reloadAttackDelayUntil = 0
-    end
-
     -- Hide is the safe/default state. No target never means "unhide".
     if not hasTarget then
         if config.voidspam.phase ~= "hide" then
@@ -2039,10 +2127,7 @@ local function tickVoid(sling, root)
         clrVoidSnap()
         return false
     end
-    local postReloadGate = config.state.reloadAttackDelayUntil and config.state.reloadAttackDelayUntil > tick()
-    local isHiding = config.state.outofammo
-        or postReloadGate
-        or (config.voidspam.enabled and config.voidspam.phase == "hide")
+    local isHiding = config.state.outofammo or (config.voidspam.enabled and config.voidspam.phase == "hide")
     if isHiding then
         if config.voidspam.enabled and config.voidspam.phase == "hide" and not config.state.outofammo then
             local elapsed = tick() - config.voidspam.lastswitch
@@ -2248,6 +2333,7 @@ local function autoshoot()
     if not lf or not lf.EquippedItem then return end
     if not isInfiniteWeapon() then
         if config.state.reloading or config.state.outofammo then return end
+        if (config.state.reloadReadyAt or 0) > tick() then return end
         if not canuse() then return end
     end
     local targetChar = config.target.character
@@ -2911,7 +2997,15 @@ local FlickGroupBox = Tabs.Main:AddRightGroupbox("Flick Bot", "crosshair")
 FlickGroupBox:AddToggle("FlickEnabled", {
     Text = "Enable Flick",
     Default = false,
-    Callback = function(v) Aimbot.flickEnabled = v end
+    Callback = function(v)
+        Aimbot.flickEnabled = v
+        if not v then
+            Aimbot._trajectory = nil
+            Aimbot._selected = nil
+            Aimbot._state = "Idle"
+            Aimbot._elapsed = 0
+        end
+    end
 })
 FlickGroupBox:AddSlider("FlickDuration", {
     Text = "Duration",
@@ -2938,6 +3032,20 @@ FlickGroupBox:AddSlider("FlickHumanness", {
     Rounding = 2,
     Callback = function(v) Aimbot.flickHumanness = v end
 })
+FlickGroupBox:AddToggle("FlickShootAfter", {
+    Text = "Shoot After Flick",
+    Default = false,
+    Callback = function(v) Aimbot.shootAfterFlick = v end
+})
+FlickGroupBox:AddSlider("FlickShotDelay", {
+    Text = "Shot Delay",
+    Default = 0.05,
+    Min = 0,
+    Max = 0.5,
+    Rounding = 2,
+    Suffix = " s",
+    Callback = function(v) Aimbot.shotDelay = v end
+})
 FlickGroupBox:AddSlider("FlickCooldown", {
     Text = "Cooldown",
     Default = 0.2,
@@ -2946,6 +3054,14 @@ FlickGroupBox:AddSlider("FlickCooldown", {
     Rounding = 2,
     Suffix = " s",
     Callback = function(v) Aimbot.cooldown = v end
+})
+FlickGroupBox:AddDropdown("FlickFireMode", {
+    Text = "Fire Mode",
+    Values = {"FireServer", "MouseClick"},
+    Default = "FireServer",
+    Callback = function(v)
+        Aimbot.fireMode = v
+    end
 })
 
 local SilentGroupBox = Tabs.Main:AddLeftGroupbox("Silent Aim", "target")
@@ -3000,6 +3116,15 @@ SilentGroupBox:AddToggle("SilentFollowMuzzle", {
     Text = "Follow Muzzle",
     Default = false,
     Callback = function(v) silentAim.followMuzzle = v end
+})
+SilentGroupBox:AddDropdown("SilentFireMode", {
+    Text = "Fire Mode",
+    Values = {"ClickRequest", "FireServer"},
+    Default = "ClickRequest",
+    Callback = function(v)
+        silentAim.fireMode = v
+        clickRequest = false
+    end
 })
 
 
@@ -3356,6 +3481,19 @@ RageGroupBox:AddSlider("RagebotHide", {
     end
 })
 
+RageGroupBox:AddSlider("RagebotReloadDelay", {
+    Text = "Reload -> Attack Delay",
+    Default = Ragebot.config.state.reloadDelay or 0.5,
+    Min = 0.01,
+    Max = 1,
+    Rounding = 2,
+    Suffix = " s",
+    Compact = true,
+    Callback = function(v)
+        Ragebot.config.state.reloadDelay = math.clamp(tonumber(v) or 0.5, 0.01, 1)
+    end
+})
+
 
 local ModsGroupBox = Tabs.Combat:AddLeftGroupbox("Gun Mods", "gun")
 ModsGroupBox:AddToggle("NoCooldown", {
@@ -3402,18 +3540,6 @@ ModsGroupBox:AddToggle("NoMuzzleFlash", {
     Text = "No Muzzle Flash",
     Default = false,
     Callback = function(v) end
-})
-
-RagebotGroup:AddSlider("ReloadAttackDelay", {
-    Text = "Reload → Attack Delay",
-    Default = 0.5,
-    Min = 0.01,
-    Max = 1,
-    Rounding = 2,
-    Suffix = "s",
-    Callback = function(Value)
-        config.ragestatus.reloadAttackDelay = Value
-    end,
 })
 
 local MiscGroupBox = Tabs.Combat:AddLeftGroupbox("Misc Combat", "settings")
