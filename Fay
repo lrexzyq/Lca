@@ -32,7 +32,6 @@ local Tabs = {
     Character = Window:AddTab({ Name = "Character", Icon = "user", Description = "Character utilities" }),
     Combat = Window:AddTab({ Name = "Combat", Icon = "sword", Description = "Combat utilities" }),
     Misc = Window:AddTab({ Name = "Misc", Icon = "settings", Description = "Miscellaneous" }),
-    Priority = Window:AddTab({ Name = "Priority", Icon = "target", Description = "Priority targeting" }),
     ["UI Settings"] = Window:AddTab({ Name = "UI Settings", Icon = "settings", Description = "Configure the menu" }),
 }
 
@@ -1272,6 +1271,7 @@ local config = {
             customPitch = 0,
             customYaw = 0,
             floorHide = false,
+            mode = "Custom",
         },
         meleeFeetDrop = 3.5,
         underOffset = 4,
@@ -1480,7 +1480,7 @@ local SLOTS = { primary = 1, secondary = 2, melee = 3 }
 local MELEE_NMS = {
     ["Battle Axe"] = true, ["Chainsaw"] = true, ["Daggers"] = true, ["Fists"] = true,
     ["Gunblade"] = true, ["Katana"] = true, ["Knife"] = true, ["Spear"] = true,
-    ["Scythe"] = true, ["Trowel"] = true, ["Maul"] = true, ["Riot Shield"] = true,
+    ["Scythe"] = true, ["Trowel"] = true, ["Maul"] = true,
 }
 local INFINITE_AMMO_WEAPONS = {
     ["Energy Rifle"] = true,
@@ -1776,47 +1776,19 @@ local function valid(char)
     return true
 end
 
-local priorityTargetPlayer = nil
-local priorityEnabled = false
-local function resolvePriorityPlayer(value)
-    if typeof(value) == "Instance" and value:IsA("Player") then
-        return value
-    end
-
-    if type(value) == "string" and value ~= "" then
-        return players:FindFirstChild(value)
-    end
-
-    return nil
-end
-
-local function getPriorityCharacter()
-    if not priorityEnabled then
-        return nil
-    end
-
-    local targetPlayer = resolvePriorityPlayer(priorityTargetPlayer)
-    if not targetPlayer or targetPlayer == player then
-        return nil
-    end
-
-    local char = targetPlayer.Character
-    if char and valid(char) then
-        return char
-    end
-
-    return nil
-end
-
 local function nearest()
-    local priorityChar = getPriorityCharacter()
-    if priorityChar then
-        return priorityChar
-    end
-
+    -- Refactored target scoring:
+    -- 1) reject invalid/allied/dead targets early
+    -- 2) prefer targets closer to the cursor
+    -- 3) apply explicit priority without allowing priority to select invalid targets
+    -- 4) use a small world-distance tie breaker to avoid unstable switching
     local cursorpos = userinput:GetMouseLocation()
+    local cam = workspace.CurrentCamera
+    if not cam then return nil end
+
     local besttarget = nil
-    local bestdistance = math.huge
+    local bestScore = math.huge
+
     for _, targetplayer in players:GetPlayers() do
         if targetplayer ~= player and targetplayer.Character then
             local char = targetplayer.Character
@@ -1825,16 +1797,33 @@ local function nearest()
                 if root then
                     local screenpos, onscreen = worldToScreen(root.Position)
                     if onscreen and screenpos then
-                        local distance = (Vector2.new(screenpos.X, screenpos.Y) - cursorpos).Magnitude
-                        if distance < bestdistance then
+                        local cursorDistance =
+                            (Vector2.new(screenpos.X, screenpos.Y) - cursorpos).Magnitude
+
+                        local worldDistance =
+                            (root.Position - cam.CFrame.Position).Magnitude
+
+                        local priority = tonumber(
+                            Ragebot.priorities and Ragebot.priorities[targetplayer]
+                        ) or 0
+
+                        -- Cursor proximity dominates; priority gives a meaningful but
+                        -- bounded advantage; distance stabilizes ties at long range.
+                        local priorityBonus = math.clamp(priority, 0, 10) * 120
+                        local distancePenalty = math.clamp(worldDistance / 500, 0, 40)
+                        local score = cursorDistance - priorityBonus + distancePenalty
+
+
+                        if score < bestScore then
+                            bestScore = score
                             besttarget = char
-                            bestdistance = distance
                         end
                     end
                 end
             end
         end
     end
+
     return besttarget
 end
 
@@ -2069,91 +2058,144 @@ local function stopsync()
     oldpos = nil
 end
 
+local function vsNow()
+    return tick()
+end
+
+local function vsReset(reason)
+    local vs = config.voidspam
+    vs.phase = nil
+    vs.shotIssued = false
+    vs.currentduration = 0
+    vs.nextSwitchAt = 0
+    vs.reason = reason
+end
+
+local function vsEnterHide(duration, reason)
+    local vs = config.voidspam
+    local d = duration
+    if d == nil then
+        d = randVs(vs.hide_min, vs.hide_max)
+    end
+
+    vs.phase = "hide"
+    vs.shotIssued = false
+    vs.currentduration = d
+    vs.lastswitch = vsNow()
+    vs.nextSwitchAt = vs.lastswitch + d
+    vs.reason = reason or "hide"
+end
+
+local function vsEnterShoot(duration, reason)
+    local vs = config.voidspam
+    local d = duration
+    if d == nil then
+        d = randVs(vs.shoot_min, vs.shoot_max)
+    end
+
+    vs.phase = "shoot"
+    vs.shotIssued = false
+    vs.currentduration = d
+    vs.lastswitch = vsNow()
+    vs.nextSwitchAt = vs.lastswitch + d
+    vs.reason = reason or "shoot"
+end
+
 local function isHidingPhase()
-    return config.voidspam.enabled and config.voidspam.phase == "hide"
+    return config.voidspam.enabled
+        and config.voidspam.phase == "hide"
+end
+
+local function hasRageTarget()
+    return config.target.character
+        and valid(config.target.character)
+        and not config.target.immune
 end
 
 local function tickVoidSpam()
-    if not config.voidspam.enabled then return end
-
-    local hasTarget = config.target.character and valid(config.target.character)
-
-    -- Hide is the safe/default state. No target never means "unhide".
-    if not hasTarget then
-        if config.voidspam.phase ~= "hide" then
-            config.voidspam.phase = "hide"
-            config.voidspam.shotIssued = false
-            config.voidspam.currentduration = math.huge
-            config.voidspam.lastswitch = tick()
-        end
+    local vs = config.voidspam
+    if not vs.enabled then
+        vsReset("disabled")
         return
     end
 
-    -- A target appearing after the no-target Hide unlocks an attack window.
-    if config.voidspam.phase == "hide" and config.voidspam.currentduration == math.huge then
-        config.voidspam.phase = "shoot"
-        config.voidspam.shotIssued = false
-        config.voidspam.currentduration = randVs(
-            config.voidspam.shoot_min,
-            config.voidspam.shoot_max
-        )
-        config.voidspam.lastswitch = tick()
+    -- Do not leave Normal Void Spam active while Translocate is selected.
+    if config.target.mode == "Translocate" then
+        vsReset("translocate")
         return
     end
 
-    -- Empty/reloading weapons stay hidden until ammo is usable again.
+    if not hasRageTarget() then
+        -- No target = stay hidden indefinitely. This avoids accidentally exposing
+        -- the player between target swaps.
+        vsEnterHide(math.huge, "no target")
+        return
+    end
+
+    -- Ammo/reload state always wins over the regular timer.
     if config.state.outofammo or config.state.reloading then
-        config.voidspam.phase = "hide"
-        config.voidspam.shotIssued = false
-        config.voidspam.currentduration = math.huge
-        config.voidspam.lastswitch = tick()
+        vsEnterHide(math.huge, config.state.reloading and "reloading" or "out of ammo")
         return
     end
 
-    local now = tick()
-    local elapsed = now - config.voidspam.lastswitch
+    local now = vsNow()
 
-    if config.voidspam.phase == "shoot" then
-        -- A successful attack immediately starts a new hide window.
-        if config.voidspam.shotIssued then
-            config.voidspam.phase = "hide"
-            config.voidspam.currentduration = randVs(
-                config.voidspam.hide_min,
-                config.voidspam.hide_max
-            )
-            config.voidspam.lastswitch = now
-        elseif elapsed >= config.voidspam.currentduration then
-            -- Keep retrying the attack window rather than hiding without a shot.
-            config.voidspam.currentduration = randVs(
-                config.voidspam.shoot_min,
-                config.voidspam.shoot_max
-            )
-            config.voidspam.lastswitch = now
-        end
-    elseif config.voidspam.phase == "hide" then
-        if elapsed >= config.voidspam.currentduration then
-            config.voidspam.phase = "shoot"
-            config.voidspam.shotIssued = false
-            config.voidspam.currentduration = randVs(
-                config.voidspam.shoot_min,
-                config.voidspam.shoot_max
-            )
-            config.voidspam.lastswitch = now
-        end
-    else
-        config.voidspam.phase = "shoot"
-        config.voidspam.shotIssued = false
-        config.voidspam.currentduration = randVs(
-            config.voidspam.shoot_min,
-            config.voidspam.shoot_max
-        )
-        config.voidspam.lastswitch = now
+    if vs.phase == nil then
+        vsEnterShoot(nil, "target acquired")
+        return
     end
+
+    if vs.phase == "shoot" then
+        -- The attack routine marks shotIssued after a successful attack.
+        -- Only then do we begin the hide window.
+        if vs.shotIssued then
+            vsEnterHide(nil, "shot issued")
+            return
+        end
+
+        -- If the shoot window expires without a successful shot, renew it rather
+        -- than silently entering Hide forever.
+        if now >= (vs.nextSwitchAt or 0) then
+            vsEnterShoot(nil, "retry shoot")
+        end
+        return
+    end
+
+    if vs.phase == "hide" then
+        if vs.currentduration == math.huge then
+            -- Infinite hide is released only by a valid target and usable ammo.
+            if hasRageTarget()
+                and not config.state.outofammo
+                and not config.state.reloading then
+                vsEnterShoot(nil, "hide released")
+            end
+            return
+        end
+
+        if now >= (vs.nextSwitchAt or 0) then
+            vsEnterShoot(nil, "hide expired")
+        end
+        return
+    end
+
+    -- Unknown phase: recover deterministically.
+    vsEnterShoot(nil, "phase recovery")
 end
 
-local function voidOk(sling)
-    if not sling then return false end
-    return config.voidspam.enabled or config.state.outofammo
+local function hideShot()
+    local vs = config.voidspam
+    if not vs.enabled then return end
+    if isSling(getweapon()) then return end
+    if not hasRageTarget() then
+        vsReset("target lost")
+        return
+    end
+
+    if not vs.shotIssued then
+        return
+    end
+
+    vsEnterHide(nil, "post shot")
 end
 
 local function tickVoid(sling, root)
@@ -2161,65 +2203,37 @@ local function tickVoid(sling, root)
         clrVoidSnap()
         return false
     end
-    if not voidOk(sling) then
+
+    if not config.voidspam.enabled and not config.state.outofammo then
         clrVoidSnap()
         return false
     end
-    local isHiding = config.state.outofammo or (config.voidspam.enabled and config.voidspam.phase == "hide")
-    if isHiding then
-        if config.voidspam.enabled and config.voidspam.phase == "hide" and not config.state.outofammo then
-            local elapsed = tick() - config.voidspam.lastswitch
-            if elapsed >= config.voidspam.currentduration then
-                config.voidspam.phase = "shoot"
-                config.voidspam.currentduration = randVs(config.voidspam.shoot_min, config.voidspam.shoot_max)
-                config.voidspam.lastswitch = tick()
-                clrVoidSnap()
-                return false
-            end
-        end
+
+    tickVoidSpam()
+
+    local shouldHide =
+        config.state.outofammo
+        or (config.voidspam.enabled and config.voidspam.phase == "hide")
+
+    if not shouldHide then
         clrVoidSnap()
-        local hrp = voidHrp()
-        if hrp then
-            snapVoid(hrp)
-        else
-            if config.state.csyncactive then
-                return true
-            end
-            local randomX = math.random(-10000, 10000)
-            local randomZ = math.random(-10000, 10000)
-            config.orbit.serverpos = Vector3.new(randomX, -99999999999, randomZ)
-        end
+        return false
+    end
+
+    local hrp = root or voidHrp()
+    if hrp then
+        snapVoid(hrp)
         return true
     end
-    if config.voidspam.enabled and config.voidspam.phase == "shoot" then
-        local elapsed = tick() - config.voidspam.lastswitch
-        if elapsed >= config.voidspam.currentduration then
-            config.voidspam.phase = "hide"
-            config.voidspam.currentduration = randVs(config.voidspam.hide_min, config.voidspam.hide_max)
-            config.voidspam.lastswitch = tick()
-        end
-    end
-    clrVoidSnap()
-    return false
-end
 
-local function hideShot()
-    if not config.voidspam.enabled then return end
-    if isSling(getweapon()) then return end
-    if not config.target.character or not valid(config.target.character) then
-        config.voidspam.phase = nil
-        config.voidspam.shotIssued = false
-        return
+    if config.state.csyncactive then
+        return true
     end
 
-    if not config.voidspam.shotIssued then return end
-
-    config.voidspam.phase = "hide"
-    config.voidspam.currentduration = randVs(
-        config.voidspam.hide_min,
-        config.voidspam.hide_max
-    )
-    config.voidspam.lastswitch = tick()
+    local randomX = math.random(-10000, 10000)
+    local randomZ = math.random(-10000, 10000)
+    config.orbit.serverpos = Vector3.new(randomX, -99999999999, randomZ)
+    return true
 end
 
 local function voidhide()
@@ -2338,12 +2352,13 @@ local function startsync()
 
         if reloadHide(checksling) then return end
 
-        if not checksling and config.voidspam.enabled
-            and not config.target.immune
-            and config.target.character
-            and valid(config.target.character) then
+        if not checksling then
             tickVoidSpam()
-            if config.voidspam.phase == "hide" then
+
+            if config.voidspam.enabled
+                and config.voidspam.phase == "hide"
+                and not config.state.reloading
+                and not config.state.outofammo then
                 local randomX = math.random(-10000, 10000)
                 local randomZ = math.random(-10000, 10000)
                 config.orbit.serverpos = Vector3.new(randomX, -99999999999, randomZ)
@@ -3057,7 +3072,7 @@ LeftGroupBox:AddSlider("AimbotMaxDist", {
     Text = "Max Distance",
     Default = 9999,
     Min = 10,
-    Max = 999999,
+    Max = 99999999999,
     Rounding = 0,
     Callback = function(v) Aimbot:setMaxDist(v) end
 })
@@ -3065,8 +3080,8 @@ LeftGroupBox:AddSlider("AimbotPrediction", {
     Text = "Prediction",
     Default = 0,
     Min = 0,
-    Max = 3,
-    Rounding = 1,
+    Max = 0.5,
+    Rounding = 2,
     Callback = function(v) Aimbot:setPrediction(v) end
 })
 LeftGroupBox:AddSlider("AimbotSmoothing", {
@@ -3204,7 +3219,7 @@ SilentGroupBox:AddSlider("SilentFOVRadius", {
     Text = "FOV Radius",
     Default = 100,
     Min = 10,
-    Max = 750,
+    Max = 2000,
     Rounding = 1,
     Compact = true,
     Callback = function(v) silentAim.fovRadius = v end
@@ -3222,6 +3237,29 @@ SilentGroupBox:AddDropdown("SilentFireMode", {
         silentAim.fireMode = v
         clickRequest = false
     end
+})
+
+SilentGroupBox:AddToggle("AntiKatana", {
+    Text = "Anti Katana",
+    Default = false,
+    Callback = function(v)
+        antikatana = v
+    end
+})
+
+SilentGroupBox:AddToggle("BackshootToggle", {
+    Text = "Backshoot",
+    Default = false,
+    Callback = function(v)
+        -- Giữ nguyên biến/tính năng hiện có; file gốc chưa có runtime logic cho Backshoot.
+    end
+}):AddKeyPicker("SelectTargetKey", {
+    Text = "Backshoot",
+    Default = "None",
+    Mode = "Toggle",
+    NoUI = true,
+    SyncToggleState = false,
+    Callback = function(state) end
 })
 
 
@@ -3243,7 +3281,7 @@ CharacterGroupBox:AddSlider("UndergroundDepth", {
     Text = "Depth",
     Default = 2.5,
     Min = 2.5,
-    Max = 50,
+    Max = 30,
     Rounding = 1,
     Suffix = " studs",
     Callback = function(v)
@@ -3275,57 +3313,87 @@ CharacterGroupBox:AddInput("UndergroundCustomDepth", {
 })
 
 local DesyncGroupBox = Tabs.Character:AddRightGroupbox("Desync", "shuffle")
-DesyncGroupBox:AddSlider("DesyncPitch", {
+local DesyncPitch
+local DesyncYaw
+local DesyncCustomPitch
+local DesyncCustomYaw
+
+DesyncGroupBox:AddToggle("DesyncEnabled", {
+    Text = "Enable Desync",
+    Default = false,
+    Callback = function(v)
+        config.target.desync.enabled = v
+    end
+})
+
+local DesyncMode = DesyncGroupBox:AddDropdown("DesyncMode", {
+    Text = "Mode",
+    Values = { "Custom", "Floor Hide" },
+    Default = "Custom",
+    Callback = function(v)
+        config.target.desync.mode = v
+        local custom = v == "Custom"
+        pcall(function() DesyncPitch:SetVisible(custom) end)
+        pcall(function() DesyncYaw:SetVisible(custom) end)
+        pcall(function() DesyncCustomPitch:SetVisible(custom) end)
+        pcall(function() DesyncCustomYaw:SetVisible(custom) end)
+    end
+})
+
+DesyncPitch = DesyncGroupBox:AddSlider("DesyncPitch", {
     Text = "Pitch",
     Default = 0,
     Min = -180,
     Max = 180,
-    Rounding = 0,
+    Rounding = 1,
     Suffix = "°",
     Callback = function(v)
         config.target.desync.pitch = tonumber(v) or 0
     end
 })
-DesyncGroupBox:AddSlider("DesyncYaw", {
+DesyncYaw = DesyncGroupBox:AddSlider("DesyncYaw", {
     Text = "Yaw",
     Default = 0,
     Min = -180,
     Max = 180,
-    Rounding = 0,
+    Rounding = 1,
     Suffix = "°",
     Callback = function(v)
         config.target.desync.yaw = tonumber(v) or 0
     end
 })
-DesyncGroupBox:AddSlider("DesyncCustomPitch", {
+DesyncCustomPitch = DesyncGroupBox:AddSlider("DesyncCustomPitch", {
     Text = "Custom Pitch",
     Default = 0,
     Min = -180,
     Max = 180,
-    Rounding = 0,
+    Rounding = 1,
     Suffix = "°",
     Callback = function(v)
         config.target.desync.customPitch = tonumber(v) or 0
     end
 })
-DesyncGroupBox:AddSlider("DesyncCustomYaw", {
+DesyncCustomYaw = DesyncGroupBox:AddSlider("DesyncCustomYaw", {
     Text = "Custom Yaw",
     Default = 0,
     Min = -180,
     Max = 180,
-    Rounding = 0,
+    Rounding = 1,
     Suffix = "°",
     Callback = function(v)
         config.target.desync.customYaw = tonumber(v) or 0
     end
 })
-DesyncGroupBox:AddToggle("DesyncFloorHide", {
-    Text = "Floor Hide",
-    Default = false,
-    Callback = function(v)
-        config.target.desync.floorHide = v
-    end
-})
+-- Mode controls whether the custom angle sliders are used or the character is hidden below the floor.
+config.target.desync.mode = "Custom"
+config.target.desync.floorHide = false
+pcall(function()
+    DesyncPitch:SetVisible(true)
+    DesyncYaw:SetVisible(true)
+    DesyncCustomPitch:SetVisible(true)
+    DesyncCustomYaw:SetVisible(true)
+end)
+
 
 local WeaponGroup = Tabs.Misc:AddLeftGroupbox("Weapon Mods", "sword")
 WeaponGroup:AddButton({
@@ -3558,7 +3626,7 @@ local RagebotAttackOffset = RageGroupBox:AddSlider("RagebotAttackOffset", {
     Default = 4,
     Min = 1,
     Max = 25,
-    Rounding = 0,
+    Rounding = 1,
     Compact = true,
     Callback = function(v)
         Ragebot.config.target.attackOffset = math.clamp(tonumber(v) or 4, 1, 25)
@@ -3587,7 +3655,7 @@ local RagebotShootAttempts = RageGroupBox:AddSlider("RagebotShootAttempts", {
     Text = "Shoot Attempts",
     Default = Ragebot.config.target.shootAttempts or 1,
     Min = 1,
-    Max = 3,
+    Max = 5,
     Rounding = 0,
     Suffix = "x",
     Callback = function(v)
@@ -3646,6 +3714,10 @@ local RagebotVoidSpam = RageGroupBox:AddToggle("RagebotVoidSpam", {
         Ragebot.config.voidspam.enabled = v
         if not v then
             Ragebot.config.voidspam.phase = nil
+            Ragebot.config.voidspam.shotIssued = false
+            Ragebot.config.voidspam.currentduration = 0
+            Ragebot.config.voidspam.nextSwitchAt = 0
+            Ragebot.config.voidspam.reason = "disabled"
             if Ragebot.clrVoidSnap then
                 Ragebot.clrVoidSnap()
             end
@@ -3654,11 +3726,12 @@ local RagebotVoidSpam = RageGroupBox:AddToggle("RagebotVoidSpam", {
 })
 
 local RagebotAttack = RageGroupBox:AddSlider("RagebotAttack", {
-    Text = "Attack",
+    Text = "Attack Window",
     Default = Ragebot.config.voidspam.shoot_min or 1,
-    Min = 0,
+    Min = 0.1,
     Max = 2,
     Rounding = 1,
+    Suffix = "s",
     Compact = true,
     Callback = function(v)
         v = tonumber(v) or 0
@@ -3668,11 +3741,12 @@ local RagebotAttack = RageGroupBox:AddSlider("RagebotAttack", {
 })
 
 local RagebotHide = RageGroupBox:AddSlider("RagebotHide", {
-    Text = "Hide",
+    Text = "Hide Window",
     Default = Ragebot.config.voidspam.hide_min or 1,
-    Min = 0,
+    Min = 0.1,
     Max = 2,
     Rounding = 1,
+    Suffix = "s",
     Compact = true,
     Callback = function(v)
         v = tonumber(v) or 0
@@ -3694,16 +3768,6 @@ TranslocateOffset = RageGroupBox:AddSlider("RagebotTranslocateOffset", {
     end
 })
 
-RageGroupBox:AddToggle("RagebotDesync", {
-    Text = "Desync",
-    Default = false,
-    Callback = function(v)
-        Ragebot.config.target.rageDesync = v
-        config.target.rageDesync = v
-        config.target.desync.enabled = v
-    end
-})
-
 RagebotNormalControls = {
     RagebotAutoTarget,
     RagebotAttackPosition,
@@ -3722,8 +3786,6 @@ RagebotNormalControls = {
 -- Ensure the UI starts in Normal mode.
 Ragebot.config.target.mode = "Normal"
 Ragebot.config.target.translocateOffset = -5
-Ragebot.config.target.rageDesync = false
-config.target.rageDesync = false
 config.target.desync.enabled = false
 for _, control in ipairs(RagebotNormalControls) do
     pcall(function() control:SetVisible(true) end)
@@ -3731,95 +3793,8 @@ end
 pcall(function() RageUnderDep:SetVisible(true) end)
 pcall(function() TranslocateOffset:SetVisible(false) end)
 
--- Ragebot Desync runtime. It only manipulates the physics representation part,
--- so it does not overwrite the Translocate/server position logic.
-do
-    local desyncLastCF = nil
-
-    RunService:BindToRenderStep("RagebotDesync", Enum.RenderPriority.Camera.Value + 1, function()
-        local enabled = config.target.rageDesync == true
-        local char = lp.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if not hrp then
-            desyncLastCF = nil
-            return
-        end
-
-        local rep = char:FindFirstChild("PhysicsRepRootPart") or hrp
-
-        if not enabled then
-            if desyncLastCF then
-                pcall(function() rep.CFrame = hrp.CFrame end)
-                desyncLastCF = nil
-            end
-            return
-        end
-
-        local d = config.target.desync
-        local targetCF
-
-        if d.floorHide and hrp.Position.Y < 8 then
-            targetCF = hrp.CFrame * CFrame.new(0, -3, 0)
-        else
-            local yaw = math.rad(tonumber(d.yaw) or 0)
-            local pitch = math.rad(tonumber(d.pitch) or 0)
-            local customYaw = math.rad(tonumber(d.customYaw) or 0)
-            local customPitch = math.rad(tonumber(d.customPitch) or 0)
-            targetCF = CFrame.new(hrp.Position)
-                * CFrame.Angles(0, yaw + customYaw, 0)
-                * CFrame.Angles(pitch + customPitch, 0, 0)
-        end
-
-        pcall(function()
-            rep.CFrame = targetCF
-            desyncLastCF = targetCF
-        end)
-    end)
-end
-
-local PriorityTargetBox = Tabs.Priority:AddLeftGroupbox("Priority Target", "target")
-
-PriorityTargetBox:AddToggle("PriorityEnabled", {
-    Text = "Auto Priority",
-    Tooltip = "Prefer the selected player when Ragebot Normal chooses a target.",
-    Default = false,
-    Callback = function(v)
-        priorityEnabled = v
-        if v then
-            local selected = resolvePriorityPlayer(priorityTargetPlayer)
-            if not selected then
-                Library:Notify("Select a player first", 2)
-            end
-        end
-    end
-})
-
-PriorityTargetBox:AddDropdown("PriorityPlayer", {
-    SpecialType = "Player",
-    ExcludeLocalPlayer = true,
-    Text = "Priority Player",
-    Tooltip = "Player that Ragebot Normal should prefer.",
-    Callback = function(v)
-        priorityTargetPlayer = resolvePriorityPlayer(v) or v
-    end,
-})
-
-PriorityTargetBox:AddButton({
-    Text = "Clear Priority",
-    Func = function()
-        priorityTargetPlayer = nil
-        priorityEnabled = false
-        if Toggles.PriorityEnabled then
-            Toggles.PriorityEnabled:SetValue(false)
-        end
-        Library:Notify("Priority cleared", 2)
-    end,
-})
-
-local PriorityInfoBox = Tabs.Priority:AddRightGroupbox("Priority Info", "info")
-PriorityInfoBox:AddLabel("When Auto Priority is enabled, the selected player is checked first.", true)
-PriorityInfoBox:AddLabel("If the selected player is invalid, the normal cursor-distance target selection is used.", true)
-
+-- Desync runtime is intentionally isolated from Ragebot.
+-- Ragebot normal / Translocate no longer owns the desync state.
 local ModsGroupBox = Tabs.Combat:AddLeftGroupbox("Gun Mods", "gun")
 ModsGroupBox:AddToggle("NoCooldown", {
     Text = "Rapid Fire",
@@ -3865,25 +3840,6 @@ ModsGroupBox:AddToggle("NoMuzzleFlash", {
     Text = "No Muzzle Flash",
     Default = false,
     Callback = function(v) end
-})
-
-local MiscGroupBox = Tabs.Combat:AddLeftGroupbox("Misc Combat", "settings")
-MiscGroupBox:AddToggle("AntiKatana", {
-    Text = "Anti Katana",
-    Default = false,
-    Callback = function(v) antikatana = v end
-})
-MiscGroupBox:AddToggle("BackshootToggle", {
-    Text = "Backshoot",
-    Default = false,
-    Callback = function(v) end
-}):AddKeyPicker("SelectTargetKey", {
-    Text = "Backshoot",
-    Default = "None",
-    Mode = "Toggle",
-    NoUI = true,
-    SyncToggleState = false,
-    Callback = function(state) end
 })
 
 local MenuGroup = Tabs["UI Settings"]:AddLeftGroupbox("Menu", "wrench")
