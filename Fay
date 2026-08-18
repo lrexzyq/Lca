@@ -32,6 +32,7 @@ local Tabs = {
     Character = Window:AddTab({ Name = "Character", Icon = "user", Description = "Character utilities" }),
     Combat = Window:AddTab({ Name = "Combat", Icon = "sword", Description = "Combat utilities" }),
     Misc = Window:AddTab({ Name = "Misc", Icon = "settings", Description = "Miscellaneous" }),
+    Priority = Window:AddTab({ Name = "Priority", Icon = "target", Description = "Priority targeting" }),
     ["UI Settings"] = Window:AddTab({ Name = "UI Settings", Icon = "settings", Description = "Configure the menu" }),
 }
 
@@ -40,6 +41,7 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CollectionService = game:GetService("CollectionService")
 local lp = Players.LocalPlayer
 
 local antikatana = false
@@ -961,9 +963,41 @@ local function silentfovcenter()
     return screenCenter()
 end
 
+local function hitpartfromname(target, partName)
+    if partName == "Closest" then
+        local mypos = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+        if not mypos then
+            return target:FindFirstChild("Head")
+        end
+        local closest, dist = nil, math.huge
+        for _, part in pairs(target:GetChildren()) do
+            if part:IsA("BasePart") then
+                local d = (part.Position - mypos.Position).Magnitude
+                if d < dist then dist = d; closest = part end
+            end
+        end
+        return closest or target:FindFirstChild("Head")
+    elseif partName == "Random" then
+        local parts = {"Head","HumanoidRootPart","UpperTorso"}
+        return target:FindFirstChild(parts[math.random(#parts)]) or target:FindFirstChild("Head")
+    else
+        return target:FindFirstChild(partName) or target:FindFirstChild("Head")
+    end
+end
+
 local function isteammate(targetplayer)
     if not targetplayer then return false end
     return lp:GetAttribute("TeamID") == targetplayer:GetAttribute("TeamID")
+end
+
+local function valid(char)
+    if not char or not char.Parent then return false end
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return false end
+    if not char:FindFirstChild("HumanoidRootPart") then return false end
+    local targetplayer = Players:GetPlayerFromCharacter(char)
+    if not targetplayer or isteammate(targetplayer) then return false end
+    return true
 end
 
 local function closestplayerinfov(radius)
@@ -1218,6 +1252,7 @@ local config = {
         auto = false,
         autoshoot = true,
         shootAttempts = 1,
+        attackDelay = 0,
         hitpart = "Head",
         lastchar = nil,
         lastplayer = nil,
@@ -1228,6 +1263,16 @@ local config = {
         weaponPick = "primary",
         forceWeapon = true,
         rageMasterOn = false,
+        mode = "Normal",
+        translocateOffset = -5,
+        desync = {
+            enabled = false,
+            pitch = 0,
+            yaw = 0,
+            customPitch = 0,
+            customYaw = 0,
+            floorHide = false,
+        },
         meleeFeetDrop = 3.5,
         underOffset = 4,
         attackOffset = 4,
@@ -1723,96 +1768,78 @@ end
 
 local function valid(char)
     if not char or not char.Parent then return false end
-
     local humanoid = char:FindFirstChildOfClass("Humanoid")
     if not humanoid or humanoid.Health <= 0 then return false end
-
-    local root = char:FindFirstChild("HumanoidRootPart")
-    if not root then return false end
-
+    if not char:FindFirstChild("HumanoidRootPart") then return false end
     local targetplayer = players:GetPlayerFromCharacter(char)
-    if not targetplayer or targetplayer == player then return false end
-    if isteammate(targetplayer) then return false end
-
-    -- Extra validation borrowed from the supplied Ragebot logic.
-    local allyFlag = char:FindFirstChild("_is_ally")
-    if allyFlag and allyFlag:IsA("BoolValue") and allyFlag.Value then
-        return false
-    end
-
-    local healthFlag = char:FindFirstChild("Health")
-    if healthFlag and healthFlag:IsA("NumberValue") and healthFlag.Value <= 0 then
-        return false
-    end
-
-    -- If the game exposes ClientFighter, reject characters that are not fighter entities.
-    -- Do not require it because some Rivals states/versions may omit the object.
-    local clientFighter = char:FindFirstChild("ClientFighter")
-    local clientFighterAttr = char:GetAttribute("client_fighter")
-    if clientFighter == nil and clientFighterAttr == nil then
-        -- Compatibility fallback: keep the original validation path.
-    end
-
+    if not targetplayer or isteammate(targetplayer) then return false end
     return true
 end
 
+local priorityTargetPlayer = nil
+local priorityEnabled = false
+local function resolvePriorityPlayer(value)
+    if typeof(value) == "Instance" and value:IsA("Player") then
+        return value
+    end
+
+    if type(value) == "string" and value ~= "" then
+        return players:FindFirstChild(value)
+    end
+
+    return nil
+end
+
+local function getPriorityCharacter()
+    if not priorityEnabled then
+        return nil
+    end
+
+    local targetPlayer = resolvePriorityPlayer(priorityTargetPlayer)
+    if not targetPlayer or targetPlayer == player then
+        return nil
+    end
+
+    local char = targetPlayer.Character
+    if char and valid(char) then
+        return char
+    end
+
+    return nil
+end
+
 local function nearest()
+    local priorityChar = getPriorityCharacter()
+    if priorityChar then
+        return priorityChar
+    end
+
     local cursorpos = userinput:GetMouseLocation()
-    local camera = workspace.CurrentCamera
-    if not camera then return nil end
-
     local besttarget = nil
-    local bestscore = math.huge
-    local myroot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-    local mypos = myroot and myroot.Position or camera.CFrame.Position
-
+    local bestdistance = math.huge
     for _, targetplayer in players:GetPlayers() do
         if targetplayer ~= player and targetplayer.Character then
             local char = targetplayer.Character
-
             if valid(char) then
                 local root = char:FindFirstChild("HumanoidRootPart")
-                local aimPart =
-                    char:FindFirstChild("HitboxHead")
-                    or char:FindFirstChild("Head")
-                    or root
-
-                if root and aimPart then
-                    local screenpos, onscreen = worldToScreen(aimPart.Position)
+                if root then
+                    local screenpos, onscreen = worldToScreen(root.Position)
                     if onscreen and screenpos then
-                        local screenDistance =
-                            (Vector2.new(screenpos.X, screenpos.Y) - cursorpos).Magnitude
-
-                        local worldDistance = (root.Position - mypos).Magnitude
-
-                        -- Mostly screen proximity, with a smaller world-distance tie breaker.
-                        local score =
-                            screenDistance * 0.75
-                            + math.clamp(worldDistance / 100, 0, 1000) * 0.25
-
-                        if score < bestscore then
-                            bestscore = score
+                        local distance = (Vector2.new(screenpos.X, screenpos.Y) - cursorpos).Magnitude
+                        if distance < bestdistance then
                             besttarget = char
+                            bestdistance = distance
                         end
                     end
                 end
             end
         end
     end
-
     return besttarget
 end
 
 local function hitpartfromname(character, partname)
     if not character then return nil end
-
-    -- Prefer the game's dedicated hitbox head when Head is requested but unavailable.
-    if partname == "Head" then
-        return character:FindFirstChild("HitboxHead")
-            or character:FindFirstChild("Head")
-            or character:FindFirstChild("HumanoidRootPart")
-    end
-
     if partname == "Closest" then
         local mypos = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
         if not mypos then return character:FindFirstChild("Head") end
@@ -2212,6 +2239,47 @@ local stopvoid = function()
     end
 end
 
+local function translocateFallbackCFrame(originPos)
+    -- The source delegates this fallback to an obfuscated movement-position helper
+    -- with bounds (10000, 1000000000). Keep only the observable contract: move to a
+    -- far-out position instead of leaving a stale Translocate position active.
+    local _ = originPos or Vector3.zero
+    local lim = 10000
+    return CFrame.new(
+        math.random(-lim, lim),
+        -1000000000,
+        math.random(-lim, lim)
+    )
+end
+
+local function getTranslocateCFrame(originCF, hasTarget)
+    local originPos = typeof(originCF) == "CFrame" and originCF.Position or originCF
+
+    -- Source behavior: no target -> immediate far-out fallback.
+    if not hasTarget then
+        return translocateFallbackCFrame(originPos)
+    end
+
+    local selectedPart = nil
+    local ok = pcall(function()
+        local tagged = CollectionService:GetTagged("OutOfBoundsPart")
+        for _, part in ipairs(tagged) do
+            if part and part:IsA("BasePart") and part:GetAttribute("KillDelay") == 0 then
+                selectedPart = part
+                break
+            end
+        end
+    end)
+
+    -- Source behavior: no valid OutOfBoundsPart -> same far-out fallback.
+    if not ok or not selectedPart then
+        return translocateFallbackCFrame(originPos)
+    end
+
+    local offset = tonumber(config.target.translocateOffset) or -5
+    return selectedPart.CFrame * CFrame.new(0, -selectedPart.Size.Y / 2 + offset, 0)
+end
+
 local function startsync()
     if config.state.csyncactive then return end
     if config.target.immune then return end
@@ -2237,6 +2305,21 @@ local function startsync()
 
         setOrbR()
         oldpos = localfighter.Entity.RootPart.CFrame
+
+        -- Observable Translocate flow from the source: resolve from the current CFrame
+        -- and target state, then apply the resolved CFrame without entering Normal logic.
+        if config.target.mode == "Translocate" then
+            local currentCF = localfighter.Entity.RootPart.CFrame
+            local hasTarget = config.target.character ~= nil and valid(config.target.character)
+            local transCF = getTranslocateCFrame(currentCF, hasTarget)
+
+            config.orbit.serverpos = transCF.Position
+            pcall(function()
+                localfighter.Entity.RootPart.CFrame = transCF
+                oldpos = currentCF
+            end)
+            return
+        end
 
         local function isQuickSwapActive()
             if pickMelee() then return false end
@@ -2335,6 +2418,10 @@ end
 
 local function autoshoot()
     if not config.target.enabled or not config.target.character or not valid(config.target.character) or not config.target.autoshoot then return end
+    local attackDelay = math.max(0, tonumber(config.target.attackDelay) or 0)
+    if attackDelay > 0 and (tick() - (ragePerf.lastAttackTick or 0)) < attackDelay then
+        return
+    end
     if config.voidspam.enabled and config.voidspam.phase == "hide" then return end
     if config.target.immune then return end
     local weapon = getweapon()
@@ -2970,7 +3057,7 @@ LeftGroupBox:AddSlider("AimbotMaxDist", {
     Text = "Max Distance",
     Default = 9999,
     Min = 10,
-    Max = 999999999999,
+    Max = 999999,
     Rounding = 0,
     Callback = function(v) Aimbot:setMaxDist(v) end
 })
@@ -3187,6 +3274,59 @@ CharacterGroupBox:AddInput("UndergroundCustomDepth", {
     end
 })
 
+local DesyncGroupBox = Tabs.Character:AddRightGroupbox("Desync", "shuffle")
+DesyncGroupBox:AddSlider("DesyncPitch", {
+    Text = "Pitch",
+    Default = 0,
+    Min = -180,
+    Max = 180,
+    Rounding = 0,
+    Suffix = "°",
+    Callback = function(v)
+        config.target.desync.pitch = tonumber(v) or 0
+    end
+})
+DesyncGroupBox:AddSlider("DesyncYaw", {
+    Text = "Yaw",
+    Default = 0,
+    Min = -180,
+    Max = 180,
+    Rounding = 0,
+    Suffix = "°",
+    Callback = function(v)
+        config.target.desync.yaw = tonumber(v) or 0
+    end
+})
+DesyncGroupBox:AddSlider("DesyncCustomPitch", {
+    Text = "Custom Pitch",
+    Default = 0,
+    Min = -180,
+    Max = 180,
+    Rounding = 0,
+    Suffix = "°",
+    Callback = function(v)
+        config.target.desync.customPitch = tonumber(v) or 0
+    end
+})
+DesyncGroupBox:AddSlider("DesyncCustomYaw", {
+    Text = "Custom Yaw",
+    Default = 0,
+    Min = -180,
+    Max = 180,
+    Rounding = 0,
+    Suffix = "°",
+    Callback = function(v)
+        config.target.desync.customYaw = tonumber(v) or 0
+    end
+})
+DesyncGroupBox:AddToggle("DesyncFloorHide", {
+    Text = "Floor Hide",
+    Default = false,
+    Callback = function(v)
+        config.target.desync.floorHide = v
+    end
+})
+
 local WeaponGroup = Tabs.Misc:AddLeftGroupbox("Weapon Mods", "sword")
 WeaponGroup:AddButton({
     Text = "No Melee Animation",
@@ -3298,7 +3438,42 @@ DeviceGroup:AddDropdown("DeviceType", {
 
 local RageGroupBox = Tabs.Main:AddRightGroupbox("Ragebot", "sword")
 
-RageGroupBox:AddToggle("RagebotEnabled", {
+-- Mode is intentionally above the Ragebot toggle.
+local RagebotNormalControls = {}
+local RageUnderDep
+local TranslocateOffset
+local RagebotMode = RageGroupBox:AddDropdown("RagebotMode", {
+    Text = "Mode",
+    Values = { "Normal", "Translocate" },
+    Default = "Normal",
+    Callback = function(v)
+        Ragebot.config.target.mode = v
+        local normalVisible = (v == "Normal")
+
+        -- Normal-only controls are hidden while Translocate is selected.
+        for _, control in ipairs(RagebotNormalControls) do
+            pcall(function() control:SetVisible(normalVisible) end)
+        end
+        pcall(function() RageUnderDep:SetVisible(normalVisible) end)
+        pcall(function() TranslocateOffset:SetVisible(not normalVisible) end)
+
+        -- Translocate must not be overridden by Normal Voidspam state.
+        if not normalVisible then
+            Ragebot.config.voidspam.enabled = false
+            Ragebot.config.voidspam.phase = nil
+            Ragebot.config.voidspam.shotIssued = false
+            if Ragebot.clrVoidSnap then
+                Ragebot.clrVoidSnap()
+            end
+        end
+
+        if Ragebot.refreshAtk then
+            Ragebot.refreshAtk()
+        end
+    end
+})
+
+local RagebotEnabled = RageGroupBox:AddToggle("RagebotEnabled", {
     Text = "Enable",
     Default = false,
     Callback = function(v)
@@ -3329,7 +3504,7 @@ RageGroupBox:AddToggle("RagebotEnabled", {
     end
 })
 
-RageGroupBox:AddToggle("RagebotAutoTarget", {
+local RagebotAutoTarget = RageGroupBox:AddToggle("RagebotAutoTarget", {
     Text = "Auto Target",
     Default = false,
     Callback = function(v)
@@ -3338,9 +3513,9 @@ RageGroupBox:AddToggle("RagebotAutoTarget", {
 })
 
 local RageUnderGate = { Type = "Toggle", Value = false }
-local RageUnderDep = RageGroupBox:AddDependencyBox()
+RageUnderDep = RageGroupBox:AddDependencyBox()
 
-RageGroupBox:AddDropdown("RagebotAttackPosition", {
+local RagebotAttackPosition = RageGroupBox:AddDropdown("RagebotAttackPosition", {
     Text = "Attack Position",
     Default = "default",
     Values = {"default", "under"},
@@ -3354,7 +3529,7 @@ RageGroupBox:AddDropdown("RagebotAttackPosition", {
     end
 })
 
-RageUnderDep:AddSlider("RagebotUnderOffset", {
+local RagebotUnderOffset = RageUnderDep:AddSlider("RagebotUnderOffset", {
     Text = "Under Offset",
     Default = Ragebot.config.target.underOffset or 4,
     Min = 1,
@@ -3378,12 +3553,12 @@ RageUnderDep:SetupDependencies({
 RageUnderGate.Value = Ragebot.config.target.attackPosition == "under"
 RageUnderDep:Update()
 
-RageGroupBox:AddSlider("RagebotAttackOffset", {
+local RagebotAttackOffset = RageGroupBox:AddSlider("RagebotAttackOffset", {
     Text = "Attack Offset",
     Default = 4,
     Min = 1,
     Max = 25,
-    Rounding = 1,
+    Rounding = 0,
     Compact = true,
     Callback = function(v)
         Ragebot.config.target.attackOffset = math.clamp(tonumber(v) or 4, 1, 25)
@@ -3393,7 +3568,7 @@ RageGroupBox:AddSlider("RagebotAttackOffset", {
     end
 })
 
-RageGroupBox:AddDropdown("RagebotWeapon", {
+local RagebotWeapon = RageGroupBox:AddDropdown("RagebotWeapon", {
     Text = "Weapon",
     Values = {"primary", "secondary", "melee"},
     Default = Ragebot.config.target.weaponPick or "primary",
@@ -3408,20 +3583,31 @@ RageGroupBox:AddDropdown("RagebotWeapon", {
     end
 })
 
-RageGroupBox:AddSlider("RagebotShootAttempts", {
+local RagebotShootAttempts = RageGroupBox:AddSlider("RagebotShootAttempts", {
     Text = "Shoot Attempts",
     Default = Ragebot.config.target.shootAttempts or 1,
     Min = 1,
-    Max = 5,
+    Max = 3,
     Rounding = 0,
     Suffix = "x",
     Callback = function(v)
-        Ragebot.config.target.shootAttempts =
-            math.clamp(math.floor(tonumber(v) or 1), 1, 3)
+        Ragebot.config.target.shootAttempts = math.clamp(math.floor(tonumber(v) or 1), 1, 3)
     end
 })
 
-RageGroupBox:AddDropdown("RagebotHitPart", {
+local RagebotAttackDelay = RageGroupBox:AddSlider("RagebotAttackDelay", {
+    Text = "Attack Delay",
+    Default = Ragebot.config.target.attackDelay or 0,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Suffix = "s",
+    Callback = function(v)
+        Ragebot.config.target.attackDelay = math.max(0, tonumber(v) or 0)
+    end
+})
+
+local RagebotHitPart = RageGroupBox:AddDropdown("RagebotHitPart", {
     Text = "Hit Part",
     Default = Ragebot.config.target.hitpart or "Head",
     Values = {"Head", "HumanoidRootPart", "Torso", "UpperTorso", "Closest", "Random"},
@@ -3430,7 +3616,7 @@ RageGroupBox:AddDropdown("RagebotHitPart", {
     end
 })
 
-RageGroupBox:AddToggle("RagebotPrediction", {
+local RagebotPrediction = RageGroupBox:AddToggle("RagebotPrediction", {
     Text = "Prediction",
     Default = Ragebot.config.prediction.enabled or false,
     Callback = function(v)
@@ -3438,7 +3624,7 @@ RageGroupBox:AddToggle("RagebotPrediction", {
     end
 })
 
-RageGroupBox:AddSlider("RagebotPredictionMult", {
+local RagebotPredictionMult = RageGroupBox:AddSlider("RagebotPredictionMult", {
     Text = "Prediction Mult",
     Default = Ragebot.config.prediction.multiplier or 1.2,
     Min = 0.1,
@@ -3449,10 +3635,14 @@ RageGroupBox:AddSlider("RagebotPredictionMult", {
     end
 })
 
-RageGroupBox:AddToggle("RagebotVoidSpam", {
+local RagebotVoidSpam = RageGroupBox:AddToggle("RagebotVoidSpam", {
     Text = "Voidspam",
     Default = Ragebot.config.voidspam.enabled or false,
     Callback = function(v)
+        -- Voidspam is a Normal-mode feature.
+        if Ragebot.config.target.mode == "Translocate" and v then
+            v = false
+        end
         Ragebot.config.voidspam.enabled = v
         if not v then
             Ragebot.config.voidspam.phase = nil
@@ -3463,7 +3653,7 @@ RageGroupBox:AddToggle("RagebotVoidSpam", {
     end
 })
 
-RageGroupBox:AddSlider("RagebotAttack", {
+local RagebotAttack = RageGroupBox:AddSlider("RagebotAttack", {
     Text = "Attack",
     Default = Ragebot.config.voidspam.shoot_min or 1,
     Min = 0,
@@ -3477,7 +3667,7 @@ RageGroupBox:AddSlider("RagebotAttack", {
     end
 })
 
-RageGroupBox:AddSlider("RagebotHide", {
+local RagebotHide = RageGroupBox:AddSlider("RagebotHide", {
     Text = "Hide",
     Default = Ragebot.config.voidspam.hide_min or 1,
     Min = 0,
@@ -3491,6 +3681,144 @@ RageGroupBox:AddSlider("RagebotHide", {
     end
 })
 
+TranslocateOffset = RageGroupBox:AddSlider("RagebotTranslocateOffset", {
+    Text = "Translocate Offset",
+    Default = -5,
+    Min = -5,
+    Max = 5,
+    Rounding = 1,
+    Compact = true,
+    Visible = false,
+    Callback = function(v)
+        Ragebot.config.target.translocateOffset = tonumber(v) or -5
+    end
+})
+
+RageGroupBox:AddToggle("RagebotDesync", {
+    Text = "Desync",
+    Default = false,
+    Callback = function(v)
+        Ragebot.config.target.rageDesync = v
+        config.target.rageDesync = v
+        config.target.desync.enabled = v
+    end
+})
+
+RagebotNormalControls = {
+    RagebotAutoTarget,
+    RagebotAttackPosition,
+    RagebotAttackOffset,
+    RagebotWeapon,
+    RagebotShootAttempts,
+    RagebotAttackDelay,
+    RagebotHitPart,
+    RagebotPrediction,
+    RagebotPredictionMult,
+    RagebotVoidSpam,
+    RagebotAttack,
+    RagebotHide,
+}
+
+-- Ensure the UI starts in Normal mode.
+Ragebot.config.target.mode = "Normal"
+Ragebot.config.target.translocateOffset = -5
+Ragebot.config.target.rageDesync = false
+config.target.rageDesync = false
+config.target.desync.enabled = false
+for _, control in ipairs(RagebotNormalControls) do
+    pcall(function() control:SetVisible(true) end)
+end
+pcall(function() RageUnderDep:SetVisible(true) end)
+pcall(function() TranslocateOffset:SetVisible(false) end)
+
+-- Ragebot Desync runtime. It only manipulates the physics representation part,
+-- so it does not overwrite the Translocate/server position logic.
+do
+    local desyncLastCF = nil
+
+    RunService:BindToRenderStep("RagebotDesync", Enum.RenderPriority.Camera.Value + 1, function()
+        local enabled = config.target.rageDesync == true
+        local char = lp.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not hrp then
+            desyncLastCF = nil
+            return
+        end
+
+        local rep = char:FindFirstChild("PhysicsRepRootPart") or hrp
+
+        if not enabled then
+            if desyncLastCF then
+                pcall(function() rep.CFrame = hrp.CFrame end)
+                desyncLastCF = nil
+            end
+            return
+        end
+
+        local d = config.target.desync
+        local targetCF
+
+        if d.floorHide and hrp.Position.Y < 8 then
+            targetCF = hrp.CFrame * CFrame.new(0, -3, 0)
+        else
+            local yaw = math.rad(tonumber(d.yaw) or 0)
+            local pitch = math.rad(tonumber(d.pitch) or 0)
+            local customYaw = math.rad(tonumber(d.customYaw) or 0)
+            local customPitch = math.rad(tonumber(d.customPitch) or 0)
+            targetCF = CFrame.new(hrp.Position)
+                * CFrame.Angles(0, yaw + customYaw, 0)
+                * CFrame.Angles(pitch + customPitch, 0, 0)
+        end
+
+        pcall(function()
+            rep.CFrame = targetCF
+            desyncLastCF = targetCF
+        end)
+    end)
+end
+
+local PriorityTargetBox = Tabs.Priority:AddLeftGroupbox("Priority Target", "target")
+
+PriorityTargetBox:AddToggle("PriorityEnabled", {
+    Text = "Auto Priority",
+    Tooltip = "Prefer the selected player when Ragebot Normal chooses a target.",
+    Default = false,
+    Callback = function(v)
+        priorityEnabled = v
+        if v then
+            local selected = resolvePriorityPlayer(priorityTargetPlayer)
+            if not selected then
+                Library:Notify("Select a player first", 2)
+            end
+        end
+    end
+})
+
+PriorityTargetBox:AddDropdown("PriorityPlayer", {
+    SpecialType = "Player",
+    ExcludeLocalPlayer = true,
+    Text = "Priority Player",
+    Tooltip = "Player that Ragebot Normal should prefer.",
+    Callback = function(v)
+        priorityTargetPlayer = resolvePriorityPlayer(v) or v
+    end,
+})
+
+PriorityTargetBox:AddButton({
+    Text = "Clear Priority",
+    Func = function()
+        priorityTargetPlayer = nil
+        priorityEnabled = false
+        if Toggles.PriorityEnabled then
+            Toggles.PriorityEnabled:SetValue(false)
+        end
+        Library:Notify("Priority cleared", 2)
+    end,
+})
+
+local PriorityInfoBox = Tabs.Priority:AddRightGroupbox("Priority Info", "info")
+PriorityInfoBox:AddLabel("When Auto Priority is enabled, the selected player is checked first.", true)
+PriorityInfoBox:AddLabel("If the selected player is invalid, the normal cursor-distance target selection is used.", true)
 
 local ModsGroupBox = Tabs.Combat:AddLeftGroupbox("Gun Mods", "gun")
 ModsGroupBox:AddToggle("NoCooldown", {
