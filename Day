@@ -40,6 +40,7 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CollectionService = game:GetService("CollectionService")
 local lp = Players.LocalPlayer
 
 local antikatana = false
@@ -78,7 +79,6 @@ end
 
 local runServiceType = "Heartbeat"
 local runServiceConnection = nil
-local getFighterController
 
 local Aimbot = {
     enabled = false,
@@ -310,9 +310,7 @@ function Aimbot:_fireAfterFlick()
     end
 
     pcall(function()
-        local fighterController = getFighterController()
-        local fighter = fighterController and fighterController.LocalFighter
-        local equipped = fighter and fighter.EquippedItem
+        local equipped = localFighter and localFighter.EquippedItem
         if not equipped then return end
 
         local objId = equipped:Get("ObjectID")
@@ -349,9 +347,8 @@ function Aimbot:_updateFlick(dt)
     local cam = Workspace.CurrentCamera
     local cc = self:getCC()
 
-    -- CameraController is optional: _applyFlickRotation has a camera fallback.
     if not target or not target.character or not target.character.Parent or not target.part.Parent
-        or not cam then
+        or not cam or not cc then
         self:_finishFlick()
         return
     end
@@ -867,7 +864,7 @@ local Utility = safeRequire(ReplicatedStorage.Modules.Utility)
 local EnumLibrary = safeRequire(ReplicatedStorage.Modules.EnumLibrary)
 local localFighter = nil
 
-getFighterController = function()
+local function getFighterController()
     local ps = lp:FindFirstChild("PlayerScripts")
     if ps then
         local ctrl = ps:FindFirstChild("Controllers")
@@ -1254,6 +1251,7 @@ local config = {
         auto = false,
         autoshoot = true,
         shootAttempts = 1,
+        attackDelay = 0,
         hitpart = "Head",
         lastchar = nil,
         lastplayer = nil,
@@ -1264,6 +1262,8 @@ local config = {
         weaponPick = "primary",
         forceWeapon = true,
         rageMasterOn = false,
+        mode = "Normal",
+        translocateOffset = -5,
         meleeFeetDrop = 3.5,
         underOffset = 4,
         attackOffset = 4,
@@ -1300,8 +1300,6 @@ local config = {
         outofammo = false,
         csyncactive = false,
         reloadStartedAt = 0,
-        reloadReadyAt = 0,
-        reloadDelay = 0.5,
     },
     voidhide = {
         enabled = true,
@@ -1471,9 +1469,17 @@ end
 
 local SLOTS = { primary = 1, secondary = 2, melee = 3 }
 local MELEE_NMS = {
-    ["Battle Axe"] = true, ["Chainsaw"] = true, ["Daggers"] = true, ["Fists"] = true,
-    ["Gunblade"] = true, ["Katana"] = true, ["Knife"] = true, ["Spear"] = true,
-    ["Scythe"] = true, ["Trowel"] = true, ["Maul"] = true, ["Riot Shield"] = true,
+    ["Battle Axe"] = true,
+    ["Chainsaw"] = true,
+    ["Daggers"] = true,
+    ["Fists"] = true,
+    ["Gunblade"] = true,
+    ["Katana"] = true,
+    ["Knife"] = true,
+    ["Scythe"] = true,
+    ["Trowel"] = true,
+    ["Maul"] = true,
+    ["Spear"] = true,
 }
 local INFINITE_AMMO_WEAPONS = {
     ["Energy Rifle"] = true,
@@ -1675,14 +1681,12 @@ local function tickAmmo()
         config.state.outofammo = false
         config.state.reloading = false
         config.state.reloadStartedAt = 0
-        config.state.reloadReadyAt = 0
         return
     end
 
     local current, maxAmmo, melee = getammo()
     local wasOutOfAmmo = config.state.outofammo
     local wasReloading = config.state.reloading
-    local now = tick()
 
     if melee then
         config.state.outofammo = false
@@ -1691,57 +1695,53 @@ local function tickAmmo()
     end
 
     local reloading = itemReload()
-    if reloading and not wasReloading then
-        config.state.reloadStartedAt = now
-        config.state.reloadReadyAt = 0
+    if reloading and not config.state.reloading then
+        config.state.reloadStartedAt = tick()
     elseif not reloading then
         config.state.reloadStartedAt = 0
     end
     config.state.reloading = reloading
 
-    -- Empty magazine: remain hidden until ammo is actually positive.
+    -- Empty magazine: lock the state in Hide until ammo is actually restored.
     if config.state.outofammo and not melee then
         if config.voidspam.enabled then
             config.voidspam.phase = "hide"
             config.voidspam.shotIssued = false
-            config.voidspam.currentduration = math.huge
-            config.voidspam.lastswitch = now
+            config.voidspam.lastswitch = tick()
         end
         return
     end
 
-    -- A reload has completed with usable ammo. Start a one-shot readiness timer.
-    -- This prevents the orbit from rushing out during the reload animation.
-    if not melee and not reloading and (wasReloading or wasOutOfAmmo) and (tonumber(current) or 0) > 0 then
-        config.state.reloadReadyAt = now + math.clamp(tonumber(config.state.reloadDelay) or 0.5, 0.01, 1)
-    end
-
-    -- Until the post-reload delay expires, force the safe state.
-    if not melee and config.state.reloadReadyAt > now then
-        if config.voidspam.enabled then
-            config.voidspam.phase = "hide"
-            config.voidspam.shotIssued = false
-            config.voidspam.currentduration = math.huge
-            config.voidspam.lastswitch = now
-        end
-        return
-    end
-
-    if config.state.reloadReadyAt > 0 and now >= config.state.reloadReadyAt then
-        config.state.reloadReadyAt = 0
+    -- Reload completed with usable ammo: allow the next attack immediately.
+    if not melee and wasOutOfAmmo and not config.state.outofammo and (tonumber(current) or 0) > 0 then
         if config.voidspam.enabled then
             config.voidspam.phase = "shoot"
             config.voidspam.shotIssued = false
-            config.voidspam.currentduration = randVs(config.voidspam.shoot_min, config.voidspam.shoot_max)
-            config.voidspam.lastswitch = now
+            config.voidspam.currentduration = randVs(
+                config.voidspam.shoot_min,
+                config.voidspam.shoot_max
+            )
+            config.voidspam.lastswitch = tick()
+        end
+        return
+    end
+
+    -- Any reload completion also exits the reload-hide state when ammo is available.
+    if not reloading and wasReloading and not config.state.outofammo and (tonumber(current) or 0) > 0 then
+        if config.voidspam.enabled then
+            config.voidspam.phase = "shoot"
+            config.voidspam.shotIssued = false
+            config.voidspam.currentduration = randVs(
+                config.voidspam.shoot_min,
+                config.voidspam.shoot_max
+            )
+            config.voidspam.lastswitch = tick()
         end
     end
 end
 
 local function reloadHide(sling)
-    local now = tick()
-    local postReloadHold = (config.state.reloadReadyAt or 0) > now
-    if not ((config.state.reloading or postReloadHold) and config.ragestatus.hideOnReload) then
+    if not (config.state.reloading and config.ragestatus.hideOnReload) then
         return false
     end
     local hrp = voidHrp()
@@ -2201,6 +2201,47 @@ local stopvoid = function()
     end
 end
 
+local function translocateFallbackCFrame(originPos)
+    -- The source delegates this fallback to an obfuscated movement-position helper
+    -- with bounds (10000, 1000000000). Keep only the observable contract: move to a
+    -- far-out position instead of leaving a stale Translocate position active.
+    local _ = originPos or Vector3.zero
+    local lim = 10000
+    return CFrame.new(
+        math.random(-lim, lim),
+        -1000000000,
+        math.random(-lim, lim)
+    )
+end
+
+local function getTranslocateCFrame(originCF, hasTarget)
+    local originPos = typeof(originCF) == "CFrame" and originCF.Position or originCF
+
+    -- Source behavior: no target -> immediate far-out fallback.
+    if not hasTarget then
+        return translocateFallbackCFrame(originPos)
+    end
+
+    local selectedPart = nil
+    local ok = pcall(function()
+        local tagged = CollectionService:GetTagged("OutOfBoundsPart")
+        for _, part in ipairs(tagged) do
+            if part and part:IsA("BasePart") and part:GetAttribute("KillDelay") == 0 then
+                selectedPart = part
+                break
+            end
+        end
+    end)
+
+    -- Source behavior: no valid OutOfBoundsPart -> same far-out fallback.
+    if not ok or not selectedPart then
+        return translocateFallbackCFrame(originPos)
+    end
+
+    local offset = tonumber(config.target.translocateOffset) or -5
+    return selectedPart.CFrame * CFrame.new(0, -selectedPart.Size.Y / 2 + offset, 0)
+end
+
 local function startsync()
     if config.state.csyncactive then return end
     if config.target.immune then return end
@@ -2226,6 +2267,21 @@ local function startsync()
 
         setOrbR()
         oldpos = localfighter.Entity.RootPart.CFrame
+
+        -- Observable Translocate flow from the source: resolve from the current CFrame
+        -- and target state, then apply the resolved CFrame without entering Normal logic.
+        if config.target.mode == "Translocate" then
+            local currentCF = localfighter.Entity.RootPart.CFrame
+            local hasTarget = config.target.character ~= nil and valid(config.target.character)
+            local transCF = getTranslocateCFrame(currentCF, hasTarget)
+
+            config.orbit.serverpos = transCF.Position
+            pcall(function()
+                localfighter.Entity.RootPart.CFrame = transCF
+                oldpos = currentCF
+            end)
+            return
+        end
 
         local function isQuickSwapActive()
             if pickMelee() then return false end
@@ -2324,6 +2380,10 @@ end
 
 local function autoshoot()
     if not config.target.enabled or not config.target.character or not valid(config.target.character) or not config.target.autoshoot then return end
+    local attackDelay = math.max(0, tonumber(config.target.attackDelay) or 0)
+    if attackDelay > 0 and (tick() - (ragePerf.lastAttackTick or 0)) < attackDelay then
+        return
+    end
     if config.voidspam.enabled and config.voidspam.phase == "hide" then return end
     if config.target.immune then return end
     local weapon = getweapon()
@@ -2333,7 +2393,6 @@ local function autoshoot()
     if not lf or not lf.EquippedItem then return end
     if not isInfiniteWeapon() then
         if config.state.reloading or config.state.outofammo then return end
-        if (config.state.reloadReadyAt or 0) > tick() then return end
         if not canuse() then return end
     end
     local targetChar = config.target.character
@@ -3127,6 +3186,13 @@ SilentGroupBox:AddDropdown("SilentFireMode", {
     end
 })
 
+SilentGroupBox:AddToggle("AntiKatana", {
+    Text = "Anti Katana",
+    Default = false,
+    Callback = function(v)
+        antikatana = v
+    end
+})
 
 local CharacterGroupBox = Tabs.Character:AddLeftGroupbox("Character", "user")
 
@@ -3286,9 +3352,208 @@ DeviceGroup:AddDropdown("DeviceType", {
     end
 })
 
+
+-- Desync / Anti-Aim is kept separate from the existing Ragebot attack, target,
+-- translocate, voidspam, and autoshoot logic.
+do
+    local DESYNC_STEP_NAME = "RagebotDesync"
+    local desyncState = {
+        enabled = false,
+        pitch = 0,
+        yaw = 0,
+        customPitch = 0,
+        customYaw = 0,
+        floorHide = false,
+        physicsRep = nil,
+    }
+
+    Ragebot.desync = desyncState
+
+    local function unbindDesync()
+        pcall(function()
+            runsvc:UnbindFromRenderStep(DESYNC_STEP_NAME)
+        end)
+    end
+
+    local function getDesyncCFrame(hrp)
+        local base = hrp.CFrame
+        local yaw = math.rad(desyncState.yaw)
+        local pitch = math.rad(desyncState.pitch)
+        local customYaw = math.rad(desyncState.customYaw)
+        local customPitch = math.rad(desyncState.customPitch)
+
+        return CFrame.new(base.Position)
+            * CFrame.Angles(0, yaw + customYaw, 0)
+            * CFrame.Angles(pitch + customPitch, 0, 0)
+    end
+
+    local function applyDesync(hrp, rep, cframe)
+        if rep and rep.Parent then
+            rep.CFrame = cframe
+        end
+
+        if hrp and hrp.Parent then
+            -- Keep the visible root aligned with the same desync transform.
+            hrp.CFrame = cframe
+        end
+    end
+
+    function Ragebot:setupDesync()
+        if Ragebot._desyncBound then
+            return
+        end
+        Ragebot._desyncBound = true
+
+        runsvc:BindToRenderStep(DESYNC_STEP_NAME, Enum.RenderPriority.Camera.Value, function()
+            local rageOn = Toggles.RagebotEnabled and Toggles.RagebotEnabled.Value
+            local antiAimOn = Toggles.RagebotAntiAim and Toggles.RagebotAntiAim.Value
+
+            if not rageOn or not antiAimOn then
+                local character = player.Character
+                local hrp = character and character:FindFirstChild("HumanoidRootPart")
+                local rep = character and (character:FindFirstChild("PhysicsRepRootPart") or hrp)
+
+                if rep and hrp then
+                    rep.CFrame = hrp.CFrame
+                end
+                desyncState.physicsRep = rep
+                return
+            end
+
+            local character = player.Character
+            if not character then
+                return
+            end
+
+            local hrp = character:FindFirstChild("HumanoidRootPart")
+            if not hrp then
+                return
+            end
+
+            desyncState.enabled = true
+            desyncState.pitch = tonumber(Options.RagebotAntiAimPitch.Value) or 0
+            desyncState.yaw = tonumber(Options.RagebotAntiAimYaw.Value) or 0
+            desyncState.customPitch = tonumber(Options.RagebotAntiAimCustomPitch.Value) or 0
+            desyncState.customYaw = tonumber(Options.RagebotAntiAimCustomYaw.Value) or 0
+            desyncState.floorHide = Toggles.RagebotAntiAimFloorHide
+                and Toggles.RagebotAntiAimFloorHide.Value or false
+
+            local rep = character:FindFirstChild("PhysicsRepRootPart") or hrp
+            desyncState.physicsRep = rep
+
+            if desyncState.floorHide and hrp.Position.Y < 8 then
+                applyDesync(
+                    hrp,
+                    rep,
+                    hrp.CFrame * CFrame.new(0, -3, 0)
+                )
+                return
+            end
+
+            applyDesync(hrp, rep, getDesyncCFrame(hrp))
+        end)
+    end
+
+    function Ragebot:unbindDesync()
+        unbindDesync()
+        Ragebot._desyncBound = false
+        desyncState.enabled = false
+        desyncState.physicsRep = nil
+    end
+
+    Ragebot:setupDesync()
+end
+
 local RageGroupBox = Tabs.Main:AddRightGroupbox("Ragebot", "sword")
 
-RageGroupBox:AddToggle("RagebotEnabled", {
+local RagebotAntiAim = RageGroupBox:AddToggle("RagebotAntiAim", {
+    Text = "Desync / Anti-Aim",
+    Default = false,
+    Callback = function(v)
+        if Ragebot.desync then
+            Ragebot.desync.enabled = v
+        end
+    end
+})
+
+local RagebotAntiAimPitch = RageGroupBox:AddSlider("RagebotAntiAimPitch", {
+    Text = "Desync Pitch",
+    Default = 0,
+    Min = -180,
+    Max = 180,
+    Rounding = 0,
+    Suffix = "°",
+})
+
+local RagebotAntiAimYaw = RageGroupBox:AddSlider("RagebotAntiAimYaw", {
+    Text = "Desync Yaw",
+    Default = 0,
+    Min = -180,
+    Max = 180,
+    Rounding = 0,
+    Suffix = "°",
+})
+
+local RagebotAntiAimCustomPitch = RageGroupBox:AddSlider("RagebotAntiAimCustomPitch", {
+    Text = "Custom Pitch",
+    Default = 0,
+    Min = -180,
+    Max = 180,
+    Rounding = 0,
+    Suffix = "°",
+})
+
+local RagebotAntiAimCustomYaw = RageGroupBox:AddSlider("RagebotAntiAimCustomYaw", {
+    Text = "Custom Yaw",
+    Default = 0,
+    Min = -180,
+    Max = 180,
+    Rounding = 0,
+    Suffix = "°",
+})
+
+local RagebotAntiAimFloorHide = RageGroupBox:AddToggle("RagebotAntiAimFloorHide", {
+    Text = "Floor Hide",
+    Default = false,
+})
+
+
+-- Mode is intentionally above the Ragebot toggle.
+local RagebotNormalControls = {}
+local RageUnderDep
+local TranslocateOffset
+local RagebotMode = RageGroupBox:AddDropdown("RagebotMode", {
+    Text = "Mode",
+    Values = { "Normal", "Translocate" },
+    Default = "Normal",
+    Callback = function(v)
+        Ragebot.config.target.mode = v
+        local normalVisible = (v == "Normal")
+
+        -- Normal-only controls are hidden while Translocate is selected.
+        for _, control in ipairs(RagebotNormalControls) do
+            pcall(function() control:SetVisible(normalVisible) end)
+        end
+        pcall(function() RageUnderDep:SetVisible(normalVisible) end)
+        pcall(function() TranslocateOffset:SetVisible(not normalVisible) end)
+
+        -- Translocate must not be overridden by Normal Voidspam state.
+        if not normalVisible then
+            Ragebot.config.voidspam.enabled = false
+            Ragebot.config.voidspam.phase = nil
+            Ragebot.config.voidspam.shotIssued = false
+            if Ragebot.clrVoidSnap then
+                Ragebot.clrVoidSnap()
+            end
+        end
+
+        if Ragebot.refreshAtk then
+            Ragebot.refreshAtk()
+        end
+    end
+})
+
+local RagebotEnabled = RageGroupBox:AddToggle("RagebotEnabled", {
     Text = "Enable",
     Default = false,
     Callback = function(v)
@@ -3319,7 +3584,7 @@ RageGroupBox:AddToggle("RagebotEnabled", {
     end
 })
 
-RageGroupBox:AddToggle("RagebotAutoTarget", {
+local RagebotAutoTarget = RageGroupBox:AddToggle("RagebotAutoTarget", {
     Text = "Auto Target",
     Default = false,
     Callback = function(v)
@@ -3328,9 +3593,9 @@ RageGroupBox:AddToggle("RagebotAutoTarget", {
 })
 
 local RageUnderGate = { Type = "Toggle", Value = false }
-local RageUnderDep = RageGroupBox:AddDependencyBox()
+RageUnderDep = RageGroupBox:AddDependencyBox()
 
-RageGroupBox:AddDropdown("RagebotAttackPosition", {
+local RagebotAttackPosition = RageGroupBox:AddDropdown("RagebotAttackPosition", {
     Text = "Attack Position",
     Default = "default",
     Values = {"default", "under"},
@@ -3344,7 +3609,7 @@ RageGroupBox:AddDropdown("RagebotAttackPosition", {
     end
 })
 
-RageUnderDep:AddSlider("RagebotUnderOffset", {
+local RagebotUnderOffset = RageUnderDep:AddSlider("RagebotUnderOffset", {
     Text = "Under Offset",
     Default = Ragebot.config.target.underOffset or 4,
     Min = 1,
@@ -3368,7 +3633,7 @@ RageUnderDep:SetupDependencies({
 RageUnderGate.Value = Ragebot.config.target.attackPosition == "under"
 RageUnderDep:Update()
 
-RageGroupBox:AddSlider("RagebotAttackOffset", {
+local RagebotAttackOffset = RageGroupBox:AddSlider("RagebotAttackOffset", {
     Text = "Attack Offset",
     Default = 4,
     Min = 1,
@@ -3383,7 +3648,7 @@ RageGroupBox:AddSlider("RagebotAttackOffset", {
     end
 })
 
-RageGroupBox:AddDropdown("RagebotWeapon", {
+local RagebotWeapon = RageGroupBox:AddDropdown("RagebotWeapon", {
     Text = "Weapon",
     Values = {"primary", "secondary", "melee"},
     Default = Ragebot.config.target.weaponPick or "primary",
@@ -3398,7 +3663,7 @@ RageGroupBox:AddDropdown("RagebotWeapon", {
     end
 })
 
-RageGroupBox:AddSlider("RagebotShootAttempts", {
+local RagebotShootAttempts = RageGroupBox:AddSlider("RagebotShootAttempts", {
     Text = "Shoot Attempts",
     Default = Ragebot.config.target.shootAttempts or 1,
     Min = 1,
@@ -3406,12 +3671,23 @@ RageGroupBox:AddSlider("RagebotShootAttempts", {
     Rounding = 0,
     Suffix = "x",
     Callback = function(v)
-        Ragebot.config.target.shootAttempts =
-            math.clamp(math.floor(tonumber(v) or 1), 1, 3)
+        Ragebot.config.target.shootAttempts = math.clamp(math.floor(tonumber(v) or 1), 1, 3)
     end
 })
 
-RageGroupBox:AddDropdown("RagebotHitPart", {
+local RagebotAttackDelay = RageGroupBox:AddSlider("RagebotAttackDelay", {
+    Text = "Attack Delay",
+    Default = Ragebot.config.target.attackDelay or 0,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Suffix = "s",
+    Callback = function(v)
+        Ragebot.config.target.attackDelay = math.max(0, tonumber(v) or 0)
+    end
+})
+
+local RagebotHitPart = RageGroupBox:AddDropdown("RagebotHitPart", {
     Text = "Hit Part",
     Default = Ragebot.config.target.hitpart or "Head",
     Values = {"Head", "HumanoidRootPart", "Torso", "UpperTorso", "Closest", "Random"},
@@ -3420,7 +3696,7 @@ RageGroupBox:AddDropdown("RagebotHitPart", {
     end
 })
 
-RageGroupBox:AddToggle("RagebotPrediction", {
+local RagebotPrediction = RageGroupBox:AddToggle("RagebotPrediction", {
     Text = "Prediction",
     Default = Ragebot.config.prediction.enabled or false,
     Callback = function(v)
@@ -3428,7 +3704,7 @@ RageGroupBox:AddToggle("RagebotPrediction", {
     end
 })
 
-RageGroupBox:AddSlider("RagebotPredictionMult", {
+local RagebotPredictionMult = RageGroupBox:AddSlider("RagebotPredictionMult", {
     Text = "Prediction Mult",
     Default = Ragebot.config.prediction.multiplier or 1.2,
     Min = 0.1,
@@ -3439,10 +3715,14 @@ RageGroupBox:AddSlider("RagebotPredictionMult", {
     end
 })
 
-RageGroupBox:AddToggle("RagebotVoidSpam", {
+local RagebotVoidSpam = RageGroupBox:AddToggle("RagebotVoidSpam", {
     Text = "Voidspam",
     Default = Ragebot.config.voidspam.enabled or false,
     Callback = function(v)
+        -- Voidspam is a Normal-mode feature.
+        if Ragebot.config.target.mode == "Translocate" and v then
+            v = false
+        end
         Ragebot.config.voidspam.enabled = v
         if not v then
             Ragebot.config.voidspam.phase = nil
@@ -3453,7 +3733,7 @@ RageGroupBox:AddToggle("RagebotVoidSpam", {
     end
 })
 
-RageGroupBox:AddSlider("RagebotAttack", {
+local RagebotAttack = RageGroupBox:AddSlider("RagebotAttack", {
     Text = "Attack",
     Default = Ragebot.config.voidspam.shoot_min or 1,
     Min = 0,
@@ -3467,7 +3747,7 @@ RageGroupBox:AddSlider("RagebotAttack", {
     end
 })
 
-RageGroupBox:AddSlider("RagebotHide", {
+local RagebotHide = RageGroupBox:AddSlider("RagebotHide", {
     Text = "Hide",
     Default = Ragebot.config.voidspam.hide_min or 1,
     Min = 0,
@@ -3481,19 +3761,42 @@ RageGroupBox:AddSlider("RagebotHide", {
     end
 })
 
-RageGroupBox:AddSlider("RagebotReloadDelay", {
-    Text = "Reload -> Attack Delay",
-    Default = Ragebot.config.state.reloadDelay or 0.5,
-    Min = 0.01,
-    Max = 1,
-    Rounding = 2,
-    Suffix = " s",
+TranslocateOffset = RageGroupBox:AddSlider("RagebotTranslocateOffset", {
+    Text = "Translocate Offset",
+    Default = -5,
+    Min = -5,
+    Max = 5,
+    Rounding = 1,
     Compact = true,
+    Visible = false,
     Callback = function(v)
-        Ragebot.config.state.reloadDelay = math.clamp(tonumber(v) or 0.5, 0.01, 1)
+        Ragebot.config.target.translocateOffset = tonumber(v) or -5
     end
 })
 
+RagebotNormalControls = {
+    RagebotAutoTarget,
+    RagebotAttackPosition,
+    RagebotAttackOffset,
+    RagebotWeapon,
+    RagebotShootAttempts,
+    RagebotAttackDelay,
+    RagebotHitPart,
+    RagebotPrediction,
+    RagebotPredictionMult,
+    RagebotVoidSpam,
+    RagebotAttack,
+    RagebotHide,
+}
+
+-- Ensure the UI starts in Normal mode.
+Ragebot.config.target.mode = "Normal"
+Ragebot.config.target.translocateOffset = -5
+for _, control in ipairs(RagebotNormalControls) do
+    pcall(function() control:SetVisible(true) end)
+end
+pcall(function() RageUnderDep:SetVisible(true) end)
+pcall(function() TranslocateOffset:SetVisible(false) end)
 
 local ModsGroupBox = Tabs.Combat:AddLeftGroupbox("Gun Mods", "gun")
 ModsGroupBox:AddToggle("NoCooldown", {
@@ -3536,31 +3839,6 @@ ModsGroupBox:AddToggle("RapidAttack", {
         if v then applyRapidFire() end
     end
 })
-ModsGroupBox:AddToggle("NoMuzzleFlash", {
-    Text = "No Muzzle Flash",
-    Default = false,
-    Callback = function(v) end
-})
-
-local MiscGroupBox = Tabs.Combat:AddLeftGroupbox("Misc Combat", "settings")
-MiscGroupBox:AddToggle("AntiKatana", {
-    Text = "Anti Katana",
-    Default = false,
-    Callback = function(v) antikatana = v end
-})
-MiscGroupBox:AddToggle("BackshootToggle", {
-    Text = "Backshoot",
-    Default = false,
-    Callback = function(v) end
-}):AddKeyPicker("SelectTargetKey", {
-    Text = "Backshoot",
-    Default = "None",
-    Mode = "Toggle",
-    NoUI = true,
-    SyncToggleState = false,
-    Callback = function(state) end
-})
-
 local MenuGroup = Tabs["UI Settings"]:AddLeftGroupbox("Menu", "wrench")
 MenuGroup:AddToggle("KeybindMenuOpen", {
     Default = Library.KeybindFrame.Visible,
