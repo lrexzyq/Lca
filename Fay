@@ -40,44 +40,15 @@ local Tabs = {
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
+local Lighting = game:GetService("Lighting")
 local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
 local CollectionService = game:GetService("CollectionService")
 local lp = Players.LocalPlayer
 
-
-local function safeRequire(obj)
-    if not obj then return nil end
-    local success, res = pcall(require, obj)
-    if success then return res end
-    return nil
-end
-
-local function safeFindPath(root, ...)
-    local current = root
-    for i = 1, select("#", ...) do
-        if not current then return nil end
-        local name = select(i, ...)
-        current = current:FindFirstChild(name)
-    end
-    return current
-end
-
-local function safeRequirePath(root, ...)
-    return safeRequire(safeFindPath(root, ...))
-end
-
-local function safeCloneRef(obj)
-    if type(cloneref) == "function" then
-        local ok, result = pcall(cloneref, obj)
-        if ok and result then
-            return result
-        end
-    end
-    return obj
-end
 
 local function worldToScreen(pos)
     local cam = Workspace.CurrentCamera
@@ -115,17 +86,6 @@ function Triggerbot.new()
     self.forgetTime = 0.15
     self.nextTargetDelay = 0
 
-    local function getToggle(name)
-        return Toggles[name] and Toggles[name].Value or false
-    end
-
-    local function getOption(name, default)
-        local option = Options[name]
-        if not option then return default end
-        local value = option.Value
-        return value == nil and default or value
-    end
-
     local function buildFilter()
         local filter = {}
         local function add(container)
@@ -147,40 +107,8 @@ function Triggerbot.new()
         return character:FindFirstChildOfClass("Tool")
     end
 
-    local function getInfo(item)
-        if not item then return nil end
-        local child = item:FindFirstChild("Info")
-        if child then return child end
-        local ok, value = pcall(function() return item.Info end)
-        if ok then return value end
-        return nil
-    end
-
-    local function getItemType(item)
-        local info = getInfo(item)
-        if not info then return nil end
-        if typeof(info) == "Instance" then
-            local typeValue = info:FindFirstChild("Type")
-            if typeValue and typeValue:IsA("StringValue") then return typeValue.Value end
-        end
-        local ok, value = pcall(function() return info.Type end)
-        if ok and type(value) == "string" then return value end
-        return nil
-    end
-
-    local function isAiming(item)
-        if not item then return false end
-        local ok, value = pcall(function()
-            if type(item.IsFullyAiming) == "function" then
-                return item:IsFullyAiming()
-            end
-            return false
-        end)
-        return ok and value == true
-    end
-
     local function scopedWeaponAllowed(item)
-        local list = getOption("triggerbot_scoped", {})
+        local list = (Options.triggerbot_scoped and Options.triggerbot_scoped.Value or {})
         if type(list) ~= "table" then return false end
         if next(list) == nil then return true end
         local itemName = tostring(item.Name or "")
@@ -210,12 +138,12 @@ function Triggerbot.new()
         local cam = Workspace.CurrentCamera
         if not cam then return nil end
         buildFilter()
-        local maxDistance = math.max(0, tonumber(getOption("triggerbot_max_distance", 500)) or 500)
+        local maxDistance = math.max(0, tonumber((Options.triggerbot_max_distance and Options.triggerbot_max_distance.Value or 500)) or 500)
         local result = Workspace:Raycast(cam.CFrame.Position, cam.CFrame.LookVector * maxDistance, self.rayParams)
         if not result or not result.Instance then return nil end
 
         local hit = result.Instance
-        local blacklist = getOption("triggerbot_part_blacklist", {})
+        local blacklist = (Options.triggerbot_part_blacklist and Options.triggerbot_part_blacklist.Value or {})
         if type(blacklist) == "table" and blacklist[hit.Name] then return nil end
         if not TRIGGERBOT_HITBOXES[hit.Name] then return nil end
 
@@ -258,23 +186,41 @@ function Triggerbot.new()
     end
 
     local function antiKatanaCheck(character)
-        local settings = getOption("triggerbot_settings", {})
+        local settings = (Options.triggerbot_settings and Options.triggerbot_settings.Value or {})
         if not settings["anti katana"] then return true end
         local equipped = getEquippedItem(character)
         if not equipped then return true end
-        local itemType = getItemType(equipped)
+        local itemType = nil
+        local info = equipped:FindFirstChild("Info")
+        if info then
+            local typeValue = info:FindFirstChild("Type")
+            itemType = typeValue and typeValue:IsA("StringValue") and typeValue.Value or nil
+            if not itemType then
+                local ok, value = pcall(function() return info.Type end)
+                if ok and type(value) == "string" then itemType = value end
+            end
+        end
         return itemType ~= "Melee" and string.lower(tostring(equipped.Name or "")) ~= "katana"
     end
 
     local function shouldShoot()
-        if not getToggle("triggerbot_enabled") then return false end
+        if not (Toggles.triggerbot_enabled and Toggles.triggerbot_enabled.Value) then return false end
         if not keyHeld() then return false end
         local character = LocalPlayer.Character
         local item = getEquippedItem(character)
         if not item then return false end
-        local settings = getOption("triggerbot_settings", {})
-        local itemType = getItemType(item)
-        if settings["scoped only"] and itemType == "Gun" and not isAiming(item) then
+        local settings = (Options.triggerbot_settings and Options.triggerbot_settings.Value or {})
+        local itemType = nil
+        local info = item:FindFirstChild("Info")
+        if info then
+            local typeValue = info:FindFirstChild("Type")
+            itemType = typeValue and typeValue:IsA("StringValue") and typeValue.Value or nil
+            if not itemType then
+                local ok, value = pcall(function() return info.Type end)
+                if ok and type(value) == "string" then itemType = value end
+            end
+        end
+        if settings["scoped only"] and itemType == "Gun" and not (item.IsFullyAiming and item:IsFullyAiming()) then
             return false
         end
         if settings["scoped only"] and itemType ~= "Gun" then
@@ -284,14 +230,14 @@ function Triggerbot.new()
             return false
         end
         local now = tick()
-        self.forgetTime = tonumber(getOption("triggerbot_forget_time", self.forgetTime)) or self.forgetTime
+        self.forgetTime = tonumber((Options.triggerbot_forget_time and Options.triggerbot_forget_time.Value or self.forgetTime)) or self.forgetTime
         if self.lastTarget and now - self.lastTargetTime > self.forgetTime then
             self.lastTarget = nil
         end
         if settings["no delay between targets"] then
             self.nextTargetDelay = 0
         else
-            self.nextTargetDelay = math.max(0, tonumber(getOption("triggerbot_target_delay", 0)) or 0)
+            self.nextTargetDelay = math.max(0, tonumber((Options.triggerbot_target_delay and Options.triggerbot_target_delay.Value or 0)) or 0)
         end
         return true
     end
@@ -300,7 +246,7 @@ function Triggerbot.new()
         local character = LocalPlayer.Character
         local item = getEquippedItem(character)
         if not item or not target then return end
-        if not keyHeld() or not getToggle("triggerbot_enabled") then return end
+        if not keyHeld() or not (Toggles.triggerbot_enabled and Toggles.triggerbot_enabled.Value) then return end
         local ok = pcall(function()
             if type(item.StartShooting) == "function" then
                 item:StartShooting(target.position)
@@ -334,9 +280,9 @@ function Triggerbot.new()
         if not antiKatanaCheck(target.character) then return end
         self.lastTarget = target.character
         self.lastTargetTime = now
-        local reaction = math.max(0, tonumber(getOption("triggerbot_reaction_time", 0)) or 0)
-        local offset = tonumber(getOption("triggerbot_reaction_time_offset", 0)) or 0
-        local shootDelay = math.max(0, tonumber(getOption("triggerbot_shoot_delay", 0)) or 0)
+        local reaction = math.max(0, tonumber((Options.triggerbot_reaction_time and Options.triggerbot_reaction_time.Value or 0)) or 0)
+        local offset = tonumber((Options.triggerbot_reaction_time_offset and Options.triggerbot_reaction_time_offset.Value or 0)) or 0
+        local shootDelay = math.max(0, tonumber((Options.triggerbot_shoot_delay and Options.triggerbot_shoot_delay.Value or 0)) or 0)
         task.delay((reaction + offset) / 1000, function()
             task.wait(shootDelay / 1000)
             fire(target)
@@ -361,18 +307,6 @@ end
 local World = {}
 World.__index = World
 
-local function worldDrawingLine()
-    local ok, line = pcall(function()
-        return Drawing.new("Line")
-    end)
-    if not ok or not line then return nil end
-    line.Thickness = 1
-    line.Transparency = 1
-    line.Color = Color3.new(1, 1, 1)
-    line.Visible = false
-    return line
-end
-
 function World.new()
     local self = setmetatable({}, World)
     self.drawings = {}
@@ -382,35 +316,8 @@ function World.new()
     self.weatherEmitter = nil
     self.weatherAttachment = nil
 
-    local function addDrawing(kind)
-        local ok, drawing = pcall(function()
-            return Drawing.new(kind)
-        end)
-        if not ok or not drawing then return nil end
-        table.insert(self.drawings, drawing)
-        return drawing
-    end
-
-    local function getToggle(name)
-        return Toggles[name] and Toggles[name].Value or false
-    end
-
-    local function getOption(name, default)
-        local option = Options[name]
-        if option == nil then return default end
-        local value = option.Value
-        if value == nil then return default end
-        return value
-    end
-
-    local function getColor(name, default)
-        local value = getOption(name, default)
-        if typeof(value) == "Color3" then return value end
-        return resolveColor(value, default)
-    end
-
     function self:getTarget()
-        if not getToggle("target_highlight_enabled") then return nil end
+        if not (Toggles.target_highlight_enabled and Toggles.target_highlight_enabled.Value) then return nil end
         return self.targetPlayer
     end
 
@@ -473,16 +380,16 @@ function World.new()
         local cam = Workspace.CurrentCamera
         if not cam then return end
 
-        if getToggle("crosshair_enabled") then
+        if (Toggles.crosshair_enabled and Toggles.crosshair_enabled.Value) then
             local viewport = cam.ViewportSize
             local cx, cy = viewport.X / 2, viewport.Y / 2
-            local length = math.max(0, tonumber(getOption("crosshair_length", 8)) or 8)
-            local thickness = math.max(1, tonumber(getOption("crosshair_thickness", 1)) or 1)
-            local gap = math.max(0, tonumber(getOption("crosshair_offset", 4)) or 4)
-            local color = getColor("crosshair_color_3", Color3.new(1, 1, 1))
-            local rotation = tonumber(getOption("crosshair_rotation_value", 0)) or 0
-            local speed = tonumber(getOption("crosshair_rotation_speed", 0)) or 0
-            if getToggle("crosshair_rotation") then
+            local length = math.max(0, tonumber((Options.crosshair_length and Options.crosshair_length.Value or 8)) or 8)
+            local thickness = math.max(1, tonumber((Options.crosshair_thickness and Options.crosshair_thickness.Value or 1)) or 1)
+            local gap = math.max(0, tonumber((Options.crosshair_offset and Options.crosshair_offset.Value or 4)) or 4)
+            local color = (typeof(Options.crosshair_color_3 and Options.crosshair_color_3.Value) == "Color3" and Options.crosshair_color_3.Value or COLOR_PRESETS[Options.crosshair_color_3 and Options.crosshair_color_3.Value] or Color3.new(1, 1, 1))
+            local rotation = tonumber((Options.crosshair_rotation_value and Options.crosshair_rotation_value.Value or 0)) or 0
+            local speed = tonumber((Options.crosshair_rotation_speed and Options.crosshair_rotation_speed.Value or 0)) or 0
+            if (Toggles.crosshair_rotation and Toggles.crosshair_rotation.Value) then
                 rotation = rotation + speed * tick()
             end
             local radians = math.rad(rotation)
@@ -492,7 +399,8 @@ function World.new()
                 local line = self.crosshairLines and self.crosshairLines[i]
                 if not line then
                     self.crosshairLines = self.crosshairLines or {}
-                    line = addDrawing("Line")
+                    line = Drawing.new("Line")
+                    table.insert(self.drawings, line)
                     self.crosshairLines[i] = line
                 end
                 if line then
@@ -519,15 +427,15 @@ function World.new()
                 local show = target == player and state.character ~= nil
                 state.highlight.Enabled = show
                 if show then
-                    state.highlight.FillColor = getColor("target_highlight_fill", Color3.new(1, 0, 0))
-                    state.highlight.OutlineColor = getColor("target_highlight_outline", Color3.new(1, 1, 1))
-                    state.highlight.FillTransparency = math.clamp(tonumber(getOption("target_highlight_fill_alpha", 0.35)) or 0.35, 0, 1)
-                    state.highlight.OutlineTransparency = math.clamp(tonumber(getOption("target_highlight_outline_alpha", 0)) or 0, 0, 1)
+                    state.highlight.FillColor = (typeof(Options.target_highlight_fill and Options.target_highlight_fill.Value) == "Color3" and Options.target_highlight_fill.Value or COLOR_PRESETS[Options.target_highlight_fill and Options.target_highlight_fill.Value] or Color3.new(1, 0, 0))
+                    state.highlight.OutlineColor = (typeof(Options.target_highlight_outline and Options.target_highlight_outline.Value) == "Color3" and Options.target_highlight_outline.Value or COLOR_PRESETS[Options.target_highlight_outline and Options.target_highlight_outline.Value] or Color3.new(1, 1, 1))
+                    state.highlight.FillTransparency = math.clamp(tonumber((Options.target_highlight_fill_alpha and Options.target_highlight_fill_alpha.Value or 0.35)) or 0.35, 0, 1)
+                    state.highlight.OutlineTransparency = math.clamp(tonumber((Options.target_highlight_outline_alpha and Options.target_highlight_outline_alpha.Value or 0)) or 0, 0, 1)
                 end
             end
         end
 
-        local tracerEnabled = getToggle("target_tracer_enabled")
+        local tracerEnabled = (Toggles.target_tracer_enabled and Toggles.target_tracer_enabled.Value)
         local center = Vector2.new(cam.ViewportSize.X / 2, cam.ViewportSize.Y / 2)
         for player, state in pairs(self.players) do
             if player == LocalPlayer then continue end
@@ -538,7 +446,8 @@ function World.new()
             if valid then
                 local screen, visible = cam:WorldToViewportPoint(hrp.Position)
                 if not state.line then
-                    state.line = addDrawing("Line")
+                    state.line = Drawing.new("Line")
+                    table.insert(self.drawings, line)
                     if state.line then
                         state.line.Thickness = 1
                     end
@@ -546,7 +455,7 @@ function World.new()
                 if state.line then
                     state.line.From = center
                     state.line.To = Vector2.new(screen.X, screen.Y)
-                    state.line.Color = getColor("target_tracer_color", Color3.new(1, 1, 1))
+                    state.line.Color = (typeof(Options.target_tracer_color and Options.target_tracer_color.Value) == "Color3" and Options.target_tracer_color.Value or COLOR_PRESETS[Options.target_tracer_color and Options.target_tracer_color.Value] or Color3.new(1, 1, 1))
                     state.line.Transparency = 1
                     state.line.Visible = visible
                 end
@@ -557,13 +466,13 @@ function World.new()
     end))
 
     table.insert(self.connections, RunService.Heartbeat:Connect(function()
-        if getToggle("skybox_enabled") then
+        if (Toggles.skybox_enabled and Toggles.skybox_enabled.Value) then
             local sky = Lighting:FindFirstChildOfClass("Sky")
             if not sky then
                 sky = Instance.new("Sky")
                 sky.Parent = Lighting
             end
-            local asset = tostring(getOption("skybox_value", "1898729298"))
+            local asset = tostring((Options.skybox_value and Options.skybox_value.Value or "1898729298"))
             if not asset:find("rbxassetid://", 1, true) then
                 asset = "rbxassetid://" .. asset
             end
@@ -578,7 +487,7 @@ function World.new()
 
         local cam = Workspace.CurrentCamera
         if not cam then return end
-        if not getToggle("weather_enabled") then
+        if not (Toggles.weather_enabled and Toggles.weather_enabled.Value) then
             if self.weatherEmitter then self.weatherEmitter.Enabled = false end
             return
         end
@@ -599,11 +508,11 @@ function World.new()
 
         local emitter = self.weatherEmitter
         emitter.Enabled = true
-        local weatherType = tostring(getOption("weather_value", "Rain"))
-        local color = getColor("weather_color_1", Color3.new(1, 1, 1))
-        local life = math.max(0, tonumber(getOption("weather_lifetime_multiplier", 1)) or 1)
-        local rate = math.max(0, tonumber(getOption("weather_rate_multiplier", 1)) or 1)
-        local timescale = math.max(0, tonumber(getOption("weather_timescale_multiplier", 1)) or 1)
+        local weatherType = tostring((Options.weather_value and Options.weather_value.Value or "Rain"))
+        local color = (typeof(Options.weather_color_1 and Options.weather_color_1.Value) == "Color3" and Options.weather_color_1.Value or COLOR_PRESETS[Options.weather_color_1 and Options.weather_color_1.Value] or Color3.new(1, 1, 1))
+        local life = math.max(0, tonumber((Options.weather_lifetime_multiplier and Options.weather_lifetime_multiplier.Value or 1)) or 1)
+        local rate = math.max(0, tonumber((Options.weather_rate_multiplier and Options.weather_rate_multiplier.Value or 1)) or 1)
+        local timescale = math.max(0, tonumber((Options.weather_timescale_multiplier and Options.weather_timescale_multiplier.Value or 1)) or 1)
 
         if weatherType == "Snow" then
             emitter.Texture = "rbxasset://textures/particles/snow.dds"
@@ -658,22 +567,12 @@ function Viewmodel.new()
     self.baseCFrames = {}
     self.recoilCFrames = {}
 
-    local function getToggle(name)
-        return Toggles[name] and Toggles[name].Value or false
-    end
-
-    local function getOption(name, default)
-        local option = Options[name]
-        if option == nil then return default end
-        return option.Value == nil and default or option.Value
-    end
-
     local function apply(vm)
         if not vm then return end
-        local ox = tonumber(getOption("viewmodel_offset_x", 0)) or 0
-        local oy = tonumber(getOption("viewmodel_offset_y", 0)) or 0
-        local oz = tonumber(getOption("viewmodel_offset_z", 0)) or 0
-        local recoil = tonumber(getOption("viewmodel_recoil", 0)) or 0
+        local ox = tonumber((Options.viewmodel_offset_x and Options.viewmodel_offset_x.Value or 0)) or 0
+        local oy = tonumber((Options.viewmodel_offset_y and Options.viewmodel_offset_y.Value or 0)) or 0
+        local oz = tonumber((Options.viewmodel_offset_z and Options.viewmodel_offset_z.Value or 0)) or 0
+        local recoil = tonumber((Options.viewmodel_recoil and Options.viewmodel_recoil.Value or 0)) or 0
         local transform = CFrame.new(ox, oy, oz) * CFrame.Angles(math.rad(-recoil), 0, math.rad(recoil * 0.5))
         if vm:IsA("BasePart") then
             local base = self.baseCFrames[vm]
@@ -693,18 +592,18 @@ function Viewmodel.new()
     end
 
     local function applyDescendants(vm)
-        local colorEnabled = getToggle("viewmodel_body_color")
-        local override = getToggle("viewmodel_override_appearance")
-        local transparency = tonumber(getOption("viewmodel_body_transparency", 0)) or 0
-        local material = tostring(getOption("viewmodel_material", "Default"))
-        local disableTextures = getToggle("viewmodel_disable_textures")
-        local wireframe = getToggle("viewmodel_wireframe")
-        local chams = getToggle("viewmodel_chams")
+        local colorEnabled = (Toggles.viewmodel_body_color and Toggles.viewmodel_body_color.Value)
+        local override = (Toggles.viewmodel_override_appearance and Toggles.viewmodel_override_appearance.Value)
+        local transparency = tonumber((Options.viewmodel_body_transparency and Options.viewmodel_body_transparency.Value or 0)) or 0
+        local material = tostring((Options.viewmodel_material and Options.viewmodel_material.Value or "Default"))
+        local disableTextures = (Toggles.viewmodel_disable_textures and Toggles.viewmodel_disable_textures.Value)
+        local wireframe = (Toggles.viewmodel_wireframe and Toggles.viewmodel_wireframe.Value)
+        local chams = (Toggles.viewmodel_chams and Toggles.viewmodel_chams.Value)
 
         for _, desc in ipairs(vm:GetDescendants()) do
             if desc:IsA("BasePart") then
                 if colorEnabled or override then
-                    pcall(function() desc.Color = getColorValue("viewmodel_body_color_value", Color3.new(1, 1, 1)) end)
+                    pcall(function() desc.Color = (typeof(Options.viewmodel_body_color_value.Value) == "Color3" and Options.viewmodel_body_color_value.Value or COLOR_PRESETS[Options.viewmodel_body_color_value.Value] or Color3.new(1, 1, 1)) end)
                 end
                 desc.Transparency = math.clamp(transparency, 0, 1)
                 if material ~= "Default" and Enum.Material[material] then
@@ -727,10 +626,10 @@ function Viewmodel.new()
                 highlight.Name = "WorldVMChams"
                 highlight.Parent = vm
             end
-            highlight.FillColor = getColorValue("viewmodel_chams_color", Color3.new(1, 1, 1))
-            highlight.OutlineColor = getColorValue("viewmodel_chams_color2", Color3.new(0, 0, 0))
-            highlight.FillTransparency = math.clamp(tonumber(getOption("viewmodel_chams_alpha_fill", 0.5)) or 0.5, 0, 1)
-            highlight.OutlineTransparency = math.clamp(tonumber(getOption("viewmodel_chams_alpha_outline", 0)) or 0, 0, 1)
+            highlight.FillColor = (typeof(Options.viewmodel_chams_color.Value) == "Color3" and Options.viewmodel_chams_color.Value or COLOR_PRESETS[Options.viewmodel_chams_color.Value] or Color3.new(1, 1, 1))
+            highlight.OutlineColor = (typeof(Options.viewmodel_chams_color2.Value) == "Color3" and Options.viewmodel_chams_color2.Value or COLOR_PRESETS[Options.viewmodel_chams_color2.Value] or Color3.new(0, 0, 0))
+            highlight.FillTransparency = math.clamp(tonumber((Options.viewmodel_chams_alpha_fill and Options.viewmodel_chams_alpha_fill.Value or 0.5)) or 0.5, 0, 1)
+            highlight.OutlineTransparency = math.clamp(tonumber((Options.viewmodel_chams_alpha_outline and Options.viewmodel_chams_alpha_outline.Value or 0)) or 0, 0, 1)
             highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
         elseif highlight then
             highlight:Destroy()
@@ -748,7 +647,7 @@ function Viewmodel.new()
     end
 
     table.insert(self.connections, RunService.RenderStepped:Connect(function()
-        if not getToggle("viewmodel_enabled") then return end
+        if not (Toggles.viewmodel_enabled and Toggles.viewmodel_enabled.Value) then return end
         local vm = findViewmodel()
         if not vm then return end
         apply(vm)
@@ -796,7 +695,7 @@ local Aimbot = {
     smoothing = 0,
     hitPart = "Head",
 
-    -- Flick bot
+    
     flickEnabled = false,
     flickDuration = 0.3,
     flickCurvature = 0.5,
@@ -817,11 +716,13 @@ local Aimbot = {
 
 function Aimbot:getCC()
     if not self._cc then
-        self._cc = safeRequirePath(
-            lp:FindFirstChild("PlayerScripts"),
-            "Controllers",
-            "CameraController"
-        )
+        local playerScripts = lp:FindFirstChild("PlayerScripts")
+        local controllers = playerScripts and playerScripts:FindFirstChild("Controllers")
+        local cameraController = controllers and controllers:FindFirstChild("CameraController")
+        if cameraController then
+            local ok, result = pcall(require, cameraController)
+            self._cc = ok and result or nil
+        end
     end
     return self._cc
 end
@@ -1232,7 +1133,7 @@ startUnderground = function()
             end)
         end
     end)
-    -- BindToRenderStep returns nil, so keep an explicit installed-state marker.
+    
     undergroundRenderConn = true
 end
 
@@ -1574,8 +1475,18 @@ local function applyNoFlash()
     end
 end
 
-local Utility = safeRequirePath(ReplicatedStorage, "Modules", "Utility")
-local EnumLibrary = safeRequirePath(ReplicatedStorage, "Modules", "EnumLibrary")
+local utilityModule = ReplicatedStorage:FindFirstChild("Modules") and ReplicatedStorage.Modules:FindFirstChild("Utility")
+local enumLibraryModule = ReplicatedStorage:FindFirstChild("Modules") and ReplicatedStorage.Modules:FindFirstChild("EnumLibrary")
+local Utility = nil
+local EnumLibrary = nil
+if utilityModule then
+    local ok, result = pcall(require, utilityModule)
+    if ok then Utility = result end
+end
+if enumLibraryModule then
+    local ok, result = pcall(require, enumLibraryModule)
+    if ok then EnumLibrary = result end
+end
 local localFighter = nil
 
 local function getFighterController()
@@ -1598,21 +1509,32 @@ if fighter then localFighter = fighter.LocalFighter end
 
 Ragebot = {}
 do
-local replicatedstorage = safeCloneRef(game:GetService("ReplicatedStorage"))
-local players = safeCloneRef(game:GetService("Players"))
-local runsvc = safeCloneRef(game:GetService("RunService"))
-local userinput = safeCloneRef(game:GetService("UserInputService"))
-local workspace = safeCloneRef(game:GetService("Workspace"))
+local replicatedstorage = game:GetService("ReplicatedStorage")
+local players = game:GetService("Players")
+local runsvc = game:GetService("RunService")
+local userinput = game:GetService("UserInputService")
+local workspace = game:GetService("Workspace")
 
 local player = players.LocalPlayer
 local camera = workspace.CurrentCamera
 
 local modules = {
-    enums = safeRequirePath(replicatedstorage, "Modules", "EnumLibrary"),
-    fighter = safeRequirePath(player:FindFirstChild("PlayerScripts"), "Controllers", "FighterController"),
-    camcontrol = safeRequirePath(player:FindFirstChild("PlayerScripts"), "Controllers", "CameraController"),
-    utility = safeRequirePath(replicatedstorage, "Modules", "Utility")
+    enums = nil,
+    fighter = nil,
+    camcontrol = nil,
+    utility = nil
 }
+local replicatedModules = replicatedstorage:FindFirstChild("Modules")
+local playerScripts = player:FindFirstChild("PlayerScripts")
+local controllers = playerScripts and playerScripts:FindFirstChild("Controllers")
+local enumModule = replicatedModules and replicatedModules:FindFirstChild("EnumLibrary")
+local utilityModule2 = replicatedModules and replicatedModules:FindFirstChild("Utility")
+local fighterModule = controllers and controllers:FindFirstChild("FighterController")
+local cameraModule = controllers and controllers:FindFirstChild("CameraController")
+if enumModule then local ok, result = pcall(require, enumModule) if ok then modules.enums = result end end
+if utilityModule2 then local ok, result = pcall(require, utilityModule2) if ok then modules.utility = result end end
+if fighterModule then local ok, result = pcall(require, fighterModule) if ok then modules.fighter = result end end
+if cameraModule then local ok, result = pcall(require, cameraModule) if ok then modules.camcontrol = result end end
 
 local MATCH_ID_ATTRS = {"MatchId", "DuelId", "RoundId", "GameId", "MatchUUID", "ArenaId", "InstanceId"}
 local DUEL_STATE_ATTRS = {"InDuel", "InMatch", "InRound", "InGame", "InFight", "IsInMatch", "IsInDuel", "MatchActive", "Fighting"}
@@ -2001,7 +1923,11 @@ end
 local function getammo()
     if isInfiniteWeapon() then return nil, nil, false end
     local success, controller = pcall(function()
-        return safeRequirePath(player:FindFirstChild("PlayerScripts"), "Controllers", "FighterController")
+        local playerScripts = player:FindFirstChild("PlayerScripts")
+        local controllers = playerScripts and playerScripts:FindFirstChild("Controllers")
+        local fighterModule = controllers and controllers:FindFirstChild("FighterController")
+        if not fighterModule then return nil end
+        return require(fighterModule)
     end)
     if success and controller and controller.LocalFighter and controller.LocalFighter.EquippedItem then
         local item = controller.LocalFighter.EquippedItem
@@ -2200,7 +2126,7 @@ local function tickAmmo()
     end
     config.state.reloading = reloading
 
-    -- Empty magazine: lock the state in Hide until ammo is actually restored.
+    
     if config.state.outofammo and not melee then
         if config.voidspam.enabled then
             config.voidspam.phase = "hide"
@@ -2210,7 +2136,7 @@ local function tickAmmo()
         return
     end
 
-    -- Reload completed with usable ammo: allow the next attack immediately.
+    
     if not melee and wasOutOfAmmo and not config.state.outofammo and (tonumber(current) or 0) > 0 then
         if config.voidspam.enabled then
             config.voidspam.phase = "shoot"
@@ -2224,7 +2150,7 @@ local function tickAmmo()
         return
     end
 
-    -- Any reload completion also exits the reload-hide state when ammo is available.
+    
     if not reloading and wasReloading and not config.state.outofammo and (tonumber(current) or 0) > 0 then
         if config.voidspam.enabled then
             config.voidspam.phase = "shoot"
@@ -2538,7 +2464,7 @@ local function tickVoidSpam()
 
     local hasTarget = config.target.character and valid(config.target.character)
 
-    -- Hide is the safe/default state. No target never means "unhide".
+    
     if not hasTarget then
         if config.voidspam.phase ~= "hide" then
             config.voidspam.phase = "hide"
@@ -2549,7 +2475,7 @@ local function tickVoidSpam()
         return
     end
 
-    -- A target appearing after the no-target Hide unlocks an attack window.
+    
     if config.voidspam.phase == "hide" and config.voidspam.currentduration == math.huge then
         config.voidspam.phase = "shoot"
         config.voidspam.shotIssued = false
@@ -2561,7 +2487,7 @@ local function tickVoidSpam()
         return
     end
 
-    -- Empty/reloading weapons stay hidden until ammo is usable again.
+    
     if config.state.outofammo or config.state.reloading then
         config.voidspam.phase = "hide"
         config.voidspam.shotIssued = false
@@ -2574,7 +2500,7 @@ local function tickVoidSpam()
     local elapsed = now - config.voidspam.lastswitch
 
     if config.voidspam.phase == "shoot" then
-        -- A successful attack immediately starts a new hide window.
+        
         if config.voidspam.shotIssued then
             config.voidspam.phase = "hide"
             config.voidspam.currentduration = randVs(
@@ -2583,7 +2509,7 @@ local function tickVoidSpam()
             )
             config.voidspam.lastswitch = now
         elseif elapsed >= config.voidspam.currentduration then
-            -- Keep retrying the attack window rather than hiding without a shot.
+            
             config.voidspam.currentduration = randVs(
                 config.voidspam.shoot_min,
                 config.voidspam.shoot_max
@@ -2700,9 +2626,9 @@ local stopvoid = function()
 end
 
 local function translocateFallbackCFrame(originPos)
-    -- The source delegates this fallback to an obfuscated movement-position helper
-    -- with bounds (10000, 1000000000). Keep only the observable contract: move to a
-    -- far-out position instead of leaving a stale Translocate position active.
+    
+    
+    
     local _ = originPos or Vector3.zero
     local lim = 10000
     return CFrame.new(
@@ -2715,7 +2641,7 @@ end
 local function getTranslocateCFrame(originCF, hasTarget)
     local originPos = typeof(originCF) == "CFrame" and originCF.Position or originCF
 
-    -- Source behavior: no target -> immediate far-out fallback.
+    
     if not hasTarget then
         return translocateFallbackCFrame(originPos)
     end
@@ -2731,7 +2657,7 @@ local function getTranslocateCFrame(originCF, hasTarget)
         end
     end)
 
-    -- Source behavior: no valid OutOfBoundsPart -> same far-out fallback.
+    
     if not ok or not selectedPart then
         return translocateFallbackCFrame(originPos)
     end
@@ -2766,8 +2692,8 @@ local function startsync()
         setOrbR()
         oldpos = localfighter.Entity.RootPart.CFrame
 
-        -- Observable Translocate flow from the source: resolve from the current CFrame
-        -- and target state, then apply the resolved CFrame without entering Normal logic.
+        
+        
         if config.target.mode == "Translocate" then
             local currentCF = localfighter.Entity.RootPart.CFrame
             local hasTarget = config.target.character ~= nil and valid(config.target.character)
@@ -2898,8 +2824,8 @@ local function autoshoot()
     local hitPart = hitpartfromname(targetChar, config.target.hitpart)
     if not hitPart then return end
 
-    -- Optional Silent Aim override. Existing Ragebot target selection remains
-    -- untouched when Silent Aim is disabled or unavailable.
+    
+    
     if SilentAimController then
         local ok, silentTarget = pcall(function()
             return SilentAimController:getTarget()
@@ -3764,11 +3690,11 @@ CharacterGroupBox:AddInput("UndergroundCustomDepth", {
     end
 })
 
--- ============================================================================
--- Effects + ESP subsystem
--- Hardened to avoid nil/indexing errors when UI values, characters, cameras,
--- Drawing API objects, or optional R15 body parts are unavailable.
--- ============================================================================
+
+
+
+
+
 local HIT_SOUND_ASSETS = {
     sparkle = "5070376932",
     ding = "5617972474",
@@ -3787,16 +3713,6 @@ local COLOR_PRESETS = {
     Orange = Color3.fromRGB(255, 165, 70),
 }
 
-local function resolveColor(value, fallback)
-    if typeof(value) == "Color3" then
-        return value
-    end
-    if type(value) == "string" and COLOR_PRESETS[value] then
-        return COLOR_PRESETS[value]
-    end
-    return fallback or Color3.new(1, 1, 1)
-end
-
 local Effects = {}
 Effects.__index = Effects
 
@@ -3813,9 +3729,9 @@ function Effects.new()
     self.trackedCharacters = {}
 
     self.colors = {
-        resolveColor(Options.hit_effects_col_1.Value, Color3.new(1, 1, 1)),
-        resolveColor(Options.hit_effects_col_2.Value, Color3.new(1, 1, 1)),
-        resolveColor(Options.hit_effects_col_3.Value, Color3.new(1, 1, 1)),
+        (typeof(Options.hit_effects_col_1.Value) == "Color3" and Options.hit_effects_col_1.Value or COLOR_PRESETS[Options.hit_effects_col_1.Value] or Color3.new(1, 1, 1)),
+        (typeof(Options.hit_effects_col_2.Value) == "Color3" and Options.hit_effects_col_2.Value or COLOR_PRESETS[Options.hit_effects_col_2.Value] or Color3.new(1, 1, 1)),
+        (typeof(Options.hit_effects_col_3.Value) == "Color3" and Options.hit_effects_col_3.Value or COLOR_PRESETS[Options.hit_effects_col_3.Value] or Color3.new(1, 1, 1)),
     }
 
     local function cycleColor()
@@ -4202,13 +4118,13 @@ function Effects.new()
     table.insert(self.connections, Players.PlayerAdded:Connect(setupPlayer))
 
     table.insert(self.connections, Options.hit_effects_col_1:OnChanged(function(value)
-        self.colors[1] = resolveColor(value, Color3.new(1, 1, 1))
+        self.colors[1] = (typeof(value) == "Color3" and value or COLOR_PRESETS[value] or Color3.new(1, 1, 1))
     end))
     table.insert(self.connections, Options.hit_effects_col_2:OnChanged(function(value)
-        self.colors[2] = resolveColor(value, Color3.new(1, 1, 1))
+        self.colors[2] = (typeof(value) == "Color3" and value or COLOR_PRESETS[value] or Color3.new(1, 1, 1))
     end))
     table.insert(self.connections, Options.hit_effects_col_3:OnChanged(function(value)
-        self.colors[3] = resolveColor(value, Color3.new(1, 1, 1))
+        self.colors[3] = (typeof(value) == "Color3" and value or COLOR_PRESETS[value] or Color3.new(1, 1, 1))
     end))
 
     return self
@@ -4536,7 +4452,7 @@ function ESP:drawSkeleton(state)
             if onFrom and onTo then
                 line.From = Vector2.new(from.X, from.Y)
                 line.To = Vector2.new(to.X, to.Y)
-                line.Color = resolveColor(Options.esp_skeleton_color.Value, Color3.new(1, 1, 1))
+                line.Color = (typeof(Options.esp_skeleton_color.Value) == "Color3" and Options.esp_skeleton_color.Value or COLOR_PRESETS[Options.esp_skeleton_color.Value] or Color3.new(1, 1, 1))
                 line.Visible = true
                 local outlineLine = state.lines[i + 13]
                 if outlineLine then
@@ -4563,7 +4479,7 @@ function ESP:drawBox(state, size, position)
     if box and state.squares[1] and state.squares[2] then
         state.squares[1].Size = size
         state.squares[1].Position = position - half
-        state.squares[1].Color = resolveColor(Options.esp_box_color.Value, Color3.new(1, 1, 1))
+        state.squares[1].Color = (typeof(Options.esp_box_color.Value) == "Color3" and Options.esp_box_color.Value or COLOR_PRESETS[Options.esp_box_color.Value] or Color3.new(1, 1, 1))
         state.squares[1].Visible = true
         state.squares[2].Size = size
         state.squares[2].Position = position - half
@@ -4582,7 +4498,7 @@ function ESP:drawBox(state, size, position)
         elseif state.squares[3] and state.squares[4] then
             state.squares[3].Size = size
             state.squares[3].Position = position - half
-            state.squares[3].Color = resolveColor(Options.esp_fill_color.Value, Color3.new(1, 1, 1))
+            state.squares[3].Color = (typeof(Options.esp_fill_color.Value) == "Color3" and Options.esp_fill_color.Value or COLOR_PRESETS[Options.esp_fill_color.Value] or Color3.new(1, 1, 1))
             state.squares[3].Transparency = 0.5
             state.squares[3].Visible = true
             state.squares[4].Size = size
@@ -4600,7 +4516,7 @@ function ESP:drawName(state, position)
     name.Visible = false
     if not Toggles.esp_name.Value then return end
     name.Text = state.player.Name
-    name.Color = resolveColor(Options.esp_name_color.Value, Color3.new(1, 1, 1))
+    name.Color = (typeof(Options.esp_name_color.Value) == "Color3" and Options.esp_name_color.Value or COLOR_PRESETS[Options.esp_name_color.Value] or Color3.new(1, 1, 1))
     name.Position = position - Vector2.new(0, 14)
     name.Visible = true
 end
@@ -4613,7 +4529,7 @@ function ESP:drawWeapon(state, position)
     local character = state.character
     local item = character and character:FindFirstChild("EquippedItem")
     weapon.Text = item and item.Name or "none"
-    weapon.Color = resolveColor(Options.esp_weapon_color.Value, Color3.new(1, 1, 1))
+    weapon.Color = (typeof(Options.esp_weapon_color.Value) == "Color3" and Options.esp_weapon_color.Value or COLOR_PRESETS[Options.esp_weapon_color.Value] or Color3.new(1, 1, 1))
     weapon.Position = position + Vector2.new(0, 2)
     weapon.Visible = true
 end
@@ -4627,7 +4543,7 @@ function ESP:drawDistance(state, position)
     if not cam then return end
     local dist = (state.humanoidRootPart.Position - cam.CFrame.Position).Magnitude
     distance.Text = "[" .. math.round(dist) .. "]"
-    distance.Color = resolveColor(Options.esp_distance_color.Value, Color3.new(1, 1, 1))
+    distance.Color = (typeof(Options.esp_distance_color.Value) == "Color3" and Options.esp_distance_color.Value or COLOR_PRESETS[Options.esp_distance_color.Value] or Color3.new(1, 1, 1))
     distance.Position = position + Vector2.new(0, Toggles.esp_weapon.Value and 16 or 2)
     distance.Visible = true
 end
@@ -4661,7 +4577,7 @@ function ESP:drawHealthbar(state, size, position)
     if fill then
         fill.Size = barSize
         fill.Position = barPosition
-        fill.Color = resolveColor(Options.esp_healthbar_color.Value, Color3.new(0, 1, 0))
+        fill.Color = (typeof(Options.esp_healthbar_color.Value) == "Color3" and Options.esp_healthbar_color.Value or COLOR_PRESETS[Options.esp_healthbar_color.Value] or Color3.new(0, 1, 0))
         fill.Visible = true
     end
 end
@@ -4687,7 +4603,7 @@ function ESP:drawFlags(state, position)
     end
 
     flags.Text = text
-    flags.Color = resolveColor(Options.esp_flags_color.Value, Color3.new(1, 1, 1))
+    flags.Color = (typeof(Options.esp_flags_color.Value) == "Color3" and Options.esp_flags_color.Value or COLOR_PRESETS[Options.esp_flags_color.Value] or Color3.new(1, 1, 1))
     flags.Position = position + Vector2.new(0, 16)
     flags.Visible = text ~= ""
 end
@@ -4707,7 +4623,7 @@ function ESP:drawEffects(state)
             aura.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
             aura.Parent = state.character
         end
-        aura.OutlineColor = resolveColor(Options.esp_effects_aura_color1.Value, Color3.new(1, 1, 1))
+        aura.OutlineColor = (typeof(Options.esp_effects_aura_color1.Value) == "Color3" and Options.esp_effects_aura_color1.Value or COLOR_PRESETS[Options.esp_effects_aura_color1.Value] or Color3.new(1, 1, 1))
         aura.Enabled = true
     else
         local aura = state.character:FindFirstChild("ESP_Aura")
@@ -4736,7 +4652,7 @@ function ESP:drawEffects(state)
             emitter.Lifetime = NumberRange.new(0.5)
             emitter.Parent = attachment
         end
-        emitter.Color = ColorSequence.new(resolveColor(Options.esp_effects_particle_color1.Value, Color3.new(1, 1, 1)))
+        emitter.Color = ColorSequence.new((typeof(Options.esp_effects_particle_color1.Value) == "Color3" and Options.esp_effects_particle_color1.Value or COLOR_PRESETS[Options.esp_effects_particle_color1.Value] or Color3.new(1, 1, 1)))
         emitter.Enabled = true
     else
         local particleFolder = state.character:FindFirstChild("ESP_Particles")
@@ -4763,7 +4679,7 @@ function ESP:drawWorldElements(state)
             label.Size = UDim2.fromScale(1, 1)
             label.BackgroundTransparency = 1
             label.Text = character.Name
-            label.TextColor3 = resolveColor(Options.esp_world_name_color.Value, Color3.new(1, 1, 1))
+            label.TextColor3 = (typeof(Options.esp_world_name_color.Value) == "Color3" and Options.esp_world_name_color.Value or COLOR_PRESETS[Options.esp_world_name_color.Value] or Color3.new(1, 1, 1))
             label.TextStrokeTransparency = 0
             label.Parent = billboard
             billboard.Parent = character
@@ -4785,7 +4701,7 @@ function ESP:drawWorldElements(state)
             label.Size = UDim2.fromScale(1, 1)
             label.BackgroundTransparency = 1
             label.Text = "0"
-            label.TextColor3 = resolveColor(Options.esp_world_distance_color.Value, Color3.new(1, 1, 1))
+            label.TextColor3 = (typeof(Options.esp_world_distance_color.Value) == "Color3" and Options.esp_world_distance_color.Value or COLOR_PRESETS[Options.esp_world_distance_color.Value] or Color3.new(1, 1, 1))
             label.TextStrokeTransparency = 0
             label.Parent = distanceBillboard
             distanceBillboard.Parent = character
@@ -4794,7 +4710,7 @@ function ESP:drawWorldElements(state)
             local cam = workspace.CurrentCamera
             if label and cam then
                 label.Text = "[" .. math.round((hrp.Position - cam.CFrame.Position).Magnitude) .. "]"
-                label.TextColor3 = resolveColor(Options.esp_world_distance_color.Value, Color3.new(1, 1, 1))
+                label.TextColor3 = (typeof(Options.esp_world_distance_color.Value) == "Color3" and Options.esp_world_distance_color.Value or COLOR_PRESETS[Options.esp_world_distance_color.Value] or Color3.new(1, 1, 1))
             end
         end
     elseif distanceBillboard then
@@ -4845,13 +4761,13 @@ function ESP:drawChams(state)
         highlight.Name = "ESP_Chams"
         highlight.Parent = state.character
     end
-    highlight.FillColor = resolveColor(Options.esp_chams_color.Value, Color3.new(1, 1, 1))
-    highlight.OutlineColor = resolveColor(Options.esp_chams_color2.Value, Color3.new(0, 0, 0))
+    highlight.FillColor = (typeof(Options.esp_chams_color.Value) == "Color3" and Options.esp_chams_color.Value or COLOR_PRESETS[Options.esp_chams_color.Value] or Color3.new(1, 1, 1))
+    highlight.OutlineColor = (typeof(Options.esp_chams_color2.Value) == "Color3" and Options.esp_chams_color2.Value or COLOR_PRESETS[Options.esp_chams_color2.Value] or Color3.new(0, 0, 0))
     highlight.FillTransparency = math.clamp(tonumber(Options.esp_chams_alpha_fill.Value) or 0.5, 0, 1)
     highlight.OutlineTransparency = math.clamp(tonumber(Options.esp_chams_alpha_outline.Value) or 0, 0, 1)
     highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
     highlight.Enabled = true
-    if override then highlight.FillColor = resolveColor(Options.esp_chams_color.Value, Color3.new(1, 1, 1)) end
+    if override then highlight.FillColor = (typeof(Options.esp_chams_color.Value) == "Color3" and Options.esp_chams_color.Value or COLOR_PRESETS[Options.esp_chams_color.Value] or Color3.new(1, 1, 1)) end
 end
 
 function ESP:drawBodyAppearance(state)
@@ -4867,7 +4783,7 @@ function ESP:drawBodyAppearance(state)
         return
     end
     local transparency = math.clamp(tonumber(Options.esp_body_transparency.Value) or 0, 0, 1)
-    local color = resolveColor(Options.esp_body_color_value.Value, Color3.new(1, 1, 1))
+    local color = (typeof(Options.esp_body_color_value.Value) == "Color3" and Options.esp_body_color_value.Value or COLOR_PRESETS[Options.esp_body_color_value.Value] or Color3.new(1, 1, 1))
     for _, part in ipairs(state.character:GetDescendants()) do
         if part:IsA("BasePart") and part.Transparency < 1 then
             if not state.bodyOriginals[part] then
@@ -5003,9 +4919,9 @@ function ESP:destroy()
 end
 
 
--- ============================================================================
--- Cosmetics / Skin Changer
--- ============================================================================
+
+
+
 local Cosmetics = {}
 Cosmetics.__index = Cosmetics
 
@@ -5017,19 +4933,6 @@ function Cosmetics.new()
     self.finishers = {}
     self.ownableWeapons = {}
     self.connections = {}
-
-    local function getOption(name)
-        local option = Options and Options[name]
-        return option and option.Value or nil
-    end
-
-    local function setOption(name, value)
-        local option = Options and Options[name]
-        if option and type(option.SetValue) == "function" then
-            return pcall(function() option:SetValue(value) end)
-        end
-        return false
-    end
 
     local function getEquippedItem(character)
         return character and character:FindFirstChild("EquippedItem")
@@ -5048,7 +4951,7 @@ function Cosmetics.new()
     end
 
     function self:loadSaveData()
-        local data = getOption("cosmetics_changer_save_data")
+        local data = Options.cosmetics_changer_save_data.Value
         if type(data) ~= "string" or data == "" then return end
         local ok, decoded = pcall(function()
             return HttpService:JSONDecode(data)
@@ -5067,7 +4970,7 @@ function Cosmetics.new()
                 finishers = self.finishers,
             })
         end)
-        if ok then setOption("cosmetics_changer_save_data", payload) end
+        if ok then Options.cosmetics_changer_save_data:SetValue(payload) end
     end
 
     function self:applySkin(character, skinName, weaponName)
@@ -5140,14 +5043,14 @@ function Cosmetics.new()
 
     function self:setWeaponFilter(weapon, enabled)
         if type(weapon) ~= "string" or weapon == "" then return false end
-        local filter = getOption("weapon_filter")
+        local filter = Options.weapon_filter.Value or {}
         if type(filter) ~= "table" then filter = {} end
         filter[weapon] = enabled == true
         return setOption("weapon_filter", filter)
     end
 
     function self:isWeaponFiltered(weapon)
-        local filter = getOption("weapon_filter")
+        local filter = Options.weapon_filter.Value or {}
         return type(filter) == "table" and filter[weapon] == false
     end
 
@@ -5190,18 +5093,11 @@ function Cosmetics:destroy()
     self.finishers = {}
 end
 
--- ============================================================================
--- Silent Aim
--- ============================================================================
+
+
+
 local SilentAim = {}
 SilentAim.__index = SilentAim
-
-local function silentDrawing(kind)
-    local ok, drawing = pcall(function()
-        return Drawing.new(kind)
-    end)
-    return ok and drawing or nil
-end
 
 function SilentAim.new()
     local self = setmetatable({}, SilentAim)
@@ -5211,10 +5107,10 @@ function SilentAim.new()
     self.hitchanceFail = false
     self.manipulated = false
 
-    self.fovCircle = silentDrawing("Circle")
-    self.fovFill = silentDrawing("Circle")
-    self.fovOutline = silentDrawing("Circle")
-    self.visualizeLine = silentDrawing("Line")
+    self.fovCircle = Drawing.new("Circle")
+    self.fovFill = Drawing.new("Circle")
+    self.fovOutline = Drawing.new("Circle")
+    self.visualizeLine = Drawing.new("Line")
 
     for _, drawing in ipairs({ self.fovCircle, self.fovFill, self.fovOutline, self.visualizeLine }) do
         if drawing then
@@ -5223,22 +5119,10 @@ function SilentAim.new()
         end
     end
 
-    local function opt(name, default)
-        local option = Options and Options[name]
-        local value = option and option.Value
-        return value == nil and default or value
-    end
-
-    local function tog(name, default)
-        local toggle = Toggles and Toggles[name]
-        local value = toggle and toggle.Value
-        return value == nil and default or value
-    end
-
     local function getTargetPart(character)
         if not character then return nil end
         local cam = Workspace.CurrentCamera
-        if tog("silent_closest_part", false) and cam then
+        if (Toggles.silent_closest_part and Toggles.silent_closest_part.Value) and cam then
             local best, bestDist = nil, math.huge
             for _, part in ipairs(character:GetChildren()) do
                 if part:IsA("BasePart") then
@@ -5254,13 +5138,13 @@ function SilentAim.new()
     end
 
     function self:isEnabled()
-        return tog("silent_toggle", false)
+        return (Toggles.silent_toggle and Toggles.silent_toggle.Value)
     end
 
     function self:acquire()
         local cam = Workspace.CurrentCamera
         if not cam then return nil end
-        local radius = math.max(0, tonumber(opt("silent_radius", 180)) or 180)
+        local radius = math.max(0, tonumber((Options.silent_radius and Options.silent_radius.Value or 180)) or 180)
         local viewport = cam.ViewportSize
         local center = Vector2.new(viewport.X / 2, viewport.Y / 2)
         local origin = cam.CFrame.Position
@@ -5296,7 +5180,7 @@ function SilentAim.new()
         if not self:isEnabled() then return nil end
         local target = self:acquire()
         if not target then return nil end
-        local chance = math.clamp(tonumber(opt("silent_hitchance", 100)) or 100, 0, 100)
+        local chance = math.clamp(tonumber((Options.silent_hitchance and Options.silent_hitchance.Value or 100)) or 100, 0, 100)
         if math.random(1, 100) > chance then
             self.hitchanceFail = true
             self.manipulated = false
@@ -5311,8 +5195,8 @@ function SilentAim.new()
         local cam = Workspace.CurrentCamera
         if not cam then return end
         local enabled = self:isEnabled()
-        local show = enabled and tog("silent_showfov", true)
-        local radius = math.clamp(tonumber(opt("silent_radius", 180)) or 180, 1, 89)
+        local show = enabled and (Toggles.silent_showfov and Toggles.silent_showfov.Value or true)
+        local radius = math.clamp(tonumber((Options.silent_radius and Options.silent_radius.Value or 180)) or 180, 1, 89)
         local viewport = cam.ViewportSize
         local center = Vector2.new(viewport.X / 2, viewport.Y / 2)
         local focal = (viewport.X / 2) / math.tan(math.rad(cam.FieldOfView) / 2)
@@ -5328,17 +5212,17 @@ function SilentAim.new()
             obj.Visible = visible
         end
 
-        circle(self.fovCircle, resolveColor(opt("silent_color1", "White"), Color3.new(1,1,1)), show, false, 1)
-        circle(self.fovFill, resolveColor(opt("silent_fill_color1", "Cyan"), Color3.new(0,1,1)), show and tog("silent_fov_fill", false), true, 1)
-        circle(self.fovOutline, resolveColor(opt("silent_outline_color1", "Black"), Color3.new(0,0,0)), show and tog("silent_fov_outline", true), false, 2)
+        circle(self.fovCircle, (typeof(Options.silent_color1 and Options.silent_color1.Value) == "Color3" and Options.silent_color1.Value or COLOR_PRESETS[Options.silent_color1 and Options.silent_color1.Value] or Color3.new(1,1,1)), show, false, 1)
+        circle(self.fovFill, (typeof(Options.silent_fill_color1 and Options.silent_fill_color1.Value) == "Color3" and Options.silent_fill_color1.Value or COLOR_PRESETS[Options.silent_fill_color1 and Options.silent_fill_color1.Value] or Color3.new(0,1,1)), show and (Toggles.silent_fov_fill and Toggles.silent_fov_fill.Value), true, 1)
+        circle(self.fovOutline, (typeof(Options.silent_outline_color1 and Options.silent_outline_color1.Value) == "Color3" and Options.silent_outline_color1.Value or COLOR_PRESETS[Options.silent_outline_color1 and Options.silent_outline_color1.Value] or Color3.new(0,0,0)), show and (Toggles.silent_fov_outline and Toggles.silent_fov_outline.Value or true), false, 2)
 
         if self.visualizeLine then
             local target = enabled and self:acquire() or nil
-            if target and tog("silent_visualize", false) then
+            if target and (Toggles.silent_visualize and Toggles.silent_visualize.Value) then
                 local screen = cam:WorldToViewportPoint(target.position)
                 self.visualizeLine.From = center
                 self.visualizeLine.To = Vector2.new(screen.X, screen.Y)
-                self.visualizeLine.Color = resolveColor(opt("silent_color2", "Cyan"), Color3.new(0,1,1))
+                self.visualizeLine.Color = (typeof(Options.silent_color2 and Options.silent_color2.Value) == "Color3" and Options.silent_color2.Value or COLOR_PRESETS[Options.silent_color2 and Options.silent_color2.Value] or Color3.new(0,1,1))
                 self.visualizeLine.Visible = true
             else
                 self.visualizeLine.Visible = false
@@ -5353,7 +5237,7 @@ function SilentAim.new()
 end
 
 function SilentAim:manipulate(originalPosition, originalPart, originalRay)
-    local toggle = Toggles and Toggles.silent_manipulation
+    local toggle = Toggles.silent_manipulation
     if not (toggle and toggle.Value) then
         self.manipulated = false
         return originalPosition, originalPart, originalRay
@@ -5377,7 +5261,7 @@ function SilentAim:destroy()
     self.target = nil
 end
 
--- UI for Effects
+
 local EffectsGeneralBox = Tabs.Effects:AddLeftGroupbox("Hit Effects", "sparkles")
 EffectsGeneralBox:AddToggle("hit_effects_enabled", {
     Text = "Enable Hit Effects",
@@ -5466,7 +5350,7 @@ EffectsSoundBox:AddSlider("hit_sounds_volume", {
     Rounding = 2,
 })
 
--- UI for ESP
+
 local ESPBox = Tabs.ESP:AddLeftGroupbox("Player ESP", "eye")
 ESPBox:AddToggle("esp_show_team", { Text = "Show Team", Default = false })
 ESPBox:AddToggle("esp_box", { Text = "Box", Default = false })
@@ -5520,12 +5404,6 @@ ESPWorldBox:AddToggle("esp_world_image", { Text = "World Image", Default = false
 ESPWorldBox:AddInput("esp_world_image_value", { Text = "World Image ID", Default = "", Placeholder = "rbxassetid://..." })
 ESPWorldBox:AddSlider("esp_world_max_distance", { Text = "World Max Distance", Default = 150, Min = 10, Max = 1000, Rounding = 0 })
 
-
-local function getColorValue(name, default)
-    local value = Options[name] and Options[name].Value
-    if typeof(value) == "Color3" then return value end
-    return resolveColor(value, default)
-end
 
 local WorldCrosshairBox = Tabs.World:AddLeftGroupbox("Crosshair", "crosshair")
 WorldCrosshairBox:AddToggle("crosshair_enabled", { Text = "Enable Crosshair", Default = false })
@@ -5588,8 +5466,8 @@ ESPController:start()
 getgenv().InstanceEffects = EffectsController
 getgenv().InstanceESP = ESPController
 
--- Expose safe helpers for the rest of the script without forcing any particular
--- weapon/damage implementation to depend on this subsystem.
+
+
 getgenv().InstanceRegisterHitEffect = function(targetCharacter, damage, hitPart, hitPosition)
     if EffectsController then
         EffectsController:registerHit(targetCharacter, damage, hitPart, hitPosition)
@@ -5712,9 +5590,9 @@ DeviceGroup:AddDropdown("DeviceType", {
 
 
 
--- ============================================================================
--- Skin Changer UI (kept immediately above Desync as requested)
--- ============================================================================
+
+
+
 local SkinGroup = Tabs.Cosmetics:AddLeftGroupbox("Skin Changer", "palette")
 SkinGroup:AddToggle("cosmetics_skin_enabled", { Text = "Enable Skin Changer", Default = false })
 SkinGroup:AddInput("cosmetics_skin_id", {
@@ -5779,7 +5657,7 @@ WrapGroup:AddInput("cosmetics_changer_save_data", {
     Placeholder = "Auto-managed",
 })
 
--- Silent Aim UI.
+
 local SilentGroup = Tabs.Main:AddLeftGroupbox("Silent Aim", "crosshair")
 SilentGroup:AddToggle("silent_toggle", { Text = "Enable Silent Aim", Default = false })
 SilentGroup:AddToggle("silent_showfov", { Text = "Show FOV", Default = true })
@@ -5814,8 +5692,8 @@ SilentAimController = SilentAim.new()
 getgenv().InstanceCosmetics = CosmeticsController
 getgenv().InstanceSilentAim = SilentAimController
 
--- Desync / Anti-Aim is kept separate from the existing Ragebot attack, target,
--- translocate, voidspam, and autoshoot logic.
+
+
 do
     local DESYNC_STEP_NAME = "RagebotDesync"
     local desyncState = {
@@ -5854,7 +5732,7 @@ do
         end
 
         if hrp and hrp.Parent then
-            -- Keep the visible root aligned with the same desync transform.
+            
             hrp.CFrame = cframe
         end
     end
@@ -5979,7 +5857,7 @@ local RagebotAntiAimFloorHide = RageGroupBox:AddToggle("RagebotAntiAimFloorHide"
 })
 
 
--- Mode is intentionally above the Ragebot toggle.
+
 local RagebotNormalControls = {}
 local RageUnderDep
 local TranslocateOffset
@@ -5991,14 +5869,14 @@ local RagebotMode = RageGroupBox:AddDropdown("RagebotMode", {
         Ragebot.config.target.mode = v
         local normalVisible = (v == "Normal")
 
-        -- Normal-only controls are hidden while Translocate is selected.
+        
         for _, control in ipairs(RagebotNormalControls) do
             pcall(function() control:SetVisible(normalVisible) end)
         end
         pcall(function() RageUnderDep:SetVisible(normalVisible) end)
         pcall(function() TranslocateOffset:SetVisible(not normalVisible) end)
 
-        -- Translocate must not be overridden by Normal Voidspam state.
+        
         if not normalVisible then
             Ragebot.config.voidspam.enabled = false
             Ragebot.config.voidspam.phase = nil
@@ -6180,7 +6058,7 @@ local RagebotVoidSpam = RageGroupBox:AddToggle("RagebotVoidSpam", {
     Text = "Voidspam",
     Default = Ragebot.config.voidspam.enabled or false,
     Callback = function(v)
-        -- Voidspam is a Normal-mode feature.
+        
         if Ragebot.config.target.mode == "Translocate" and v then
             v = false
         end
@@ -6250,7 +6128,6 @@ RagebotNormalControls = {
     RagebotHide,
 }
 
--- Ensure the UI starts in Normal mode.
 Ragebot.config.target.mode = "Normal"
 Ragebot.config.target.translocateOffset = -5
 for _, control in ipairs(RagebotNormalControls) do
@@ -6259,3 +6136,9 @@ end
 pcall(function() RageUnderDep:SetVisible(true) end)
 pcall(function() TranslocateOffset:SetVisible(false) end)
 
+ThemeManager:SetFolder("MyScriptHub")
+SaveManager:SetFolder("MyScriptHub/specific-game")
+SaveManager:SetSubFolder("specific-place")
+SaveManager:BuildConfigSection(Tabs["UI Settings"])
+ThemeManager:ApplyToTab(Tabs["UI Settings"])
+SaveManager:LoadAutoloadConfig()
