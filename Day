@@ -1264,6 +1264,14 @@ local config = {
         rageMasterOn = false,
         mode = "Normal",
         translocateOffset = -5,
+        desync = {
+            enabled = false,
+            pitch = 0,
+            yaw = 0,
+            customPitch = 0,
+            customYaw = 0,
+            floorHide = false,
+        },
         meleeFeetDrop = 3.5,
         underOffset = 4,
         attackOffset = 4,
@@ -1469,17 +1477,9 @@ end
 
 local SLOTS = { primary = 1, secondary = 2, melee = 3 }
 local MELEE_NMS = {
-    ["Battle Axe"] = true,
-    ["Chainsaw"] = true,
-    ["Daggers"] = true,
-    ["Fists"] = true,
-    ["Gunblade"] = true,
-    ["Katana"] = true,
-    ["Knife"] = true,
-    ["Scythe"] = true,
-    ["Trowel"] = true,
-    ["Maul"] = true,
-    ["Spear"] = true,
+    ["Battle Axe"] = true, ["Chainsaw"] = true, ["Daggers"] = true, ["Fists"] = true,
+    ["Gunblade"] = true, ["Katana"] = true, ["Knife"] = true,
+    ["Scythe"] = true, ["Trowel"] = true,
 }
 local INFINITE_AMMO_WEAPONS = {
     ["Energy Rifle"] = true,
@@ -3186,13 +3186,6 @@ SilentGroupBox:AddDropdown("SilentFireMode", {
     end
 })
 
-SilentGroupBox:AddToggle("AntiKatana", {
-    Text = "Anti Katana",
-    Default = false,
-    Callback = function(v)
-        antikatana = v
-    end
-})
 
 local CharacterGroupBox = Tabs.Character:AddLeftGroupbox("Character", "user")
 
@@ -3240,6 +3233,59 @@ CharacterGroupBox:AddInput("UndergroundCustomDepth", {
         elseif v ~= "" then
             Library:Notify("Invalid depth (min 2.5)")
         end
+    end
+})
+
+local DesyncGroupBox = Tabs.Character:AddRightGroupbox("Desync", "shuffle")
+DesyncGroupBox:AddSlider("DesyncPitch", {
+    Text = "Pitch",
+    Default = 0,
+    Min = -180,
+    Max = 180,
+    Rounding = 0,
+    Suffix = "°",
+    Callback = function(v)
+        config.target.desync.pitch = tonumber(v) or 0
+    end
+})
+DesyncGroupBox:AddSlider("DesyncYaw", {
+    Text = "Yaw",
+    Default = 0,
+    Min = -180,
+    Max = 180,
+    Rounding = 0,
+    Suffix = "°",
+    Callback = function(v)
+        config.target.desync.yaw = tonumber(v) or 0
+    end
+})
+DesyncGroupBox:AddSlider("DesyncCustomPitch", {
+    Text = "Custom Pitch",
+    Default = 0,
+    Min = -180,
+    Max = 180,
+    Rounding = 0,
+    Suffix = "°",
+    Callback = function(v)
+        config.target.desync.customPitch = tonumber(v) or 0
+    end
+})
+DesyncGroupBox:AddSlider("DesyncCustomYaw", {
+    Text = "Custom Yaw",
+    Default = 0,
+    Min = -180,
+    Max = 180,
+    Rounding = 0,
+    Suffix = "°",
+    Callback = function(v)
+        config.target.desync.customYaw = tonumber(v) or 0
+    end
+})
+DesyncGroupBox:AddToggle("DesyncFloorHide", {
+    Text = "Floor Hide",
+    Default = false,
+    Callback = function(v)
+        config.target.desync.floorHide = v
     end
 })
 
@@ -3352,171 +3398,7 @@ DeviceGroup:AddDropdown("DeviceType", {
     end
 })
 
-
--- Desync / Anti-Aim is kept separate from the existing Ragebot attack, target,
--- translocate, voidspam, and autoshoot logic.
-do
-    local DESYNC_STEP_NAME = "RagebotDesync"
-    local desyncState = {
-        enabled = false,
-        pitch = 0,
-        yaw = 0,
-        customPitch = 0,
-        customYaw = 0,
-        floorHide = false,
-        physicsRep = nil,
-    }
-
-    Ragebot.desync = desyncState
-
-    local function unbindDesync()
-        pcall(function()
-            runsvc:UnbindFromRenderStep(DESYNC_STEP_NAME)
-        end)
-    end
-
-    local function getDesyncCFrame(hrp)
-        local base = hrp.CFrame
-        local yaw = math.rad(desyncState.yaw)
-        local pitch = math.rad(desyncState.pitch)
-        local customYaw = math.rad(desyncState.customYaw)
-        local customPitch = math.rad(desyncState.customPitch)
-
-        return CFrame.new(base.Position)
-            * CFrame.Angles(0, yaw + customYaw, 0)
-            * CFrame.Angles(pitch + customPitch, 0, 0)
-    end
-
-    local function applyDesync(hrp, rep, cframe)
-        if rep and rep.Parent then
-            rep.CFrame = cframe
-        end
-
-        if hrp and hrp.Parent then
-            -- Keep the visible root aligned with the same desync transform.
-            hrp.CFrame = cframe
-        end
-    end
-
-    function Ragebot:setupDesync()
-        if Ragebot._desyncBound then
-            return
-        end
-        Ragebot._desyncBound = true
-
-        runsvc:BindToRenderStep(DESYNC_STEP_NAME, Enum.RenderPriority.Camera.Value, function()
-            local rageOn = Toggles.RagebotEnabled and Toggles.RagebotEnabled.Value
-            local antiAimOn = Toggles.RagebotAntiAim and Toggles.RagebotAntiAim.Value
-
-            if not rageOn or not antiAimOn then
-                local character = player.Character
-                local hrp = character and character:FindFirstChild("HumanoidRootPart")
-                local rep = character and (character:FindFirstChild("PhysicsRepRootPart") or hrp)
-
-                if rep and hrp then
-                    rep.CFrame = hrp.CFrame
-                end
-                desyncState.physicsRep = rep
-                return
-            end
-
-            local character = player.Character
-            if not character then
-                return
-            end
-
-            local hrp = character:FindFirstChild("HumanoidRootPart")
-            if not hrp then
-                return
-            end
-
-            desyncState.enabled = true
-            desyncState.pitch = tonumber(Options.RagebotAntiAimPitch.Value) or 0
-            desyncState.yaw = tonumber(Options.RagebotAntiAimYaw.Value) or 0
-            desyncState.customPitch = tonumber(Options.RagebotAntiAimCustomPitch.Value) or 0
-            desyncState.customYaw = tonumber(Options.RagebotAntiAimCustomYaw.Value) or 0
-            desyncState.floorHide = Toggles.RagebotAntiAimFloorHide
-                and Toggles.RagebotAntiAimFloorHide.Value or false
-
-            local rep = character:FindFirstChild("PhysicsRepRootPart") or hrp
-            desyncState.physicsRep = rep
-
-            if desyncState.floorHide and hrp.Position.Y < 8 then
-                applyDesync(
-                    hrp,
-                    rep,
-                    hrp.CFrame * CFrame.new(0, -3, 0)
-                )
-                return
-            end
-
-            applyDesync(hrp, rep, getDesyncCFrame(hrp))
-        end)
-    end
-
-    function Ragebot:unbindDesync()
-        unbindDesync()
-        Ragebot._desyncBound = false
-        desyncState.enabled = false
-        desyncState.physicsRep = nil
-    end
-
-    Ragebot:setupDesync()
-end
-
 local RageGroupBox = Tabs.Main:AddRightGroupbox("Ragebot", "sword")
-
-local RagebotAntiAim = RageGroupBox:AddToggle("RagebotAntiAim", {
-    Text = "Desync / Anti-Aim",
-    Default = false,
-    Callback = function(v)
-        if Ragebot.desync then
-            Ragebot.desync.enabled = v
-        end
-    end
-})
-
-local RagebotAntiAimPitch = RageGroupBox:AddSlider("RagebotAntiAimPitch", {
-    Text = "Desync Pitch",
-    Default = 0,
-    Min = -180,
-    Max = 180,
-    Rounding = 0,
-    Suffix = "°",
-})
-
-local RagebotAntiAimYaw = RageGroupBox:AddSlider("RagebotAntiAimYaw", {
-    Text = "Desync Yaw",
-    Default = 0,
-    Min = -180,
-    Max = 180,
-    Rounding = 0,
-    Suffix = "°",
-})
-
-local RagebotAntiAimCustomPitch = RageGroupBox:AddSlider("RagebotAntiAimCustomPitch", {
-    Text = "Custom Pitch",
-    Default = 0,
-    Min = -180,
-    Max = 180,
-    Rounding = 0,
-    Suffix = "°",
-})
-
-local RagebotAntiAimCustomYaw = RageGroupBox:AddSlider("RagebotAntiAimCustomYaw", {
-    Text = "Custom Yaw",
-    Default = 0,
-    Min = -180,
-    Max = 180,
-    Rounding = 0,
-    Suffix = "°",
-})
-
-local RagebotAntiAimFloorHide = RageGroupBox:AddToggle("RagebotAntiAimFloorHide", {
-    Text = "Floor Hide",
-    Default = false,
-})
-
 
 -- Mode is intentionally above the Ragebot toggle.
 local RagebotNormalControls = {}
@@ -3774,6 +3656,16 @@ TranslocateOffset = RageGroupBox:AddSlider("RagebotTranslocateOffset", {
     end
 })
 
+RageGroupBox:AddToggle("RagebotDesync", {
+    Text = "Desync",
+    Default = false,
+    Callback = function(v)
+        Ragebot.config.target.rageDesync = v
+        config.target.rageDesync = v
+        config.target.desync.enabled = v
+    end
+})
+
 RagebotNormalControls = {
     RagebotAutoTarget,
     RagebotAttackPosition,
@@ -3792,11 +3684,60 @@ RagebotNormalControls = {
 -- Ensure the UI starts in Normal mode.
 Ragebot.config.target.mode = "Normal"
 Ragebot.config.target.translocateOffset = -5
+Ragebot.config.target.rageDesync = false
+config.target.rageDesync = false
+config.target.desync.enabled = false
 for _, control in ipairs(RagebotNormalControls) do
     pcall(function() control:SetVisible(true) end)
 end
 pcall(function() RageUnderDep:SetVisible(true) end)
 pcall(function() TranslocateOffset:SetVisible(false) end)
+
+-- Ragebot Desync runtime. It only manipulates the physics representation part,
+-- so it does not overwrite the Translocate/server position logic.
+do
+    local desyncLastCF = nil
+
+    RunService:BindToRenderStep("RagebotDesync", Enum.RenderPriority.Camera.Value + 1, function()
+        local enabled = config.target.rageDesync == true
+        local char = lp.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if not hrp then
+            desyncLastCF = nil
+            return
+        end
+
+        local rep = char:FindFirstChild("PhysicsRepRootPart") or hrp
+
+        if not enabled then
+            if desyncLastCF then
+                pcall(function() rep.CFrame = hrp.CFrame end)
+                desyncLastCF = nil
+            end
+            return
+        end
+
+        local d = config.target.desync
+        local targetCF
+
+        if d.floorHide and hrp.Position.Y < 8 then
+            targetCF = hrp.CFrame * CFrame.new(0, -3, 0)
+        else
+            local yaw = math.rad(tonumber(d.yaw) or 0)
+            local pitch = math.rad(tonumber(d.pitch) or 0)
+            local customYaw = math.rad(tonumber(d.customYaw) or 0)
+            local customPitch = math.rad(tonumber(d.customPitch) or 0)
+            targetCF = CFrame.new(hrp.Position)
+                * CFrame.Angles(0, yaw + customYaw, 0)
+                * CFrame.Angles(pitch + customPitch, 0, 0)
+        end
+
+        pcall(function()
+            rep.CFrame = targetCF
+            desyncLastCF = targetCF
+        end)
+    end)
+end
 
 local ModsGroupBox = Tabs.Combat:AddLeftGroupbox("Gun Mods", "gun")
 ModsGroupBox:AddToggle("NoCooldown", {
@@ -3839,6 +3780,31 @@ ModsGroupBox:AddToggle("RapidAttack", {
         if v then applyRapidFire() end
     end
 })
+ModsGroupBox:AddToggle("NoMuzzleFlash", {
+    Text = "No Muzzle Flash",
+    Default = false,
+    Callback = function(v) end
+})
+
+local MiscGroupBox = Tabs.Combat:AddLeftGroupbox("Misc Combat", "settings")
+MiscGroupBox:AddToggle("AntiKatana", {
+    Text = "Anti Katana",
+    Default = false,
+    Callback = function(v) antikatana = v end
+})
+MiscGroupBox:AddToggle("BackshootToggle", {
+    Text = "Backshoot",
+    Default = false,
+    Callback = function(v) end
+}):AddKeyPicker("SelectTargetKey", {
+    Text = "Backshoot",
+    Default = "None",
+    Mode = "Toggle",
+    NoUI = true,
+    SyncToggleState = false,
+    Callback = function(state) end
+})
+
 local MenuGroup = Tabs["UI Settings"]:AddLeftGroupbox("Menu", "wrench")
 MenuGroup:AddToggle("KeybindMenuOpen", {
     Default = Library.KeybindFrame.Visible,
