@@ -3398,6 +3398,114 @@ DeviceGroup:AddDropdown("DeviceType", {
     end
 })
 
+local ModsGroupBox = Tabs.Combat:AddLeftGroupbox("Gun Mods", "gun")
+ModsGroupBox:AddToggle("NoCooldown", {
+    Text = "Rapid Fire",
+    Default = false,
+    Callback = function(v)
+        ModSettings.RapidFire = v
+        if v then applyRapidFire() end
+    end
+})
+ModsGroupBox:AddToggle("NoSpread", {
+    Text = "No Spread",
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoSpread = v
+        if v then applyNoSpread() end
+    end
+})
+ModsGroupBox:AddToggle("NoRecoil", {
+    Text = "No Recoil",
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoRecoil = v
+        if v then applyNoRecoil() end
+    end
+})
+ModsGroupBox:AddToggle("MaxAccuracy", {
+    Text = "Max Accuracy",
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoSpread = v
+        if v then applyNoSpread() end
+    end
+})
+ModsGroupBox:AddToggle("RapidAttack", {
+    Text = "Rapid Attack",
+    Default = false,
+    Callback = function(v)
+        ModSettings.RapidFire = v
+        if v then applyRapidFire() end
+    end
+})
+ModsGroupBox:AddToggle("NoMuzzleFlash", {
+    Text = "No Muzzle Flash",
+    Default = false,
+    Callback = function(v) end
+})
+
+local MiscGroupBox = Tabs.Combat:AddLeftGroupbox("Misc Combat", "settings")
+MiscGroupBox:AddToggle("AntiKatana", {
+    Text = "Anti Katana",
+    Default = false,
+    Callback = function(v) antikatana = v end
+})
+MiscGroupBox:AddToggle("BackshootToggle", {
+    Text = "Backshoot",
+    Default = false,
+    Callback = function(v) end
+}):AddKeyPicker("SelectTargetKey", {
+    Text = "Backshoot",
+    Default = "None",
+    Mode = "Toggle",
+    NoUI = true,
+    SyncToggleState = false,
+    Callback = function(state) end
+})
+
+local MenuGroup = Tabs["UI Settings"]:AddLeftGroupbox("Menu", "wrench")
+MenuGroup:AddToggle("KeybindMenuOpen", {
+    Default = Library.KeybindFrame.Visible,
+    Text = "Open Keybind Menu",
+    Callback = function(value)
+        Library.KeybindFrame.Visible = value
+    end,
+})
+MenuGroup:AddToggle("ShowCustomCursor", {
+    Text = "Custom Cursor",
+    Default = Library.ShowCustomCursor,
+    Callback = function(value)
+        Library.ShowCustomCursor = value
+    end,
+})
+MenuGroup:AddDropdown("NotificationSide", {
+    Values = { "Left", "Right" },
+    Default = "Right",
+    Text = "Notification Side",
+    Callback = function(value)
+        Library:SetNotifySide(value)
+    end,
+})
+MenuGroup:AddSlider("UICornerSlider", {
+    Text = "Corner Radius",
+    Default = Library.CornerRadius,
+    Min = 0,
+    Max = 20,
+    Rounding = 0,
+    Callback = function(value)
+        Window:SetCornerRadius(value)
+    end,
+})
+MenuGroup:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", {
+    Default = "RightShift",
+    NoUI = true,
+    Text = "Menu keybind",
+})
+
+Library.ToggleKeybind = Options.MenuKeybind
+
+
 local RageGroupBox = Tabs.Main:AddRightGroupbox("Ragebot", "sword")
 
 -- Mode is intentionally above the Ragebot toggle.
@@ -3738,113 +3846,6 @@ do
         end)
     end)
 end
-
-local ModsGroupBox = Tabs.Combat:AddLeftGroupbox("Gun Mods", "gun")
-ModsGroupBox:AddToggle("NoCooldown", {
-    Text = "Rapid Fire",
-    Default = false,
-    Callback = function(v)
-        ModSettings.RapidFire = v
-        if v then applyRapidFire() end
-    end
-})
-ModsGroupBox:AddToggle("NoSpread", {
-    Text = "No Spread",
-    Default = false,
-    Callback = function(v)
-        ModSettings.NoSpread = v
-        if v then applyNoSpread() end
-    end
-})
-ModsGroupBox:AddToggle("NoRecoil", {
-    Text = "No Recoil",
-    Default = false,
-    Callback = function(v)
-        ModSettings.NoRecoil = v
-        if v then applyNoRecoil() end
-    end
-})
-ModsGroupBox:AddToggle("MaxAccuracy", {
-    Text = "Max Accuracy",
-    Default = false,
-    Callback = function(v)
-        ModSettings.NoSpread = v
-        if v then applyNoSpread() end
-    end
-})
-ModsGroupBox:AddToggle("RapidAttack", {
-    Text = "Rapid Attack",
-    Default = false,
-    Callback = function(v)
-        ModSettings.RapidFire = v
-        if v then applyRapidFire() end
-    end
-})
-ModsGroupBox:AddToggle("NoMuzzleFlash", {
-    Text = "No Muzzle Flash",
-    Default = false,
-    Callback = function(v) end
-})
-
-local MiscGroupBox = Tabs.Combat:AddLeftGroupbox("Misc Combat", "settings")
-MiscGroupBox:AddToggle("AntiKatana", {
-    Text = "Anti Katana",
-    Default = false,
-    Callback = function(v) antikatana = v end
-})
-MiscGroupBox:AddToggle("BackshootToggle", {
-    Text = "Backshoot",
-    Default = false,
-    Callback = function(v) end
-}):AddKeyPicker("SelectTargetKey", {
-    Text = "Backshoot",
-    Default = "None",
-    Mode = "Toggle",
-    NoUI = true,
-    SyncToggleState = false,
-    Callback = function(state) end
-})
-
-local MenuGroup = Tabs["UI Settings"]:AddLeftGroupbox("Menu", "wrench")
-MenuGroup:AddToggle("KeybindMenuOpen", {
-    Default = Library.KeybindFrame.Visible,
-    Text = "Open Keybind Menu",
-    Callback = function(value)
-        Library.KeybindFrame.Visible = value
-    end,
-})
-MenuGroup:AddToggle("ShowCustomCursor", {
-    Text = "Custom Cursor",
-    Default = Library.ShowCustomCursor,
-    Callback = function(value)
-        Library.ShowCustomCursor = value
-    end,
-})
-MenuGroup:AddDropdown("NotificationSide", {
-    Values = { "Left", "Right" },
-    Default = "Right",
-    Text = "Notification Side",
-    Callback = function(value)
-        Library:SetNotifySide(value)
-    end,
-})
-MenuGroup:AddSlider("UICornerSlider", {
-    Text = "Corner Radius",
-    Default = Library.CornerRadius,
-    Min = 0,
-    Max = 20,
-    Rounding = 0,
-    Callback = function(value)
-        Window:SetCornerRadius(value)
-    end,
-})
-MenuGroup:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", {
-    Default = "RightShift",
-    NoUI = true,
-    Text = "Menu keybind",
-})
-
-Library.ToggleKeybind = Options.MenuKeybind
 
 ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
