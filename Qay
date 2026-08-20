@@ -1,4 +1,4 @@
-local repo = "https://raw.githubusercontent.com/joustingmatch/ObsidianUltra/main/"
+local repo = "https://raw.githubusercontent.com/rexzyq/ObsidianQui/main/"
 local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
 local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
 local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
@@ -1319,6 +1319,8 @@ local config = {
         knifeHitboxWindowUntil = -1,
         knifeAttackCooldown = -1,
         knifeBackstabActive = false,
+        knifeGluedOurPart = nil,
+        knifeGluedTargetPart = nil,
     },
     voidhide = {
         enabled = true,
@@ -2544,11 +2546,35 @@ end
 
 local KICIA_KNIFE_HITBOX_WINDOW = 0.625
 local KICIA_KNIFE_ATTACK_COOLDOWN = 1.25
+local KICIA_KNIFE_V138 = Vector3.new(0, -0.7, 0.05)
+local KICIA_KNIFE_V139 = Vector3.new(0, -3.85, 0.05)
+local KICIA_KNIFE_T91 = {
+    [utf8.char(0)] = -9e37, [utf8.char(1)] = 0, [utf8.char(2)] = 0,
+    [utf8.char(3)] = -math.pi / 2, [utf8.char(4)] = math.pi, [utf8.char(5)] = math.pi,
+}
+local KICIA_KNIFE_T92 = {
+    [utf8.char(0)] = 0, [utf8.char(1)] = -90000000, [utf8.char(2)] = 0,
+    [utf8.char(3)] = -math.pi / 2, [utf8.char(4)] = math.pi, [utf8.char(5)] = math.pi,
+}
+local KICIA_KNIFE_T93 = {
+    [utf8.char(0)] = -9e37, [utf8.char(1)] = 0, [utf8.char(2)] = 0,
+    [utf8.char(3)] = math.pi / 2, [utf8.char(4)] = math.pi, [utf8.char(5)] = math.pi,
+}
+local KICIA_KNIFE_T94 = {
+    [utf8.char(0)] = 0, [utf8.char(1)] = 90000000, [utf8.char(2)] = 0,
+    [utf8.char(3)] = math.pi / 2, [utf8.char(4)] = math.pi, [utf8.char(5)] = math.pi,
+}
+local KICIA_KNIFE_T95 = {
+    [utf8.char(0)] = 0, [utf8.char(1)] = 1, [utf8.char(2)] = 0,
+    [utf8.char(3)] = 0, [utf8.char(4)] = 0, [utf8.char(5)] = 0,
+}
 
 local function resetKnifeState()
     config.state.knifeHitboxWindowUntil = -1
     config.state.knifeAttackCooldown = -1
     config.state.knifeBackstabActive = false
+    config.state.knifeGluedOurPart = nil
+    config.state.knifeGluedTargetPart = nil
 end
 
 local function isKnifeItem(item)
@@ -2558,38 +2584,56 @@ local function isKnifeItem(item)
     return name == "Knife"
 end
 
-local function buildKiciaMeleePayload(item, hitPart, attackCF, heavy)
-    if not item or not hitPart or not attackCF then return nil end
-    local objectId = item:Get("ObjectID")
-    if not objectId or not modules.utility or not modules.enums then return nil end
-
-    local encoded = modules.utility:EncodeCFrame(attackCF)
-    local inner = {
-        [utf8.char(0)] = encoded,
-        [utf8.char(1)] = encoded,
-        [utf8.char(2)] = hitPart,
-        [utf8.char(3)] = modules.utility:EncodeCFrame(CFrame.new(0.43, 0.25, 0.42)),
-    }
+local function kiciaEncoded(base, a, b, c)
     return {
-        objectId = objectId,
-        action = heavy and "StartAiming" or "StartShooting",
-        animation = heavy and "HeavyAttackAnimation1" or "AttackAnimation1",
-        payload = {
-            [utf8.char(1)] = inner,
-            [utf8.char(2)] = modules.enums:ToEnum(heavy and "HeavyAttackAnimation1" or "AttackAnimation1"),
-        },
+        [utf8.char(0)] = base[utf8.char(0)],
+        [utf8.char(1)] = base[utf8.char(1)],
+        [utf8.char(2)] = base[utf8.char(2)],
+        [utf8.char(3)] = a,
+        [utf8.char(4)] = b,
+        [utf8.char(5)] = c,
     }
 end
 
-local function fireKiciaMelee(item, hitPart, attackCF, heavy)
-    local spec = buildKiciaMeleePayload(item, hitPart, attackCF, heavy)
-    if not spec then return false end
+-- Kicia uses PartGlue:Acquire/Free. Crefy has no exposed PartGlue module,
+-- so this is the closest source-faithful adapter: retain the two anchored
+-- parts and return the target anchor CFrame that the planner can offset.
+local function acquireKnifeGlue(ourPart, targetPart)
+    if not ourPart or not targetPart then return nil end
+    config.state.knifeGluedOurPart = ourPart
+    config.state.knifeGluedTargetPart = targetPart
+    return targetPart.CFrame
+end
+
+local function freeKnifeGlue()
+    config.state.knifeGluedOurPart = nil
+    config.state.knifeGluedTargetPart = nil
+end
+
+local function fireKiciaMeleeEncoded(item, action, p1, p2, hitPart)
+    if not item or not p1 or not p2 or not hitPart then return false end
+    local objectId = item:Get("ObjectID")
+    if not objectId then return false end
+
+    local inner = {
+        [utf8.char(0)] = p1,
+        [utf8.char(1)] = p2,
+        [utf8.char(2)] = hitPart,
+        [utf8.char(3)] = KICIA_KNIFE_T95,
+    }
+    local animation = action == "KnifeHeavy" and "HeavyAttackAnimation1" or "AttackAnimation1"
+    local remoteAction = action == "KnifeHeavy" and "StartAiming" or "StartShooting"
+    local payload = {
+        [utf8.char(1)] = inner,
+        [utf8.char(2)] = modules.enums:ToEnum(animation),
+    }
+
     local ok = false
     pcall(function()
         replicatedstorage.Remotes.Replication.Fighter.UseItem:FireServer(
-            spec.objectId,
-            modules.enums:ToEnum(spec.action),
-            spec.payload,
+            objectId,
+            modules.enums:ToEnum(remoteAction),
+            payload,
             nil
         )
         ok = true
@@ -2603,22 +2647,46 @@ local function planKiciaKnife(targetChar, item, hitPart)
         return "None"
     end
 
+    local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    local targetAnchor = targetChar:FindFirstChild("HitboxHead") or hitPart
+    if not root or not targetAnchor then
+        resetKnifeState()
+        return "None"
+    end
+
+    -- Equivalent target anchor to Kicia's aliveState.hitboxHead.
+    local acquired = acquireKnifeGlue(root, targetAnchor)
+    if not acquired then return "None" end
+
+    local v125 = acquired.Position + (isKnifeItem(item) and KICIA_KNIFE_V138 or KICIA_KNIFE_V139)
+    local v128, v127, v126 = root.CFrame:ToOrientation()
+
+    -- Preserve the same orientation tables and t95 used by Kicia's encoded calls.
+    local v131 = kiciaEncoded(KICIA_KNIFE_T91, -math.pi / 2, v127, v126)
+    local v132 = kiciaEncoded(KICIA_KNIFE_T92, -math.pi / 2, v127, v126)
+    local attackCF = CFrame.lookAt(v125, targetAnchor.Position)
+
     local now = os.clock()
     if now < (config.state.knifeHitboxWindowUntil or -1) then
-        return isKnifeItem(item) and "KnifeHeavy" or "MeleeAttack"
+        return isKnifeItem(item) and "KnifeHeavy" or "MeleeAttack", attackCF, v131, v132, targetAnchor
     end
 
-    if not shootLockReady(targetChar) then return "Hold" end
-    if now < (config.state.knifeAttackCooldown or -1) then return "Hold" end
-
-    if isKnifeItem(item) then
-        -- Kicia's RecordBackstab timing: 0.625s hitbox window, 1.25s cooldown.
-        config.state.knifeHitboxWindowUntil = now + KICIA_KNIFE_HITBOX_WINDOW
-        config.state.knifeAttackCooldown = now + KICIA_KNIFE_ATTACK_COOLDOWN
-        config.state.knifeBackstabActive = true
-        return "KnifeHeavy"
+    if not shootLockReady(targetChar) then
+        return "Hold"
     end
-    return "MeleeAttack"
+    if now < (config.state.knifeAttackCooldown or -1) then
+        return "Hold"
+    end
+
+    if not isKnifeItem(item) then
+        return "MeleeAttack", attackCF, v131, v132, targetAnchor
+    end
+
+    -- Exact Kicia _RecordBackstab timing.
+    config.state.knifeHitboxWindowUntil = now + KICIA_KNIFE_HITBOX_WINDOW
+    config.state.knifeAttackCooldown = now + KICIA_KNIFE_ATTACK_COOLDOWN
+    config.state.knifeBackstabActive = true
+    return "KnifeHeavy", attackCF, v131, v132, targetAnchor
 end
 
 local function autoshoot()
@@ -2630,11 +2698,6 @@ local function autoshoot()
     eqSlot()
     local lf = modules.fighter and modules.fighter.LocalFighter
     if not lf or not lf.EquippedItem then return end
-    if not isInfiniteWeapon() then
-        if config.state.reloading or config.state.outofammo then return end
-        if (config.state.reloadReadyAt or 0) > tick() then return end
-        if not canuse() then return end
-    end
     local targetChar = config.target.character
     if not valid(targetChar) then
         resetShootLock()
@@ -2656,12 +2719,10 @@ local function autoshoot()
         end
         if not origin then return end
 
-        local targetPos = predict(hitPart, origin)
-        local attackCF = CFrame.lookAt(origin, targetPos)
-        local action = planKiciaKnife(targetChar, equipped, hitPart)
+        local action, attackCF, p1, p2, gluedPart = planKiciaKnife(targetChar, equipped, hitPart)
         if action == "Hold" or action == "None" then return end
 
-        if fireKiciaMelee(equipped, hitPart, attackCF, action == "KnifeHeavy") then
+        if fireKiciaMeleeEncoded(equipped, action, p1, p2, gluedPart or hitPart) then
             ragePerf.lastAttackTick = tick()
             if config.voidspam.enabled and config.voidspam.phase == "shoot" then
                 config.voidspam.shotIssued = true
@@ -2669,6 +2730,12 @@ local function autoshoot()
             hideShot()
         end
         return
+    end
+
+    if not isInfiniteWeapon() then
+        if config.state.reloading or config.state.outofammo then return end
+        if (config.state.reloadReadyAt or 0) > tick() then return end
+        if not canuse() then return end
     end
 
     if not shootLockReady(targetChar) then return end
@@ -2783,6 +2850,7 @@ end)
 
 local function cleartarget()
     resetShootLock()
+    freeKnifeGlue()
     resetKnifeState()
     config.target.enabled = false
     stopsync()
@@ -2799,6 +2867,7 @@ local function settarget(char)
     if config.target.character ~= char then
         resetKnifeState()
         resetShootLock()
+        freeKnifeGlue()
     end
     local targetplr = players:GetPlayerFromCharacter(char)
     config.target.enabled = true
