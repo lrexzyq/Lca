@@ -1,4 +1,4 @@
-local repo = "https://raw.githubusercontent.com/joustingmatch/ObsidianUltra/main/"
+local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
 local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
 local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
 local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
@@ -11,29 +11,20 @@ Library.ShowToggleFrameInKeybinds = true
 
 local Window = Library:CreateWindow({
     Title = "Skiding",
+    Footer = "Rivals | Aimbot + Ragebot",
     Icon = 95816097006870,
     NotifySide = "Right",
     ShowCustomCursor = true,
-    Footer = {
-        "Rivals | ",
-        { Text = "Aimbot + Ragebot", Copyable = true },
-    },
-    CopyableFooter = true,
-    FuzzySearch = true,
-    SearchValues = true,
-    SearchKeybind = Enum.KeyCode.F,
-    Minimizable = true,
-    MinimizeKeybind = Enum.KeyCode.RightBracket,
-    MinimizedWidth = 300,
+    Center = true,
 })
 
 local Tabs = {
-    Main = Window:AddTab({ Name = "Main", Icon = "crosshair", Description = "Aimbot & Ragebot" }),
-    Character = Window:AddTab({ Name = "Character", Icon = "user", Description = "Character utilities" }),
-    Combat = Window:AddTab({ Name = "Combat", Icon = "sword", Description = "Combat utilities" }),
-    Cosmetic = Window:AddTab({ Name = "Cosmetic", Icon = "shirt", Description = "Skins, wraps, charms and finishers" }),
-    Misc = Window:AddTab({ Name = "Misc", Icon = "settings", Description = "Miscellaneous" }),
-    ["UI Settings"] = Window:AddTab({ Name = "UI Settings", Icon = "settings", Description = "Configure the menu" }),
+    Main = Window:AddTab("Main", "crosshair"),
+    Character = Window:AddTab("Character", "user"),
+    Combat = Window:AddTab("Combat", "sword"),
+    Cosmetic = Window:AddTab("Cosmetic", "shirt"),
+    Misc = Window:AddTab("Misc", "settings"),
+    ["UI Settings"] = Window:AddTab("UI Settings", "settings"),
 }
 
 local Players = game:GetService("Players")
@@ -3823,9 +3814,9 @@ CharacterGroupBox:AddInput("UndergroundCustomDepth", {
                 startUnderground()
             end
             Options.UndergroundDepth:SetValue(num)
-            Library:Notify("Underground depth set to " .. num)
+            Library:Notify({ Title = "Rivals", Description = "Underground depth set to " .. tostring(num), Time = 3 })
         elseif v ~= "" then
-            Library:Notify("Invalid depth (min 2.5)")
+            Library:Notify({ Title = "Rivals", Description = "Invalid depth (min 2.5)", Time = 3 })
         end
     end
 })
@@ -3836,7 +3827,7 @@ WeaponGroup:AddButton({
     Func = function()
         ModSettings.NoMeleeAnimation = true
         applyMeleeAnimation()
-        Library:Notify("Applied No Melee Animation")
+        Library:Notify({ Title = "Rivals", Description = "Applied No Melee Animation", Time = 3 })
     end
 })
 WeaponGroup:AddButton({
@@ -3844,7 +3835,7 @@ WeaponGroup:AddButton({
     Func = function()
         ModSettings.NoDashCooldown = true
         applyDashCooldown()
-        Library:Notify("Applied No Dash Cooldown")
+        Library:Notify({ Title = "Rivals", Description = "Applied No Dash Cooldown", Time = 3 })
     end
 })
 WeaponGroup:AddButton({
@@ -3852,7 +3843,7 @@ WeaponGroup:AddButton({
     Func = function()
         ModSettings.NoMeleeCooldown = true
         applyMeleeCooldown()
-        Library:Notify("Applied No Melee Cooldown")
+        Library:Notify({ Title = "Rivals", Description = "Applied No Melee Cooldown", Time = 3 })
     end
 })
 WeaponGroup:AddButton({
@@ -3860,7 +3851,7 @@ WeaponGroup:AddButton({
     Func = function()
         ModSettings.NoShootAnimation = true
         applyShootAnimation()
-        Library:Notify("Applied No Shoot Animation")
+        Library:Notify({ Title = "Rivals", Description = "Applied No Shoot Animation", Time = 3 })
     end
 })
 WeaponGroup:AddButton({
@@ -3868,7 +3859,7 @@ WeaponGroup:AddButton({
     Func = function()
         ModSettings.NoEquipAnimation = true
         applyEquipAnimation()
-        Library:Notify("Applied No Equip Animation")
+        Library:Notify({ Title = "Rivals", Description = "Applied No Equip Animation", Time = 3 })
     end
 })
 WeaponGroup:AddButton({
@@ -3876,7 +3867,7 @@ WeaponGroup:AddButton({
     Func = function()
         ModSettings.InstantADS = true
         applyInstantADS()
-        Library:Notify("Applied Instant ADS")
+        Library:Notify({ Title = "Rivals", Description = "Applied Instant ADS", Time = 3 })
     end
 })
 WeaponGroup:AddButton({
@@ -3884,7 +3875,7 @@ WeaponGroup:AddButton({
     Func = function()
         ModSettings.RapidFire = true
         applyRapidFire()
-        Library:Notify("Applied Rapid Fire")
+        Library:Notify({ Title = "Rivals", Description = "Applied Rapid Fire", Time = 3 })
     end
 })
 WeaponGroup:AddButton({
@@ -3892,7 +3883,7 @@ WeaponGroup:AddButton({
     Func = function()
         ModSettings.NoSpread = true
         applyNoSpread()
-        Library:Notify("Applied No Spread")
+        Library:Notify({ Title = "Rivals", Description = "Applied No Spread", Time = 3 })
     end
 })
 WeaponGroup:AddButton({
@@ -3900,7 +3891,7 @@ WeaponGroup:AddButton({
     Func = function()
         ModSettings.NoSmoke = true
         applyNoSmoke()
-        Library:Notify("Applied No Smoke")
+        Library:Notify({ Title = "Rivals", Description = "Applied No Smoke", Time = 3 })
     end
 })
 WeaponGroup:AddButton({
@@ -3908,7 +3899,7 @@ WeaponGroup:AddButton({
     Func = function()
         ModSettings.NoRecoil = true
         applyNoRecoil()
-        Library:Notify("Applied No Recoil")
+        Library:Notify({ Title = "Rivals", Description = "Applied No Recoil", Time = 3 })
     end
 })
 WeaponGroup:AddButton({
@@ -3916,7 +3907,7 @@ WeaponGroup:AddButton({
     Func = function()
         ModSettings.NoFlash = true
         applyNoFlash()
-        Library:Notify("Applied No Flash")
+        Library:Notify({ Title = "Rivals", Description = "Applied No Flash", Time = 3 })
     end
 })
 
@@ -4206,7 +4197,7 @@ CosmeticGeneral:AddToggle("CosmeticEnabled", {
 CosmeticGeneral:AddDropdown("CosmeticWeapon", {
     Values = { "All", "Primary", "Secondary", "Melee", "Throwable" },
     Default = "All",
-    Search = true,
+    Searchable = true,
     Text = "Weapon",
     Callback = function(value)
         cosmeticApply("weapon", value)
@@ -4226,18 +4217,14 @@ CosmeticGeneral:AddButton({
         cosmeticRefreshCatalog()
     end,
 })
-CosmeticGeneral:AddLabel(function()
-    return cosmeticSupportedNote()
-end)
-CosmeticGeneral:AddLabel(function()
-    return cosmeticCatalogSummary()
-end)
+local CosmeticSupportLabel = CosmeticGeneral:AddLabel("Status: " .. cosmeticSupportedNote())
+local CosmeticCatalogLabel = CosmeticGeneral:AddLabel("" .. cosmeticCatalogSummary())
 
 local CosmeticSkins = Tabs.Cosmetic:AddLeftGroupbox("Skins", "sparkles")
 CosmeticOptions.Skin = CosmeticSkins:AddDropdown("CosmeticSkin", {
     Values = Cosmetic._catalog.Skins,
     Default = "None",
-    Search = true,
+    Searchable = true,
     Text = "Skin",
     Callback = function(value)
         cosmeticApply("skin", value)
@@ -4248,7 +4235,7 @@ local CosmeticWraps = Tabs.Cosmetic:AddRightGroupbox("Wraps", "palette")
 CosmeticOptions.Wrap = CosmeticWraps:AddDropdown("CosmeticWrap", {
     Values = Cosmetic._catalog.Wraps,
     Default = "None",
-    Search = true,
+    Searchable = true,
     Text = "Wrap",
     Callback = function(value)
         cosmeticApply("wrap", value)
@@ -4264,7 +4251,7 @@ local CosmeticExtras = Tabs.Cosmetic:AddRightGroupbox("Extras", "gem")
 CosmeticOptions.Charm = CosmeticExtras:AddDropdown("CosmeticCharm", {
     Values = Cosmetic._catalog.Charms,
     Default = "None",
-    Search = true,
+    Searchable = true,
     Text = "Charm",
     Callback = function(value)
         cosmeticApply("charm", value)
@@ -4273,7 +4260,7 @@ CosmeticOptions.Charm = CosmeticExtras:AddDropdown("CosmeticCharm", {
 CosmeticOptions.Finisher = CosmeticExtras:AddDropdown("CosmeticFinisher", {
     Values = Cosmetic._catalog.Finishers,
     Default = "None",
-    Search = true,
+    Searchable = true,
     Text = "Finisher",
     Callback = function(value)
         cosmeticApply("finisher", value)
@@ -4282,7 +4269,7 @@ CosmeticOptions.Finisher = CosmeticExtras:AddDropdown("CosmeticFinisher", {
 CosmeticOptions.Emote = CosmeticExtras:AddDropdown("CosmeticEmote", {
     Values = Cosmetic._catalog.Emotes,
     Default = "None",
-    Search = true,
+    Searchable = true,
     Text = "Emote",
     Callback = function(value)
         cosmeticApply("emote", value)
@@ -4299,7 +4286,7 @@ CosmeticUnlock:AddDropdown("CosmeticUnlockedTypes", {
     Values = { "Skin", "Wrap", "Charm", "Finisher", "Emote" },
     Default = { Skin = true, Wrap = true, Charm = true, Finisher = true, Emote = true },
     Multi = true,
-    Search = true,
+    Searchable = true,
     Text = "Cosmetics",
     Callback = cosmeticApplyUnlockedTypes,
 })
@@ -4307,7 +4294,7 @@ CosmeticUnlock:AddDropdown("CosmeticUnlockedRarities", {
     Values = { "Legendary", "Mythical", "Unobtainable" },
     Default = { Legendary = true, Mythical = true, Unobtainable = true },
     Multi = true,
-    Search = true,
+    Searchable = true,
     Text = "Rarities",
     Callback = cosmeticApplyUnlockedRarities,
 })
@@ -4336,6 +4323,7 @@ task.delay(1.25, function()
 end)
 
 local MenuGroup = Tabs["UI Settings"]:AddLeftGroupbox("Menu", "wrench")
+
 MenuGroup:AddToggle("KeybindMenuOpen", {
     Default = Library.KeybindFrame.Visible,
     Text = "Open Keybind Menu",
@@ -4350,12 +4338,28 @@ MenuGroup:AddToggle("ShowCustomCursor", {
         Library.ShowCustomCursor = value
     end,
 })
+MenuGroup:AddToggle("AlwaysOnTop", {
+    Text = "Always On Top",
+    Default = Window.AlwaysOnTop,
+    Callback = function(value)
+        Window:SetAlwaysOnTop(value)
+    end,
+})
 MenuGroup:AddDropdown("NotificationSide", {
     Values = { "Left", "Right" },
     Default = "Right",
     Text = "Notification Side",
     Callback = function(value)
         Library:SetNotifySide(value)
+    end,
+})
+MenuGroup:AddDropdown("DPIDropdown", {
+    Values = { "50%", "75%", "100%", "125%", "150%", "175%", "200%" },
+    Default = "100%",
+    Text = "DPI Scale",
+    Callback = function(value)
+        local DPI = tonumber(value:gsub("%%", ""))
+        if DPI then Library:SetDPIScale(DPI) end
     end,
 })
 MenuGroup:AddSlider("UICornerSlider", {
@@ -4368,10 +4372,14 @@ MenuGroup:AddSlider("UICornerSlider", {
         Window:SetCornerRadius(value)
     end,
 })
-MenuGroup:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", {
-    Default = "RightShift",
-    NoUI = true,
-    Text = "Menu keybind",
+MenuGroup:AddDivider()
+MenuGroup:AddLabel("Menu bind")
+    :AddKeyPicker("MenuKeybind", { Default = "RightShift", NoUI = true, Text = "Menu keybind" })
+MenuGroup:AddButton({
+    Text = "Unload",
+    Func = function()
+        Library:Unload()
+    end,
 })
 
 Library.ToggleKeybind = Options.MenuKeybind
@@ -4379,7 +4387,7 @@ Library.ToggleKeybind = Options.MenuKeybind
 ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
 SaveManager:IgnoreThemeSettings()
-SaveManager:SetIgnoreIndexes({"MenuKeybind"})
+SaveManager:SetIgnoreIndexes({ "MenuKeybind" })
 ThemeManager:SetFolder("RivalsScript")
 SaveManager:SetFolder("RivalsScript/configs")
 SaveManager:BuildConfigSection(Tabs["UI Settings"])
