@@ -31,6 +31,7 @@ local Tabs = {
     Main = Window:AddTab({ Name = "Main", Icon = "crosshair", Description = "Aimbot & Ragebot" }),
     Character = Window:AddTab({ Name = "Character", Icon = "user", Description = "Character utilities" }),
     Combat = Window:AddTab({ Name = "Combat", Icon = "sword", Description = "Combat utilities" }),
+    Cosmetic = Window:AddTab({ Name = "Cosmetic", Icon = "shirt", Description = "Skins, wraps, charms and finishers" }),
     Misc = Window:AddTab({ Name = "Misc", Icon = "settings", Description = "Miscellaneous" }),
     ["UI Settings"] = Window:AddTab({ Name = "UI Settings", Icon = "settings", Description = "Configure the menu" }),
 }
@@ -99,17 +100,6 @@ local Aimbot = {
     shotDelay = 0.05,
     cooldown = 0.2,
     fireMode = "FireServer",
-
-    -- Triggerbot
-    triggerEnabled = false,
-    triggerKey = false,
-    triggerReactionTime = 0,
-    triggerReleaseTime = 0,
-    triggerNotDeflecting = true,
-    triggerNotShielded = true,
-    triggerTargetParts = { Head = true, HumanoidRootPart = true, UpperTorso = true, Torso = true },
-    _triggerElapsed = 0,
-    _triggerReleaseRemaining = 0,
 
     _state = "Idle",
     _trajectory = nil,
@@ -485,182 +475,6 @@ local undergroundOldVel = nil
 local undergroundOldAngVel = nil
 local undergroundOldCamCF = nil
 local undergroundFirstRun = true
-
--- Character movement (ported from Kicia Movement: Flight / Noclip / Auto Strafe / Long Jump)
-local CharacterMovement = {
-    flightEnabled = false,
-    flightKey = false,
-    flightSpeed = 100,
-    noclipEnabled = false,
-    noclipKey = false,
-    autostrafeEnabled = false,
-    autostrafeKey = false,
-    autostrafeSpeed = 100,
-    longJumpEnabled = false,
-    longJumpKey = false,
-    longJumpMode = "Under Feet",
-    longJumpForce = 60,
-    longJumpUpward = 20,
-    longJumpBehind = 8,
-    _longJumpArmed = true,
-    _noclipParts = {},
-    _flightVelocity = nil,
-    _flightAttachment = nil,
-}
-
-local function movementRoot()
-    local char = lp.Character
-    if not char then return nil end
-    return char:FindFirstChild("HumanoidRootPart")
-end
-
-local function movementHumanoid()
-    local char = lp.Character
-    if not char then return nil end
-    return char:FindFirstChildOfClass("Humanoid")
-end
-
-local function movementDirection()
-    local hum = movementHumanoid()
-    if hum and hum.MoveDirection.Magnitude > 0 then
-        return hum.MoveDirection
-    end
-    local cam = Workspace.CurrentCamera
-    if cam then
-        local v = cam.CFrame.LookVector
-        local flat = Vector3.new(v.X, 0, v.Z)
-        if flat.Magnitude > 0 then
-            return flat.Unit
-        end
-    end
-    return Vector3.zero
-end
-
-local function clearFlightMover()
-    if CharacterMovement._flightVelocity then
-        CharacterMovement._flightVelocity:Destroy()
-        CharacterMovement._flightVelocity = nil
-    end
-    if CharacterMovement._flightAttachment then
-        CharacterMovement._flightAttachment:Destroy()
-        CharacterMovement._flightAttachment = nil
-    end
-end
-
-local function updateFlight()
-    local root = movementRoot()
-    local hum = movementHumanoid()
-    if not root or not hum or hum.Health <= 0 then
-        clearFlightMover()
-        return
-    end
-    if not (CharacterMovement.flightEnabled and CharacterMovement.flightKey) then
-        clearFlightMover()
-        return
-    end
-
-    local attachment = CharacterMovement._flightAttachment
-    if not attachment or attachment.Parent ~= root then
-        clearFlightMover()
-        attachment = Instance.new("Attachment")
-        attachment.Name = "CrefyFlightAttachment"
-        attachment.Parent = root
-        CharacterMovement._flightAttachment = attachment
-
-        local velocity = Instance.new("LinearVelocity")
-        velocity.Name = "CrefyFlightVelocity"
-        velocity.Attachment0 = attachment
-        velocity.RelativeTo = Enum.ActuatorRelativeTo.World
-        velocity.MaxForce = math.huge
-        velocity.VectorVelocity = Vector3.zero
-        velocity.Parent = root
-        CharacterMovement._flightVelocity = velocity
-    end
-
-    local dir = movementDirection()
-    if dir.Magnitude > 0 then dir = dir.Unit end
-    CharacterMovement._flightVelocity.VectorVelocity = dir * CharacterMovement.flightSpeed
-end
-
-local function setNoclip(enabled)
-    CharacterMovement.noclipEnabled = enabled
-    if not enabled then
-        for part, original in pairs(CharacterMovement._noclipParts) do
-            if part and part.Parent then
-                part.CanCollide = original
-            end
-        end
-        table.clear(CharacterMovement._noclipParts)
-        return
-    end
-
-    local char = lp.Character
-    if not char then return end
-    for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("BasePart") and CharacterMovement._noclipParts[part] == nil then
-            CharacterMovement._noclipParts[part] = part.CanCollide
-            part.CanCollide = false
-        end
-    end
-end
-
-local function updateNoclip()
-    if not (CharacterMovement.noclipEnabled and CharacterMovement.noclipKey) then
-        if CharacterMovement.noclipEnabled then
-            setNoclip(false)
-        end
-        return
-    end
-    local char = lp.Character
-    if not char then return end
-    for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("BasePart") then
-            if CharacterMovement._noclipParts[part] == nil then
-                CharacterMovement._noclipParts[part] = part.CanCollide
-            end
-            part.CanCollide = false
-        end
-    end
-end
-
-local function updateAutoStrafe(dt)
-    if not (CharacterMovement.autostrafeEnabled and CharacterMovement.autostrafeKey) then return end
-    local root = movementRoot()
-    local hum = movementHumanoid()
-    if not root or not hum or hum.Health <= 0 then return end
-    if not UserInputService:IsKeyDown(Enum.KeyCode.Space) then return end
-
-    local dir = movementDirection()
-    if dir.Magnitude <= 0 then return end
-    local offset = dir.Unit * (CharacterMovement.autostrafeSpeed / 100) * dt * 60
-    root.CFrame = root.CFrame + offset
-    root.AssemblyLinearVelocity = Vector3.new(0, root.AssemblyLinearVelocity.Y, 0)
-end
-
-local function launchLongJump()
-    if not CharacterMovement.longJumpEnabled then return end
-    local root = movementRoot()
-    local hum = movementHumanoid()
-    if not root or not hum or hum.Health <= 0 then return end
-
-    local cam = Workspace.CurrentCamera
-    local look = cam and cam.CFrame.LookVector or root.CFrame.LookVector
-    local flat = Vector3.new(look.X, 0, look.Z)
-    if flat.Magnitude < 0.001 then
-        local rlook = root.CFrame.LookVector
-        flat = Vector3.new(rlook.X, 0, rlook.Z)
-    end
-    if flat.Magnitude < 0.001 then return end
-
-    local dir = flat.Unit
-    if CharacterMovement.longJumpMode == "Under Feet" then
-        dir = (dir * CharacterMovement.longJumpBehind + Vector3.new(0, -0.25, 0)).Unit
-    end
-
-    hum:ChangeState(Enum.HumanoidStateType.Jumping)
-    root.AssemblyLinearVelocity = dir * CharacterMovement.longJumpForce
-        + Vector3.new(0, CharacterMovement.longJumpUpward, 0)
-end
 
 startUnderground = function()
     if undergroundConn then return end
@@ -1441,6 +1255,12 @@ local config = {
         auto = false,
         autoshoot = true,
         shootAttempts = 1,
+        shootFrames = 1,
+        stability = 0.15,
+        prioritizeHackers = false,
+        weaponEnabled = {primary = true, secondary = true, melee = true},
+        weaponPriority = {"primary", "secondary", "melee"},
+        onEmpty = "SwapOrReload",
         hitpart = "Head",
         lastchar = nil,
         lastplayer = nil,
@@ -1459,13 +1279,6 @@ local config = {
         customSide = 0,
         customVertical = 0,
         customRadius = 0,
-    },
-    evasion = {
-        mode = "Normal",
-        translocate = {
-            offset = -5,
-        },
-        connection = nil,
     },
     prediction = {
         enabled = false,
@@ -1489,13 +1302,24 @@ local config = {
         radius = 0,
         originalpos = nil
     },
+    evasion = {
+        mode = "Normal",
+        translocate = { offset = -5 },
+        controller = nil,
+    },
     state = {
         reloading = false,
         outofammo = false,
+        shootLockTarget = nil,
+        shootLockStartedAt = 0,
+        shootLockFrames = 0,
         csyncactive = false,
         reloadStartedAt = 0,
         reloadReadyAt = 0,
         reloadDelay = 0.5,
+        knifeHitboxWindowUntil = -1,
+        knifeAttackCooldown = -1,
+        knifeBackstabActive = false,
     },
     voidhide = {
         enabled = true,
@@ -1667,7 +1491,7 @@ local SLOTS = { primary = 1, secondary = 2, melee = 3 }
 local MELEE_NMS = {
     ["Battle Axe"] = true, ["Chainsaw"] = true, ["Daggers"] = true, ["Fists"] = true,
     ["Gunblade"] = true, ["Katana"] = true, ["Knife"] = true, ["Spear"] = true,
-    ["Scythe"] = true, ["Trowel"] = true, ["Maul"] = true, ["Riot Shield"] = true,
+    ["Scythe"] = true, ["Trowel"] = true, ["Maul"] = true,
 }
 local INFINITE_AMMO_WEAPONS = {
     ["Energy Rifle"] = true,
@@ -1680,12 +1504,49 @@ local function isInfiniteWeapon()
     return INFINITE_AMMO_WEAPONS[w] == true
 end
 
+local function selectedWeaponSlots()
+    local enabled = config.target.weaponEnabled or {}
+    local priority = config.target.weaponPriority or {"primary", "secondary", "melee"}
+    local slots = {}
+    for _, name in ipairs(priority) do
+        if enabled[name] then
+            slots[#slots + 1] = SLOTS[name]
+        end
+    end
+    if #slots == 0 then
+        slots[1] = SLOTS.primary
+    end
+    return slots
+end
+
+local function weaponSlotName(slot)
+    for name, idx in pairs(SLOTS) do
+        if idx == slot then return name end
+    end
+    return nil
+end
+
+local function isWeaponSelected(slot)
+    local name = weaponSlotName(slot)
+    return name ~= nil and config.target.weaponEnabled[name] == true
+end
+
 local function wantSlot()
-    return SLOTS[config.target.weaponPick or "primary"] or 1
+    local slots = selectedWeaponSlots()
+    return slots[1] or SLOTS.primary
 end
 
 local function pickMelee()
-    return (config.target.weaponPick or "primary") == "melee"
+    return config.target.weaponEnabled.melee == true
+        and not config.target.weaponEnabled.primary
+        and not config.target.weaponEnabled.secondary
+end
+
+local function chooseNextWeaponSlot(current)
+    for _, slot in ipairs(selectedWeaponSlots()) do
+        if slot ~= current then return slot end
+    end
+    return nil
 end
 
 local function getammo()
@@ -1810,9 +1671,52 @@ local function rageOn()
     return config.target.rageMasterOn == true
 end
 
+local function requestRageReload()
+    if isInfiniteWeapon() then return false end
+    local lf = modules.fighter and modules.fighter.LocalFighter
+    local item = lf and lf.EquippedItem
+    if not item or itemMelee(item) or itemReload() then return false end
+    local ok = false
+    pcall(function()
+        if keypress then
+            keypress(0x52)
+            task.wait(0.02)
+            if keyrelease then keyrelease(0x52) end
+            ok = true
+        else
+            local vim = game:GetService("VirtualInputManager")
+            vim:SendKeyEvent(true, Enum.KeyCode.R, false, game)
+            task.wait(0.02)
+            vim:SendKeyEvent(false, Enum.KeyCode.R, false, game)
+            ok = true
+        end
+    end)
+    if ok then config.state.reloadAttemptAt = tick() end
+    return ok
+end
+
 local function eqSlot()
     if not rageOn() then return end
+    local current = (modules.fighter and modules.fighter.LocalFighter and modules.fighter.LocalFighter.EquippedItem)
+    local currentSlot = current and whichSlot(current) or nil
     local want = wantSlot()
+
+    if currentSlot and isWeaponSelected(currentSlot) then
+        local ammo, _, melee = getammo()
+        local empty = not melee and not isInfiniteWeapon() and (tonumber(ammo) or 0) <= 0
+        if not empty then return end
+        local policy = config.target.onEmpty or "SwapOrReload"
+        if policy == "Reload" then
+            requestRageReload()
+            return
+        elseif policy == "SwapOrReload" and requestRageReload() then
+            return
+        end
+        want = chooseNextWeaponSlot(currentSlot) or want
+    elseif currentSlot and isWeaponSelected(currentSlot) then
+        return
+    end
+
     local lf = modules.fighter and modules.fighter.LocalFighter
     if not lf then return end
     local eq = lf.EquippedItem
@@ -1969,10 +1873,27 @@ local function valid(char)
     return true
 end
 
+local function isPrioritizedHacker(plr, char)
+    if not config.target.prioritizeHackers then return false end
+    local collection = game:GetService("CollectionService")
+    for _, tag in ipairs({"Hacker", "HackerPlayer", "HackerTag"}) do
+        local ok, tagged = pcall(function()
+            return collection:HasTag(plr, tag) or (char and collection:HasTag(char, tag))
+        end)
+        if ok and tagged then return true end
+        local a = plr:GetAttribute(tag)
+        local b = char and char:GetAttribute(tag)
+        if a == true or a == 1 or a == "true" or b == true or b == 1 or b == "true" then
+            return true
+        end
+    end
+    return false
+end
+
 local function nearest()
     local cursorpos = userinput:GetMouseLocation()
-    local besttarget = nil
-    local bestdistance = math.huge
+    local besttarget, bestdistance = nil, math.huge
+    local hackerTarget, hackerDistance = nil, math.huge
     for _, targetplayer in players:GetPlayers() do
         if targetplayer ~= player and targetplayer.Character then
             local char = targetplayer.Character
@@ -1983,15 +1904,17 @@ local function nearest()
                     if onscreen and screenpos then
                         local distance = (Vector2.new(screenpos.X, screenpos.Y) - cursorpos).Magnitude
                         if distance < bestdistance then
-                            besttarget = char
-                            bestdistance = distance
+                            besttarget, bestdistance = char, distance
+                        end
+                        if isPrioritizedHacker(targetplayer, char) and distance < hackerDistance then
+                            hackerTarget, hackerDistance = char, distance
                         end
                     end
                 end
             end
         end
     end
-    return besttarget
+    return hackerTarget or besttarget
 end
 
 local function hitpartfromname(character, partname)
@@ -2198,8 +2121,7 @@ local function refreshAtk()
 end
 
 local function stopsync()
-    if not config.state.csyncactive and not config.evasion.connection and not config.orbit.connection then return end
-    stoptranslocate()
+    if not config.state.csyncactive and not config.evasion.controller then return end
     if config.orbit.connection then
         config.orbit.connection:Disconnect()
         config.orbit.connection = nil
@@ -2223,6 +2145,13 @@ local function stopsync()
     config.orbit.savedpos = nil
     config.voidspam.phase = nil
     config.voidspam.shotIssued = false
+    if config.evasion.controller then
+        local controller = config.evasion.controller
+        if controller.root and controller.root.Parent and controller.clientCFrame and not getgenv().InstanceUndergroundEnabled then
+            pcall(function() controller.root.CFrame = controller.clientCFrame end)
+        end
+        destroyTranslocateController()
+    end
     oldpos = nil
 end
 
@@ -2396,169 +2325,83 @@ local stopvoid = function()
     end
 end
 
-local translocateController = nil
-
-local function ensureTranslocateController()
-    if translocateController then
-        return translocateController
+local function destroyTranslocateController()
+    local controller = config.evasion.controller
+    if not controller then return end
+    if controller.renderBind then
+        pcall(function() runsvc:UnbindFromRenderStep(controller.renderBind) end)
     end
-
-    local rootPart = localfighter and localfighter.Entity and localfighter.Entity.RootPart
-    if not rootPart then
-        return nil
-    end
-
-    local bindId = "CrefyTranslocate_" .. tostring(math.random(100000, 999999))
-    translocateController = {
-        _rootPart = rootPart,
-        _boundId = bindId,
-        _oldCFrame = rootPart.CFrame,
-        _cframe = nil,
-    }
-
-    function translocateController:SetServerCFrame(cf)
-        self._cframe = cf
-    end
-
-    function translocateController:GetServerCFrame()
-        return self._cframe or (self._rootPart and self._rootPart.CFrame)
-    end
-
-    function translocateController:GetClientCFrame()
-        return self._oldCFrame or (self._rootPart and self._rootPart.CFrame)
-    end
-
-    function translocateController:HeartbeatUpdate()
-        local root = self._rootPart
-        local serverCF = self._cframe
-        if not root or not root.Parent or not serverCF then
-            return
-        end
-        self._oldCFrame = root.CFrame
-        root.CFrame = serverCF
-    end
-
-    function translocateController:Destroy()
-        pcall(function()
-            RunService:UnbindFromRenderStep(self._boundId)
-        end)
-        self._cframe = nil
-        self._oldCFrame = nil
-        self._rootPart = nil
-    end
-
-    RunService:BindToRenderStep(
-        bindId,
-        Enum.RenderPriority.First.Value,
-        function()
-            local self = translocateController
-            if not self or not self._rootPart or not self._rootPart.Parent then
-                return
-            end
-            if self._oldCFrame then
-                self._rootPart.CFrame = self._oldCFrame
-                self._oldCFrame = nil
-            end
-        end
-    )
-
-    return translocateController
+    config.evasion.controller = nil
 end
 
-local function getTranslocateCFrame(clientCFrame, hasTarget)
-    -- Kicia parity: if there is no active target selection, use the
-    -- out-of-bounds helper fallback. The exact helper is internal to Kicia;
-    -- the target-present path below is reproduced exactly from source.
-    if not hasTarget then
-        return clientCFrame
+local function createTranslocateController()
+    if config.evasion.controller then return config.evasion.controller end
+    if not localfighter or not localfighter.Entity or not localfighter.Entity.RootPart then return nil end
+    local root = localfighter.Entity.RootPart
+    local controller = {
+        root = root,
+        clientCFrame = root.CFrame,
+        serverCFrame = nil,
+        renderBind = "Crefy_Translocate_" .. tostring(math.random(100000, 999999)),
+    }
+    function controller:GetClientCFrame()
+        return self.clientCFrame or self.root.CFrame
     end
-
-    local CollectionService = game:GetService("CollectionService")
-    local tagged = CollectionService:GetTagged("OutOfBoundsPart")
-
-    for _, part in ipairs(tagged) do
-        if part and part:IsA("BasePart") and part:GetAttribute("KillDelay") == 0 then
-            return part.CFrame * CFrame.new(
-                0,
-                -part.Size.Y / 2 + (config.evasion.translocate.offset or -5),
-                0
-            )
+    function controller:SetServerCFrame(cf)
+        self.serverCFrame = cf
+    end
+    function controller:Heartbeat()
+        if self.root and self.root.Parent and self.serverCFrame then
+            self.clientCFrame = self.root.CFrame
+            self.root.CFrame = self.serverCFrame
         end
     end
+    runsvc:BindToRenderStep(controller.renderBind, Enum.RenderPriority.First.Value, function()
+        if controller.root and controller.root.Parent and controller.clientCFrame and config.evasion.mode == "Translocate" then
+            pcall(function() controller.root.CFrame = controller.clientCFrame end)
+        end
+    end)
+    config.evasion.controller = controller
+    return controller
+end
 
-    -- The original helper falls back to a private CFrame generator when no
-    -- KillDelay==0 OutOfBoundsPart exists. That helper is not exposed by Crefy,
-    -- so keep the client CFrame instead of inventing a different destination.
+local function computeTranslocate(clientCFrame)
+    local collection = game:GetService("CollectionService")
+    for _, part in ipairs(collection:GetTagged("OutOfBoundsPart")) do
+        if part and part:IsA("BasePart") and part:GetAttribute("KillDelay") == 0 then
+            return part.CFrame * CFrame.new(0, -part.Size.Y / 2 + (config.evasion.translocate.offset or -5), 0)
+        end
+    end
     return clientCFrame
 end
 
-local function stoptranslocate()
-    if config.evasion.connection then
-        config.evasion.connection:Disconnect()
-        config.evasion.connection = nil
-    end
-
-    if translocateController then
-        local root = translocateController._rootPart
-        local restore = translocateController._oldCFrame
-        if root and root.Parent and restore and not getgenv().InstanceUndergroundEnabled then
-            pcall(function()
-                root.CFrame = restore
-            end)
-        end
-        translocateController:Destroy()
-        translocateController = nil
-    end
-end
-
-local function starttranslocate()
-    if config.evasion.connection then return end
-    if config.target.immune then return end
-    if not config.target.enabled or not config.target.character or not valid(config.target.character) then return end
-
-    local controller = ensureTranslocateController()
+local function startTranslocate()
+    if config.state.csyncactive then return end
+    if config.target.immune or not config.target.character or not valid(config.target.character) then return end
+    local controller = createTranslocateController()
     if not controller then return end
-
     config.state.csyncactive = true
     config.orbit.active = false
-    config.orbit.savedpos = nil
-
-    config.evasion.connection = runsvc.Heartbeat:Connect(function()
-        if config.evasion.mode ~= "Translocate"
-            or not config.target.enabled
-            or not config.target.character
-            or not valid(config.target.character) then
+    config.orbit.connection = runsvc.Heartbeat:Connect(function()
+        if not config.state.csyncactive or config.evasion.mode ~= "Translocate" then return end
+        if config.target.immune or not config.target.character or not valid(config.target.character) then
             stopsync()
             return
         end
-
-        if config.target.immune then
+        if not controller.root or not controller.root.Parent then
             stopsync()
             return
         end
-
-        local root = controller._rootPart
-        if not root or not root.Parent then
-            stopsync()
-            return
-        end
-
-        -- Match the original order: read the client CFrame first, compute
-        -- the Translocate server CFrame, then apply it through the controller.
-        local clientCFrame = controller:GetClientCFrame()
-        local serverCFrame = getTranslocateCFrame(clientCFrame, config.target.character ~= nil)
-        if serverCFrame then
-            controller:SetServerCFrame(serverCFrame)
-            config.orbit.serverpos = serverCFrame.Position
-            controller:HeartbeatUpdate()
-        end
+        local clientCF = controller:GetClientCFrame()
+        controller:SetServerCFrame(computeTranslocate(clientCF))
+        config.orbit.serverpos = controller.serverCFrame and controller.serverCFrame.Position or nil
+        controller:Heartbeat()
     end)
 end
 
 local function startsync()
     if config.evasion.mode == "Translocate" then
-        if config.state.csyncactive then return end
-        starttranslocate()
+        startTranslocate()
         return
     end
     if config.state.csyncactive then return end
@@ -2681,6 +2524,104 @@ local function startsync()
     end)
 end
 
+local function resetShootLock()
+    config.state.shootLockTarget = nil
+    config.state.shootLockStartedAt = 0
+    config.state.shootLockFrames = 0
+end
+
+local function shootLockReady(target)
+    local now = tick()
+    local stability = math.clamp(tonumber(config.target.stability) or 0.15, 0, 1.5)
+    local frames = math.clamp(math.floor(tonumber(config.target.shootFrames) or 1), 1, 5)
+    if config.state.shootLockTarget ~= target then
+        config.state.shootLockTarget = target
+        config.state.shootLockStartedAt = now
+        config.state.shootLockFrames = 0
+    end
+    config.state.shootLockFrames = config.state.shootLockFrames + 1
+    return (now - config.state.shootLockStartedAt) >= stability and config.state.shootLockFrames >= frames
+end
+
+local KICIA_KNIFE_HITBOX_WINDOW = 0.625
+local KICIA_KNIFE_ATTACK_COOLDOWN = 1.25
+
+local function resetKnifeState()
+    config.state.knifeHitboxWindowUntil = -1
+    config.state.knifeAttackCooldown = -1
+    config.state.knifeBackstabActive = false
+end
+
+local function isKnifeItem(item)
+    if not item then return false end
+    local name = ""
+    pcall(function() name = tostring(item:Get("Name") or item.Name or "") end)
+    return name == "Knife"
+end
+
+local function buildKiciaMeleePayload(item, hitPart, attackCF, heavy)
+    if not item or not hitPart or not attackCF then return nil end
+    local objectId = item:Get("ObjectID")
+    if not objectId or not modules.utility or not modules.enums then return nil end
+
+    local encoded = modules.utility:EncodeCFrame(attackCF)
+    local inner = {
+        [utf8.char(0)] = encoded,
+        [utf8.char(1)] = encoded,
+        [utf8.char(2)] = hitPart,
+        [utf8.char(3)] = modules.utility:EncodeCFrame(CFrame.new(0.43, 0.25, 0.42)),
+    }
+    return {
+        objectId = objectId,
+        action = heavy and "StartAiming" or "StartShooting",
+        animation = heavy and "HeavyAttackAnimation1" or "AttackAnimation1",
+        payload = {
+            [utf8.char(1)] = inner,
+            [utf8.char(2)] = modules.enums:ToEnum(heavy and "HeavyAttackAnimation1" or "AttackAnimation1"),
+        },
+    }
+end
+
+local function fireKiciaMelee(item, hitPart, attackCF, heavy)
+    local spec = buildKiciaMeleePayload(item, hitPart, attackCF, heavy)
+    if not spec then return false end
+    local ok = false
+    pcall(function()
+        replicatedstorage.Remotes.Replication.Fighter.UseItem:FireServer(
+            spec.objectId,
+            modules.enums:ToEnum(spec.action),
+            spec.payload,
+            nil
+        )
+        ok = true
+    end)
+    return ok
+end
+
+local function planKiciaKnife(targetChar, item, hitPart)
+    if not targetChar or not item or not hitPart then
+        resetKnifeState()
+        return "None"
+    end
+
+    local now = os.clock()
+    if now < (config.state.knifeHitboxWindowUntil or -1) then
+        return isKnifeItem(item) and "KnifeHeavy" or "MeleeAttack"
+    end
+
+    if not shootLockReady(targetChar) then return "Hold" end
+    if now < (config.state.knifeAttackCooldown or -1) then return "Hold" end
+
+    if isKnifeItem(item) then
+        -- Kicia's RecordBackstab timing: 0.625s hitbox window, 1.25s cooldown.
+        config.state.knifeHitboxWindowUntil = now + KICIA_KNIFE_HITBOX_WINDOW
+        config.state.knifeAttackCooldown = now + KICIA_KNIFE_ATTACK_COOLDOWN
+        config.state.knifeBackstabActive = true
+        return "KnifeHeavy"
+    end
+    return "MeleeAttack"
+end
+
 local function autoshoot()
     if not config.target.enabled or not config.target.character or not valid(config.target.character) or not config.target.autoshoot then return end
     if config.voidspam.enabled and config.voidspam.phase == "hide" then return end
@@ -2696,9 +2637,42 @@ local function autoshoot()
         if not canuse() then return end
     end
     local targetChar = config.target.character
-    if not valid(targetChar) then return end
+    if not valid(targetChar) then
+        resetShootLock()
+        return
+    end
     local hitPart = hitpartfromname(targetChar, config.target.hitpart)
     if not hitPart then return end
+
+    local equipped = lf.EquippedItem
+    local melee = false
+    pcall(function() melee = itemMelee(equipped) end)
+    if melee then
+        local origin
+        if config.state.csyncactive and config.orbit.serverpos then
+            origin = config.orbit.serverpos
+        else
+            local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            origin = root and root.Position or nil
+        end
+        if not origin then return end
+
+        local targetPos = predict(hitPart, origin)
+        local attackCF = CFrame.lookAt(origin, targetPos)
+        local action = planKiciaKnife(targetChar, equipped, hitPart)
+        if action == "Hold" or action == "None" then return end
+
+        if fireKiciaMelee(equipped, hitPart, attackCF, action == "KnifeHeavy") then
+            ragePerf.lastAttackTick = tick()
+            if config.voidspam.enabled and config.voidspam.phase == "shoot" then
+                config.voidspam.shotIssued = true
+            end
+            hideShot()
+        end
+        return
+    end
+
+    if not shootLockReady(targetChar) then return end
     local shootPos
     local targetPos
     if vhState and vhState.active and checksling then
@@ -2809,6 +2783,8 @@ bindvulnerable(function(plr)
 end)
 
 local function cleartarget()
+    resetShootLock()
+    resetKnifeState()
     config.target.enabled = false
     stopsync()
     config.target.character = nil
@@ -2821,6 +2797,10 @@ end
 
 local function settarget(char)
     if not char then return end
+    if config.target.character ~= char then
+        resetKnifeState()
+        resetShootLock()
+    end
     local targetplr = players:GetPlayerFromCharacter(char)
     config.target.enabled = true
     config.target.character = char
@@ -2991,34 +2971,9 @@ runsvc.RenderStepped:Connect(function()
     end
 end)
 
-runsvc.Heartbeat:Connect(function(dt)
-    updateFlight()
-    updateNoclip()
-    updateAutoStrafe(dt)
+runsvc.Heartbeat:Connect(function()
     fflag()
     updatesling()
-
-    do
-        if Aimbot.triggerEnabled and Aimbot.triggerKey then
-            local hit = triggerbotCheckCrosshair()
-            if hit then
-                Aimbot._triggerElapsed = Aimbot._triggerElapsed + dt
-            else
-                Aimbot._triggerElapsed = 0
-            end
-
-            if hit and Aimbot._triggerElapsed >= Aimbot.triggerReactionTime then
-                Aimbot._triggerReleaseRemaining = Aimbot.triggerReleaseTime
-                triggerbotFire()
-            elseif Aimbot._triggerReleaseRemaining > 0 then
-                Aimbot._triggerReleaseRemaining = math.max(0, Aimbot._triggerReleaseRemaining - dt)
-                triggerbotFire()
-            end
-        else
-            Aimbot._triggerElapsed = 0
-            Aimbot._triggerReleaseRemaining = 0
-        end
-    end
     tickAmmo()
     if config.target.auto and not config.target.manualkey then
         local current, _, melee = getammo()
@@ -3058,8 +3013,6 @@ Ragebot.valid = valid
 Ragebot.player = player
 Ragebot.eqSlot = eqSlot
 Ragebot.refreshAtk = refreshAtk
-Ragebot.startSync = startsync
-Ragebot.stopSync = stopsync
 
 do
 local config = Ragebot.config
@@ -3317,6 +3270,320 @@ end
 end
 end
 
+-- Cosmetic state/adaptation. Kicia builds its catalog from CosmeticLibrary.Cosmetics,
+-- classifying entries by Type and using the entry key as the selectable cosmetic name.
+local Cosmetic = {
+    enabled = false,
+    weapon = "All",
+    skin = "None",
+    wrap = "None",
+    charm = "None",
+    finisher = "None",
+    emote = "None",
+    inverted = false,
+    preview = true,
+    unlockerEnabled = false,
+    unlockedTypes = { Skin = true, Wrap = true, Charm = true, Finisher = true, Emote = true },
+    unlockedRarities = { Legendary = true, Mythical = true, Unobtainable = true },
+    _adapter = nil,
+    _library = nil,
+    _catalog = {
+        Skins = { "None" },
+        Wraps = { "None" },
+        Charms = { "None" },
+        Finishers = { "None" },
+        Emotes = { "None" },
+    },
+}
+
+local CosmeticOptions = {}
+
+local function cosmeticWrapNative(native, config)
+    if not native and not config then return false end
+    local adapter = {}
+    adapter._native = native
+    adapter._config = config
+
+    function adapter:SetEnabled(value)
+        if self._native and type(self._native.SetSkinChangerEnabled) == "function" then
+            return pcall(self._native.SetSkinChangerEnabled, self._native, value)
+        end
+        return false
+    end
+
+    function adapter:SetChoice(weapon, kind, value, inverted)
+        if not self._native then return false end
+        local targets = {}
+        if weapon == "All" then
+            targets = { "Primary", "Secondary", "Melee", "Throwable" }
+        else
+            targets = { weapon }
+        end
+
+        local any = false
+        for _, target in ipairs(targets) do
+            if value == nil or value == "None" then
+                if type(self._native.ClearSkinChangerSelection) == "function" then
+                    pcall(self._native.ClearSkinChangerSelection, self._native, target, {
+                        kind = kind == "skin" and "Skin"
+                            or kind == "wrap" and "Wrap"
+                            or kind == "charm" and "Charm"
+                            or kind == "finisher" and "Finisher"
+                            or "Emote"
+                    })
+                    any = true
+                end
+            else
+                local choiceKind = kind == "skin" and "Skin"
+                    or kind == "wrap" and "Wrap"
+                    or kind == "charm" and "Charm"
+                    or kind == "finisher" and "Finisher"
+                    or "Emote"
+                local choice = { kind = choiceKind, name = value }
+                if choiceKind == "Wrap" then
+                    choice.name = nil
+                    choice.wrap = { name = value, inverted = inverted == true }
+                end
+                local ok = pcall(self._native.SetSkinChangerChoice, self._native, target, choice)
+                if ok then any = true end
+            end
+        end
+        return any
+    end
+
+    function adapter:SetWrapInverted(weapon, value)
+        return self:SetChoice(weapon, "wrap", Cosmetic.wrap, value)
+    end
+
+    function adapter:SetUnlockerEnabled(value)
+        if self._native and type(self._native.SetUnlockerEnabled) == "function" then
+            return pcall(self._native.SetUnlockerEnabled, self._native, value)
+        end
+        return false
+    end
+
+    function adapter:SetUnlockedTypes(value)
+        if self._config and type(self._config.SetUnlockedTypes) == "function" then
+            return pcall(self._config.SetUnlockedTypes, self._config, value)
+        end
+        return false
+    end
+
+    function adapter:SetUnlockedRarities(value)
+        if self._config and type(self._config.SetUnlockedRarities) == "function" then
+            return pcall(self._config.SetUnlockedRarities, self._config, value)
+        end
+        return false
+    end
+
+    return adapter
+end
+
+local function cosmeticDiscoverNative()
+    local explicit = rawget(getgenv(), "CrefyCosmeticsAdapter")
+    if type(explicit) == "table" then return explicit end
+
+    local roots = {
+        game:GetService("ReplicatedStorage"),
+        player:FindFirstChild("PlayerScripts"),
+    }
+    local candidates = {}
+    local seen = {}
+    for _, root in ipairs(roots) do
+        if root then
+            for _, inst in ipairs(root:GetDescendants()) do
+                if inst:IsA("ModuleScript") then
+                    local n = inst.Name:lower()
+                    if n:find("cosmetic", 1, true)
+                        or n:find("skin", 1, true)
+                        or n:find("loadout", 1, true)
+                        or n:find("inventory", 1, true) then
+                        candidates[#candidates + 1] = inst
+                    end
+                end
+            end
+        end
+    end
+
+    local checked = 0
+    for _, module in ipairs(candidates) do
+        if checked >= 80 then break end
+        if not seen[module] then
+            seen[module] = true
+            checked += 1
+            local ok, result = pcall(require, module)
+            if ok and type(result) == "table" then
+                local native = result
+                local config = nil
+                if type(result.cosmetics) == "table" then
+                    native = result.cosmetics
+                    config = result.cosmeticsConfig
+                end
+                if type(native.SetSkinChangerChoice) == "function"
+                    or type(native.SetSkinChangerEnabled) == "function"
+                    or type(native.SetUnlockerEnabled) == "function" then
+                    return cosmeticWrapNative(native, config)
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function cosmeticTryAdapter()
+    if Cosmetic._adapter ~= nil then
+        return Cosmetic._adapter
+    end
+    Cosmetic._adapter = cosmeticDiscoverNative()
+    if not Cosmetic._adapter then
+        Cosmetic._adapter = false
+    end
+    return Cosmetic._adapter
+end
+
+local function cosmeticApply(kind, value)
+    if kind == "weapon" then
+        Cosmetic.weapon = value
+        return
+    end
+    Cosmetic[kind] = value
+    local adapter = cosmeticTryAdapter()
+    if adapter and type(adapter.SetChoice) == "function" then
+        pcall(adapter.SetChoice, adapter, Cosmetic.weapon, kind, value, Cosmetic.inverted)
+    end
+end
+
+local function cosmeticApplyEnabled(value)
+    Cosmetic.enabled = value
+    local adapter = cosmeticTryAdapter()
+    if adapter and type(adapter.SetEnabled) == "function" then
+        pcall(adapter.SetEnabled, adapter, value)
+    end
+end
+
+local function cosmeticApplyInverted(value)
+    Cosmetic.inverted = value
+    local adapter = cosmeticTryAdapter()
+    if adapter and type(adapter.SetWrapInverted) == "function" then
+        pcall(adapter.SetWrapInverted, adapter, Cosmetic.weapon, value)
+    end
+end
+
+local function cosmeticApplyUnlocker(value)
+    Cosmetic.unlockerEnabled = value
+    local adapter = cosmeticTryAdapter()
+    if adapter and type(adapter.SetUnlockerEnabled) == "function" then
+        pcall(adapter.SetUnlockerEnabled, adapter, value)
+    end
+end
+
+local function cosmeticApplyUnlockedTypes(value)
+    Cosmetic.unlockedTypes = value
+    local adapter = cosmeticTryAdapter()
+    if adapter and type(adapter.SetUnlockedTypes) == "function" then
+        pcall(adapter.SetUnlockedTypes, adapter, value)
+    end
+end
+
+local function cosmeticApplyUnlockedRarities(value)
+    Cosmetic.unlockedRarities = value
+    local adapter = cosmeticTryAdapter()
+    if adapter and type(adapter.SetUnlockedRarities) == "function" then
+        pcall(adapter.SetUnlockedRarities, adapter, value)
+    end
+end
+
+local function cosmeticFindLibrary()
+    if Cosmetic._library ~= nil then
+        return Cosmetic._library
+    end
+
+    local roots = {
+        game:GetService("ReplicatedStorage"),
+        player:FindFirstChild("PlayerScripts"),
+    }
+    for _, root in ipairs(roots) do
+        if root then
+            local found = root:FindFirstChild("CosmeticLibrary", true)
+            if found and found:IsA("ModuleScript") then
+                local ok, result = pcall(require, found)
+                if ok and type(result) == "table" then
+                    Cosmetic._library = result
+                    return result
+                end
+            end
+        end
+    end
+    Cosmetic._library = false
+    return nil
+end
+
+local function cosmeticRefreshCatalog()
+    local library = cosmeticFindLibrary()
+    local catalog = {
+        Skins = { "None" },
+        Wraps = { "None" },
+        Charms = { "None" },
+        Finishers = { "None" },
+        Emotes = { "None" },
+    }
+
+    local source = library and (library.Cosmetics or library)
+    if type(source) == "table" then
+        for id, entry in pairs(source) do
+            if type(entry) == "table" then
+                local kind = entry.Type
+                if kind == "Skin" then
+                    table.insert(catalog.Skins, tostring(id))
+                elseif kind == "Wrap" then
+                    table.insert(catalog.Wraps, tostring(id))
+                elseif kind == "Charm" then
+                    table.insert(catalog.Charms, tostring(id))
+                elseif kind == "Finisher" then
+                    table.insert(catalog.Finishers, tostring(id))
+                elseif kind == "Emote" then
+                    table.insert(catalog.Emotes, tostring(id))
+                end
+            end
+        end
+    end
+
+    for _, list in pairs(catalog) do
+        table.sort(list, function(a, b)
+            if a == "None" then return true end
+            if b == "None" then return false end
+            return a:lower() < b:lower()
+        end)
+    end
+    Cosmetic._catalog = catalog
+
+    if CosmeticOptions.Skin then CosmeticOptions.Skin:SetValues(catalog.Skins) end
+    if CosmeticOptions.Wrap then CosmeticOptions.Wrap:SetValues(catalog.Wraps) end
+    if CosmeticOptions.Charm then CosmeticOptions.Charm:SetValues(catalog.Charms) end
+    if CosmeticOptions.Finisher then CosmeticOptions.Finisher:SetValues(catalog.Finishers) end
+    if CosmeticOptions.Emote then CosmeticOptions.Emote:SetValues(catalog.Emotes) end
+
+    return library ~= nil, catalog
+end
+
+local function cosmeticCatalogSummary()
+    local c = Cosmetic._catalog
+    return string.format(
+        "Catalog: %d skins · %d wraps · %d charms · %d finishers · %d emotes",
+        math.max(0, #c.Skins - 1), math.max(0, #c.Wraps - 1),
+        math.max(0, #c.Charms - 1), math.max(0, #c.Finishers - 1), math.max(0, #c.Emotes - 1)
+    )
+end
+
+local function cosmeticSupportedNote()
+    local adapter = cosmeticTryAdapter()
+    local library = Cosmetic._library
+    if adapter and library then return "Native adapter + CosmeticLibrary detected" end
+    if adapter then return "Native cosmetic adapter detected" end
+    if library then return "CosmeticLibrary detected · catalog loaded" end
+    return "UI/state ready · no native cosmetic adapter exposed"
+end
+
 local LeftGroupBox = Tabs.Main:AddLeftGroupbox("Aimbot", "crosshair")
 
 LeftGroupBox:AddToggle("AimbotEnabled", {
@@ -3450,181 +3717,6 @@ FlickGroupBox:AddDropdown("FlickFireMode", {
     end
 })
 
-
-local function triggerbotHasGun()
-    local lf = localFighter
-    return lf and lf.EquippedItem ~= nil
-end
-
-local function triggerbotGetTargetPart(hitInstance)
-    if not hitInstance then return nil end
-    local model = hitInstance:FindFirstAncestorOfClass("Model")
-    if not model then return nil end
-
-    local hum = model:FindFirstChildOfClass("Humanoid")
-    if not hum or hum.Health <= 0 then return nil end
-
-    local plr = Players:GetPlayerFromCharacter(model)
-    if not plr or plr == lp then return nil end
-
-    local myTeam = lp:GetAttribute("TeamID")
-    local theirTeam = plr:GetAttribute("TeamID")
-    if myTeam ~= nil and theirTeam ~= nil and myTeam == theirTeam then
-        return nil
-    end
-
-    local env = lp:GetAttribute("EnvironmentID")
-    local theirEnv = plr:GetAttribute("EnvironmentID")
-    if env ~= nil and theirEnv ~= nil and env ~= theirEnv then
-        return nil
-    end
-
-    if Aimbot.triggerNotShielded and model:FindFirstChild("Shield", true) then
-        return nil
-    end
-
-    if Aimbot.triggerNotDeflecting then
-        local deflecting = model:GetAttribute("Deflecting")
-            or model:GetAttribute("IsDeflecting")
-            or model:GetAttribute("Parrying")
-        if deflecting == true then
-            return nil
-        end
-    end
-
-    if not Aimbot.triggerTargetParts[hitInstance.Name] then
-        return nil
-    end
-
-    return hitInstance
-end
-
-local function triggerbotCheckCrosshair()
-    if not Aimbot.triggerEnabled or not Aimbot.triggerKey then return nil end
-    if not triggerbotHasGun() then return nil end
-
-    local cam = Workspace.CurrentCamera
-    if not cam then return nil end
-
-    local viewport = cam.ViewportSize
-    local ray = cam:ViewportPointToRay(viewport.X / 2, viewport.Y / 2)
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = { lp.Character }
-
-    local result = Workspace:Raycast(ray.Origin, ray.Direction * 2000, params)
-    if not result then return nil end
-
-    local part = triggerbotGetTargetPart(result.Instance)
-    if not part then return nil end
-    return part
-end
-
-local function triggerbotFire()
-    local lf = localFighter
-    local equipped = lf and lf.EquippedItem
-    if not equipped then return end
-
-    local objectId = equipped:Get("ObjectID")
-    if not objectId then return end
-
-    local root = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
-    if not root then return end
-
-    local hit = triggerbotCheckCrosshair()
-    if not hit then return end
-
-    local shootPos = root.Position
-    local targetPos = hit.Position
-    local aim = CFrame.new(shootPos, targetPos)
-    local data = {
-        [utf8.char(1)] = {
-            [utf8.char(0)] = Utility:EncodeCFrame(aim),
-            [utf8.char(1)] = Utility:EncodeCFrame(aim),
-            [utf8.char(2)] = hit,
-            [utf8.char(3)] = Utility:EncodeCFrame(CFrame.new(0.43, 0.25, 0.42)),
-        },
-    }
-
-    pcall(function()
-        ReplicatedStorage.Remotes.Replication.Fighter.UseItem:FireServer(
-            objectId,
-            EnumLibrary:ToEnum("StartShooting"),
-            data,
-            nil
-        )
-    end)
-end
-
-local triggerbotToggle = FlickGroupBox:AddToggle("TriggerEnabled", {
-    Text = "Enable Triggerbot",
-    Default = false,
-    Callback = function(v)
-        Aimbot.triggerEnabled = v
-        if not v then
-            Aimbot.triggerKey = false
-            Aimbot._triggerElapsed = 0
-            Aimbot._triggerReleaseRemaining = 0
-        end
-    end
-})
-triggerbotToggle:AddKeyPicker("TriggerKey", {
-    Text = "Triggerbot",
-    Default = "None",
-    Mode = "Hold",
-    NoUI = true,
-    SyncToggleState = false,
-    Callback = function(state)
-        Aimbot.triggerKey = state
-        if not state then
-            Aimbot._triggerElapsed = 0
-            Aimbot._triggerReleaseRemaining = 0
-        end
-    end
-})
-FlickGroupBox:AddSlider("TriggerReactionTime", {
-    Text = "Reaction Time",
-    Default = 0,
-    Min = 0,
-    Max = 0.5,
-    Rounding = 2,
-    Suffix = " s",
-    Callback = function(v) Aimbot.triggerReactionTime = v end
-})
-FlickGroupBox:AddSlider("TriggerReleaseTime", {
-    Text = "Release Time",
-    Default = 0,
-    Min = 0,
-    Max = 0.5,
-    Rounding = 2,
-    Suffix = " s",
-    Callback = function(v) Aimbot.triggerReleaseTime = v end
-})
-FlickGroupBox:AddToggle("TriggerNotDeflecting", {
-    Text = "Not Deflecting",
-    Default = true,
-    Callback = function(v) Aimbot.triggerNotDeflecting = v end
-})
-FlickGroupBox:AddToggle("TriggerNotShielded", {
-    Text = "Not Shielded",
-    Default = true,
-    Callback = function(v) Aimbot.triggerNotShielded = v end
-})
-
-local triggerParts = {
-    {"Head", "Head"},
-    {"Body", "HumanoidRootPart"},
-    {"UpperTorso", "UpperTorso"},
-    {"Torso", "Torso"},
-}
-for _, item in ipairs(triggerParts) do
-    FlickGroupBox:AddToggle("TriggerPart_" .. item[1], {
-        Text = "Target " .. item[1],
-        Default = Aimbot.triggerTargetParts[item[2]] == true,
-        Callback = function(v) Aimbot.triggerTargetParts[item[2]] = v end
-    })
-end
-
 local SilentGroupBox = Tabs.Main:AddLeftGroupbox("Silent Aim", "target")
 SilentGroupBox:AddToggle("SilentAimEnabled", {
     Text = "Enable Silent Aim",
@@ -3738,177 +3830,6 @@ CharacterGroupBox:AddInput("UndergroundCustomDepth", {
     end
 })
 
--- Kicia Movement port: WalkSpeed / Sliding Speed / Jump Power intentionally omitted.
-local MovementGroup = Tabs.Character:AddRightGroupbox("Movement", "user")
-
-local function addNumericMovementControl(group, sliderId, inputId, text, default, min, max, decimals, setValue)
-    group:AddSlider(sliderId, {
-        Text = text,
-        Default = default,
-        Min = min,
-        Max = max,
-        Rounding = decimals,
-        Compact = true,
-        Callback = function(v)
-            setValue(v)
-        end
-    })
-    group:AddInput(inputId, {
-        Text = text .. " Input",
-        Default = tostring(default),
-        Placeholder = "Enter number...",
-        Numeric = true,
-        Finished = true,
-        Callback = function(v)
-            local n = tonumber(v)
-            if n == nil then
-                Library:Notify("Invalid " .. text)
-                return
-            end
-            n = math.clamp(n, min, max)
-            setValue(n)
-            local option = Options[sliderId]
-            if option and option.SetValue then
-                option:SetValue(n)
-            end
-        end
-    })
-end
-
-local FlightToggle = MovementGroup:AddToggle("CharacterFlight", {
-    Text = "Flight",
-    Default = false,
-    Callback = function(v)
-        CharacterMovement.flightEnabled = v
-        if not v then clearFlightMover() end
-    end
-})
-FlightToggle:AddKeyPicker("CharacterFlightKey", {
-    Text = "Flight",
-    Default = "None",
-    Mode = "Hold",
-    NoUI = true,
-    SyncToggleState = false,
-    Callback = function(v) CharacterMovement.flightKey = v end
-})
-addNumericMovementControl(
-    MovementGroup,
-    "CharacterFlightSpeed",
-    "CharacterFlightSpeedInput",
-    "Flight Speed",
-    100,
-    1,
-    1000,
-    0,
-    function(v) CharacterMovement.flightSpeed = v end
-)
-
-local NoclipToggle = MovementGroup:AddToggle("CharacterNoclip", {
-    Text = "Noclip",
-    Default = false,
-    Callback = function(v)
-        CharacterMovement.noclipEnabled = v
-        if not v then setNoclip(false) end
-    end
-})
-NoclipToggle:AddKeyPicker("CharacterNoclipKey", {
-    Text = "Noclip",
-    Default = "None",
-    Mode = "Hold",
-    NoUI = true,
-    SyncToggleState = false,
-    Callback = function(v) CharacterMovement.noclipKey = v end
-})
-
-local StrafeToggle = MovementGroup:AddToggle("CharacterAutoStrafe", {
-    Text = "Auto Strafe",
-    Default = false,
-    Callback = function(v) CharacterMovement.autostrafeEnabled = v end
-})
-StrafeToggle:AddKeyPicker("CharacterAutoStrafeKey", {
-    Text = "Auto Strafe",
-    Default = "None",
-    Mode = "Hold",
-    NoUI = true,
-    SyncToggleState = false,
-    Callback = function(v) CharacterMovement.autostrafeKey = v end
-})
-addNumericMovementControl(
-    MovementGroup,
-    "CharacterAutoStrafeSpeed",
-    "CharacterAutoStrafeSpeedInput",
-    "Auto Strafe Speed",
-    100,
-    1,
-    200,
-    0,
-    function(v) CharacterMovement.autostrafeSpeed = v end
-)
-
-local LongJumpToggle = MovementGroup:AddToggle("CharacterLongJump", {
-    Text = "Long Jump",
-    Default = false,
-    Callback = function(v)
-        CharacterMovement.longJumpEnabled = v
-        CharacterMovement._longJumpArmed = true
-    end
-})
-LongJumpToggle:AddKeyPicker("CharacterLongJumpKey", {
-    Text = "Long Jump",
-    Default = "None",
-    Mode = "Hold",
-    NoUI = true,
-    SyncToggleState = false,
-    Callback = function(v)
-        CharacterMovement.longJumpKey = v
-        if v and CharacterMovement._longJumpArmed then
-            CharacterMovement._longJumpArmed = false
-            launchLongJump()
-        elseif not v then
-            CharacterMovement._longJumpArmed = true
-        end
-    end
-})
-MovementGroup:AddDropdown("CharacterLongJumpMode", {
-    Text = "Long Jump Mode",
-    Values = {"Under Feet", "Forward"},
-    Default = "Under Feet",
-    Callback = function(v) CharacterMovement.longJumpMode = v end
-})
-addNumericMovementControl(
-    MovementGroup,
-    "CharacterLongJumpForce",
-    "CharacterLongJumpForceInput",
-    "Long Jump Force",
-    60,
-    1,
-    300,
-    0,
-    function(v) CharacterMovement.longJumpForce = v end
-)
-addNumericMovementControl(
-    MovementGroup,
-    "CharacterLongJumpUpward",
-    "CharacterLongJumpUpwardInput",
-    "Long Jump Upward",
-    20,
-    0,
-    150,
-    0,
-    function(v) CharacterMovement.longJumpUpward = v end
-)
-addNumericMovementControl(
-    MovementGroup,
-    "CharacterLongJumpBehind",
-    "CharacterLongJumpBehindInput",
-    "Long Jump Behind",
-    8,
-    0,
-    30,
-    1,
-    function(v) CharacterMovement.longJumpBehind = v end
-)
-
 local WeaponGroup = Tabs.Misc:AddLeftGroupbox("Weapon Mods", "sword")
 WeaponGroup:AddButton({
     Text = "No Melee Animation",
@@ -4018,9 +3939,31 @@ DeviceGroup:AddDropdown("DeviceType", {
     end
 })
 
-local RageGroupBox = Tabs.Main:AddRightGroupbox("Ragebot", "sword")
+local RageGroupBox = Tabs.Main:AddRightGroupbox("Ragebot", "skull")
 
-local RageNormalGate = { Type = "Toggle", Value = true }
+RageGroupBox:AddToggle("RagebotEnabled", {
+    Text = "Enable Ragebot",
+    Default = false,
+    Callback = function(v)
+        Ragebot.config.target.rageMasterOn = v
+        Ragebot.config.target.auto = v
+        Ragebot.config.target.autoshoot = v
+        if not v then Ragebot.cleartarget() end
+    end
+}):AddKeyPicker("RagebotKey", {
+    Text = "Ragebot",
+    Default = "None",
+    Mode = "Toggle",
+    NoUI = true,
+    SyncToggleState = false,
+    Callback = function(v)
+        Ragebot.config.target.rageMasterOn = v
+        Ragebot.config.target.auto = v
+        Ragebot.config.target.autoshoot = v
+        if not v then Ragebot.cleartarget() end
+    end
+})
+
 local RageNormalDep = RageGroupBox:AddDependencyBox()
 
 RageGroupBox:AddDropdown("RagebotMode", {
@@ -4029,239 +3972,164 @@ RageGroupBox:AddDropdown("RagebotMode", {
     Default = Ragebot.config.evasion.mode or "Normal",
     Callback = function(v)
         v = (v == "Translocate") and "Translocate" or "Normal"
+        if Ragebot.config.state.csyncactive then stopsync() end
         Ragebot.config.evasion.mode = v
-        if Ragebot.config.state.csyncactive and Ragebot.stopSync then
-            Ragebot.stopSync()
-        end
-        if Ragebot.config.target.enabled and Ragebot.config.target.character and Ragebot.config.target.character then
-            if v == "Translocate" and Ragebot.startSync then
-                Ragebot.startSync()
-            elseif v == "Normal" and Ragebot.startSync then
-                Ragebot.startSync()
+        if Ragebot.config.target.enabled and Ragebot.config.target.character and Ragebot.valid(Ragebot.config.target.character) then
+            if v == "Translocate" then
+                startTranslocate()
+            else
+                startsync()
             end
         end
-        RageNormalGate.Value = (v == "Normal")
-        RageNormalDep:Update()
-    end
-})
-
-
-RageGroupBox:AddToggle("RagebotEnabled", {
-    Text = "Enable",
-    Default = false,
-    Callback = function(v)
-        Ragebot.enabled = v
-        Ragebot.config.target.rageMasterOn = v
-        Ragebot.config.target.auto = v
-        Ragebot.config.target.autoshoot = v
-    end
-}):AddKeyPicker("RagebotKey", {
-    Text = "Ragebot",
-    Default = "None",
-    Mode = "Toggle",
-    NoUI = true,
-    SyncToggleState = false,
-    Callback = function()
-        if Ragebot.config.target.auto then
-            return
-        end
-        if Ragebot.config.target.enabled and Ragebot.config.target.character then
-            Ragebot.cleartarget()
+        if v == "Normal" then
+            RageNormalDep:Update()
         else
-            local target = Ragebot.nearest()
-            if target then
-                Ragebot.config.target.manualkey = true
-                Ragebot.settarget(target)
-            end
+            RageNormalDep:Update()
         end
     end
 })
 
-RageNormalGate.Value = Ragebot.config.evasion.mode == "Normal"
-
-RageNormalDep:AddToggle("RagebotAutoTarget", {
-    Text = "Auto Target",
-    Default = false,
+RageNormalDep:AddToggle("RagebotPrioritizeHackers", {
+    Text = "Prioritize Hackers",
+    Default = Ragebot.config.target.prioritizeHackers,
+    Callback = function(v) Ragebot.config.target.prioritizeHackers = v end
+})
+RageNormalDep:AddSlider("RagebotShootFrames", {
+    Text = "Shoot Frames",
+    Default = Ragebot.config.target.shootFrames,
+    Min = 1, Max = 5, Rounding = 0,
     Callback = function(v)
-        Ragebot.config.target.auto = v
+        Ragebot.config.target.shootFrames = math.clamp(math.floor(tonumber(v) or 1), 1, 5)
+        Ragebot.config.state.shootLockFrames = 0
+    end
+})
+RageNormalDep:AddSlider("RagebotStability", {
+    Text = "Stability",
+    Default = Ragebot.config.target.stability,
+    Min = 0, Max = 1.5, Rounding = 3, Suffix = " s",
+    Callback = function(v)
+        Ragebot.config.target.stability = math.clamp(tonumber(v) or 0.15, 0, 1.5)
+        Ragebot.config.state.shootLockStartedAt = tick()
+    end
+})
+RageNormalDep:AddDropdown("RagebotWeapons", {
+    Text = "Weapons",
+    Values = {"Primary", "Secondary", "Melee"},
+    Multi = true,
+    Default = {Primary = true, Secondary = true, Melee = true},
+    Callback = function(v)
+        local e = {primary = false, secondary = false, melee = false}
+        if type(v) == "table" then
+            e.primary = v.Primary == true or v.primary == true
+            e.secondary = v.Secondary == true or v.secondary == true
+            e.melee = v.Melee == true or v.melee == true
+        end
+        if not e.primary and not e.secondary and not e.melee then e.primary = true end
+        Ragebot.config.target.weaponEnabled = e
+        local p = {}
+        for _, n in ipairs({"primary", "secondary", "melee"}) do
+            if e[n] then p[#p + 1] = n end
+        end
+        Ragebot.config.target.weaponPriority = p
+        Ragebot.config.target.weaponPick = p[1] or "primary"
+        Ragebot.config.state.shootLockTarget = nil
+        if Ragebot.eqSlot then Ragebot.eqSlot() end
+    end
+})
+RageNormalDep:AddDropdown("RagebotOnEmpty", {
+    Text = "On Empty",
+    Values = {"Swap or Reload", "Swap", "Reload"},
+    Default = "Swap or Reload",
+    Callback = function(v)
+        Ragebot.config.target.onEmpty = v == "Swap" and "Swap" or (v == "Reload" and "Reload" or "SwapOrReload")
     end
 })
 
-local RageUnderGate = { Type = "Toggle", Value = false }
 local RageUnderDep = RageNormalDep:AddDependencyBox()
-
 RageNormalDep:AddDropdown("RagebotAttackPosition", {
     Text = "Attack Position",
-    Default = "default",
     Values = {"default", "under"},
+    Default = Ragebot.config.target.attackPosition,
     Callback = function(v)
         Ragebot.config.target.attackPosition = v
-        RageUnderGate.Value = (v == "under")
         RageUnderDep:Update()
-        if Ragebot.config.state.csyncactive and Ragebot.refreshAtk then
-            Ragebot.refreshAtk()
-        end
+        if Ragebot.config.state.csyncactive and Ragebot.refreshAtk then Ragebot.refreshAtk() end
     end
 })
-
 RageUnderDep:AddSlider("RagebotUnderOffset", {
     Text = "Under Offset",
-    Default = Ragebot.config.target.underOffset or 4,
-    Min = 1,
-    Max = 25,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(v)
-        Ragebot.config.target.underOffset = v
-        if Ragebot.config.target.attackPosition == "under"
-            and Ragebot.config.state.csyncactive
-            and Ragebot.refreshAtk then
-            Ragebot.refreshAtk()
-        end
-    end
+    Default = Ragebot.config.target.underOffset,
+    Min = 1, Max = 25, Rounding = 1, Compact = true,
+    Callback = function(v) Ragebot.config.target.underOffset = v end
 })
-
-RageUnderDep:SetupDependencies({
-    { RageUnderGate, true }
-})
-
-RageUnderGate.Value = Ragebot.config.target.attackPosition == "under"
+RageUnderDep:SetupDependencies({{Options.RagebotAttackPosition, "under"}})
 RageUnderDep:Update()
 
 RageNormalDep:AddSlider("RagebotAttackOffset", {
     Text = "Attack Offset",
-    Default = 4,
-    Min = 1,
-    Max = 25,
-    Rounding = 0,
-    Compact = true,
-    Callback = function(v)
-        Ragebot.config.target.attackOffset = math.clamp(tonumber(v) or 4, 1, 25)
-        if Ragebot.refreshAtk then
-            Ragebot.refreshAtk()
-        end
-    end
+    Default = Ragebot.config.target.attackOffset,
+    Min = 1, Max = 25, Rounding = 0, Compact = true,
+    Callback = function(v) Ragebot.config.target.attackOffset = math.clamp(tonumber(v) or 4, 1, 25) end
 })
-
-RageNormalDep:AddDropdown("RagebotWeapon", {
-    Text = "Weapon",
-    Values = {"primary", "secondary", "melee"},
-    Default = Ragebot.config.target.weaponPick or "primary",
-    Callback = function(v)
-        Ragebot.config.target.weaponPick = v
-        if Ragebot.config.state.csyncactive and Ragebot.refreshAtk then
-            Ragebot.refreshAtk()
-        end
-        if Ragebot.eqSlot then
-            Ragebot.eqSlot()
-        end
-    end
-})
-
-RageNormalDep:AddSlider("RagebotShootAttempts", {
-    Text = "Shoot Attempts",
-    Default = Ragebot.config.target.shootAttempts or 1,
-    Min = 1,
-    Max = 3,
-    Rounding = 0,
-    Suffix = "x",
-    Callback = function(v)
-        Ragebot.config.target.shootAttempts =
-            math.clamp(math.floor(tonumber(v) or 1), 1, 3)
-    end
-})
-
 RageNormalDep:AddDropdown("RagebotHitPart", {
     Text = "Hit Part",
-    Default = Ragebot.config.target.hitpart or "Head",
     Values = {"Head", "HumanoidRootPart", "Torso", "UpperTorso", "Closest", "Random"},
-    Callback = function(v)
-        Ragebot.config.target.hitpart = v
-    end
+    Default = Ragebot.config.target.hitpart,
+    Callback = function(v) Ragebot.config.target.hitpart = v end
 })
-
 RageNormalDep:AddToggle("RagebotPrediction", {
     Text = "Prediction",
-    Default = Ragebot.config.prediction.enabled or false,
-    Callback = function(v)
-        Ragebot.config.prediction.enabled = v
-    end
+    Default = Ragebot.config.prediction.enabled,
+    Callback = function(v) Ragebot.config.prediction.enabled = v end
 })
-
 RageNormalDep:AddSlider("RagebotPredictionMult", {
     Text = "Prediction Mult",
-    Default = Ragebot.config.prediction.multiplier or 1.2,
-    Min = 0.1,
-    Max = 3,
-    Rounding = 1,
-    Callback = function(v)
-        Ragebot.config.prediction.multiplier = v
-    end
+    Default = Ragebot.config.prediction.multiplier,
+    Min = 0.1, Max = 3, Rounding = 1,
+    Callback = function(v) Ragebot.config.prediction.multiplier = v end
 })
-
 RageNormalDep:AddToggle("RagebotVoidSpam", {
     Text = "Voidspam",
-    Default = Ragebot.config.voidspam.enabled or false,
+    Default = Ragebot.config.voidspam.enabled,
     Callback = function(v)
         Ragebot.config.voidspam.enabled = v
         if not v then
             Ragebot.config.voidspam.phase = nil
-            if Ragebot.clrVoidSnap then
-                Ragebot.clrVoidSnap()
-            end
+            if Ragebot.clrVoidSnap then Ragebot.clrVoidSnap() end
         end
     end
 })
-
 RageNormalDep:AddSlider("RagebotAttack", {
     Text = "Attack",
-    Default = Ragebot.config.voidspam.shoot_min or 1,
-    Min = 0,
-    Max = 2,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(v)
-        v = tonumber(v) or 0
-        Ragebot.config.voidspam.shoot_min = v
-        Ragebot.config.voidspam.shoot_max = v
-    end
+    Default = Ragebot.config.voidspam.shoot_min,
+    Min = 0, Max = 2, Rounding = 1, Compact = true,
+    Callback = function(v) Ragebot.config.voidspam.shoot_min, Ragebot.config.voidspam.shoot_max = v, v end
 })
-
 RageNormalDep:AddSlider("RagebotHide", {
     Text = "Hide",
-    Default = Ragebot.config.voidspam.hide_min or 1,
-    Min = 0,
-    Max = 2,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(v)
-        v = tonumber(v) or 0
-        Ragebot.config.voidspam.hide_min = v
-        Ragebot.config.voidspam.hide_max = v
-    end
+    Default = Ragebot.config.voidspam.hide_min,
+    Min = 0, Max = 2, Rounding = 1, Compact = true,
+    Callback = function(v) Ragebot.config.voidspam.hide_min, Ragebot.config.voidspam.hide_max = v, v end
 })
-
 RageNormalDep:AddSlider("RagebotReloadDelay", {
     Text = "Reload -> Attack Delay",
-    Default = Ragebot.config.state.reloadDelay or 0.5,
-    Min = 0.01,
-    Max = 1,
-    Rounding = 2,
-    Suffix = " s",
-    Compact = true,
-    Callback = function(v)
-        Ragebot.config.state.reloadDelay = math.clamp(tonumber(v) or 0.5, 0.01, 1)
-    end
+    Default = Ragebot.config.state.reloadDelay,
+    Min = 0.01, Max = 1, Rounding = 2, Suffix = " s", Compact = true,
+    Callback = function(v) Ragebot.config.state.reloadDelay = math.clamp(tonumber(v) or 0.5, 0.01, 1) end
 })
 
-
-RageNormalGate.Value = Ragebot.config.evasion.mode == "Normal"
+RageNormalDep:SetupDependencies({{Options.RagebotMode, "Normal"}})
 RageNormalDep:Update()
 
--- Translocate note: the controller layer above mirrors Kicia's exposed
--- GetClientCFrame/SetServerCFrame/Heartbeat/RenderStep lifecycle. The only
--- intentionally non-identical piece is Kicia's private fallback CFrame helper.
-
+local RageTransDep = RageGroupBox:AddDependencyBox()
+RageTransDep:SetupDependencies({{Options.RagebotMode, "Translocate"}})
+RageTransDep:AddSlider("RagebotTranslocateOffset", {
+    Text = "Translocate Offset",
+    Default = Ragebot.config.evasion.translocate.offset,
+    Min = -25, Max = 25, Rounding = 1, Compact = true,
+    Callback = function(v) Ragebot.config.evasion.translocate.offset = v end
+})
+RageTransDep:Update()
 
 local ModsGroupBox = Tabs.Combat:AddLeftGroupbox("Gun Mods", "gun")
 ModsGroupBox:AddToggle("NoCooldown", {
@@ -4328,6 +4196,144 @@ MiscGroupBox:AddToggle("BackshootToggle", {
     SyncToggleState = false,
     Callback = function(state) end
 })
+
+local CosmeticGeneral = Tabs.Cosmetic:AddLeftGroupbox("General", "shirt")
+CosmeticGeneral:AddToggle("CosmeticEnabled", {
+    Text = "Skin Changer Enabled",
+    Default = false,
+    Callback = cosmeticApplyEnabled,
+})
+CosmeticGeneral:AddDropdown("CosmeticWeapon", {
+    Values = { "All", "Primary", "Secondary", "Melee", "Throwable" },
+    Default = "All",
+    Search = true,
+    Text = "Weapon",
+    Callback = function(value)
+        cosmeticApply("weapon", value)
+    end,
+})
+CosmeticGeneral:AddToggle("CosmeticPreview", {
+    Text = "Preview Selection",
+    Default = true,
+    Callback = function(value)
+        -- Crefy does not expose a verified native preview API; keep this as UI state only.
+        Cosmetic.preview = value
+    end,
+})
+CosmeticGeneral:AddButton({
+    Text = "Refresh Cosmetic Catalog",
+    Func = function()
+        cosmeticRefreshCatalog()
+    end,
+})
+CosmeticGeneral:AddLabel(function()
+    return cosmeticSupportedNote()
+end)
+CosmeticGeneral:AddLabel(function()
+    return cosmeticCatalogSummary()
+end)
+
+local CosmeticSkins = Tabs.Cosmetic:AddLeftGroupbox("Skins", "sparkles")
+CosmeticOptions.Skin = CosmeticSkins:AddDropdown("CosmeticSkin", {
+    Values = Cosmetic._catalog.Skins,
+    Default = "None",
+    Search = true,
+    Text = "Skin",
+    Callback = function(value)
+        cosmeticApply("skin", value)
+    end,
+})
+
+local CosmeticWraps = Tabs.Cosmetic:AddRightGroupbox("Wraps", "palette")
+CosmeticOptions.Wrap = CosmeticWraps:AddDropdown("CosmeticWrap", {
+    Values = Cosmetic._catalog.Wraps,
+    Default = "None",
+    Search = true,
+    Text = "Wrap",
+    Callback = function(value)
+        cosmeticApply("wrap", value)
+    end,
+})
+CosmeticWraps:AddToggle("CosmeticWrapInverted", {
+    Text = "Inverted",
+    Default = false,
+    Callback = cosmeticApplyInverted,
+})
+
+local CosmeticExtras = Tabs.Cosmetic:AddRightGroupbox("Extras", "gem")
+CosmeticOptions.Charm = CosmeticExtras:AddDropdown("CosmeticCharm", {
+    Values = Cosmetic._catalog.Charms,
+    Default = "None",
+    Search = true,
+    Text = "Charm",
+    Callback = function(value)
+        cosmeticApply("charm", value)
+    end,
+})
+CosmeticOptions.Finisher = CosmeticExtras:AddDropdown("CosmeticFinisher", {
+    Values = Cosmetic._catalog.Finishers,
+    Default = "None",
+    Search = true,
+    Text = "Finisher",
+    Callback = function(value)
+        cosmeticApply("finisher", value)
+    end,
+})
+CosmeticOptions.Emote = CosmeticExtras:AddDropdown("CosmeticEmote", {
+    Values = Cosmetic._catalog.Emotes,
+    Default = "None",
+    Search = true,
+    Text = "Emote",
+    Callback = function(value)
+        cosmeticApply("emote", value)
+    end,
+})
+
+local CosmeticUnlock = Tabs.Cosmetic:AddLeftGroupbox("Unlock All", "unlock")
+CosmeticUnlock:AddToggle("CosmeticUnlockerEnabled", {
+    Text = "Unlocker Enabled",
+    Default = false,
+    Callback = cosmeticApplyUnlocker,
+})
+CosmeticUnlock:AddDropdown("CosmeticUnlockedTypes", {
+    Values = { "Skin", "Wrap", "Charm", "Finisher", "Emote" },
+    Default = { Skin = true, Wrap = true, Charm = true, Finisher = true, Emote = true },
+    Multi = true,
+    Search = true,
+    Text = "Cosmetics",
+    Callback = cosmeticApplyUnlockedTypes,
+})
+CosmeticUnlock:AddDropdown("CosmeticUnlockedRarities", {
+    Values = { "Legendary", "Mythical", "Unobtainable" },
+    Default = { Legendary = true, Mythical = true, Unobtainable = true },
+    Multi = true,
+    Search = true,
+    Text = "Rarities",
+    Callback = cosmeticApplyUnlockedRarities,
+})
+
+-- Populate from a real CosmeticLibrary when the game exposes one; this is the
+-- source-backed equivalent of Kicia's CosmeticLibrary catalog construction.
+task.defer(function()
+    pcall(cosmeticRefreshCatalog)
+end)
+
+task.delay(1, function()
+    pcall(cosmeticRefreshCatalog)
+end)
+task.delay(1.25, function()
+    pcall(function()
+        cosmeticTryAdapter()
+        cosmeticApplyEnabled(Cosmetic.enabled)
+        cosmeticApplyUnlockedTypes(Cosmetic.unlockedTypes)
+        cosmeticApplyUnlockedRarities(Cosmetic.unlockedRarities)
+        if Cosmetic.skin ~= "None" then cosmeticApply("skin", Cosmetic.skin) end
+        if Cosmetic.wrap ~= "None" then cosmeticApply("wrap", Cosmetic.wrap) end
+        if Cosmetic.charm ~= "None" then cosmeticApply("charm", Cosmetic.charm) end
+        if Cosmetic.finisher ~= "None" then cosmeticApply("finisher", Cosmetic.finisher) end
+        if Cosmetic.emote ~= "None" then cosmeticApply("emote", Cosmetic.emote) end
+    end)
+end)
 
 local MenuGroup = Tabs["UI Settings"]:AddLeftGroupbox("Menu", "wrench")
 MenuGroup:AddToggle("KeybindMenuOpen", {
