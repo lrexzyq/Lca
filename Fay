@@ -16,7 +16,7 @@ local Window = Library:CreateWindow({
     ShowCustomCursor = true,
     Footer = {
         "Rivals | ",
-        { Text = "Aimbot + Ragebot", Skiding = true },
+        { Text = "Aimbot + Ragebot", Copyable = true },
     },
     CopyableFooter = true,
     FuzzySearch = true,
@@ -2233,6 +2233,7 @@ translocateController = {
     boundId = "crefy_translocate_controller",
     oldCFrame = nil,
     serverCFrame = nil,
+    renderBound = false,
 }
 
 function translocateController:SetRootPart(rootPart)
@@ -2291,23 +2292,42 @@ function translocateController:RenderStepUpdate()
     self.oldCFrame = nil
 end
 
+function translocateController:BindRenderStep()
+    if self.renderBound then
+        return
+    end
+
+    pcall(function()
+        runsvc:UnbindFromRenderStep(self.boundId)
+    end)
+
+    runsvc:BindToRenderStep(
+        self.boundId,
+        Enum.RenderPriority.First.Value,
+        function()
+            self:RenderStepUpdate()
+        end
+    )
+
+    self.renderBound = true
+end
+
 function translocateController:Reset()
     self.oldCFrame = nil
     self.serverCFrame = nil
     self.rootPart = nil
+
+    if self.renderBound then
+        pcall(function()
+            runsvc:UnbindFromRenderStep(self.boundId)
+        end)
+        self.renderBound = false
+    end
 end
 
-pcall(function()
-    runsvc:UnbindFromRenderStep(translocateController.boundId)
-end)
-
-runsvc:BindToRenderStep(
-    translocateController.boundId,
-    Enum.RenderPriority.First.Value,
-    function()
-        translocateController:RenderStepUpdate()
-    end
-)
+-- Bind once at construction. Full mode-stop cleanup may unbind it;
+-- startTranslocateSync() re-binds it only when a new Translocate session begins.
+translocateController:BindRenderStep()
 
 local function translocateApplyForcedCrouch(enabled)
     -- Kicia explicitly clears forced crouch for Translocate. Crefy does not
@@ -2369,12 +2389,17 @@ local function translocateCompute(originCFrame, hasTarget)
 end
 
 local function clearTranslocateState()
+    -- Lightweight state clear only.
+    -- Do NOT Reset()/Unbind RenderStep here: target/root can disappear
+    -- temporarily, and repeatedly unbinding/rebinding the controller can
+    -- create lifecycle churn. Full controller cleanup belongs to
+    -- stopTranslocateSync().
     local state = config.target.evasion.translocate
     state.active = false
     state.hasTarget = false
     state.serverCFrame = nil
     config.orbit.serverpos = nil
-    translocateController:Reset()
+    config.orbit.active = false
 end
 
 local function applyTranslocateStep()
@@ -2429,6 +2454,9 @@ startTranslocateSync = function()
     if translocateConnection then return end
     if config.target.immune then return end
 
+    -- Re-bind the render-step controller after any previous Reset().
+    translocateController:BindRenderStep()
+
     -- Start immediately even with no target. The connection stays alive and
     -- waits for a valid target instead of silently returning and requiring
     -- another manual toggle.
@@ -2455,6 +2483,10 @@ startTranslocateSync = function()
             return
         end
         if not localfighter or not localfighter.Entity or not localfighter.Entity.RootPart then
+            -- Keep the RenderStep controller bound, but detach the old root
+            -- until the character/root returns. This avoids destroying the
+            -- controller and rebuilding it every frame.
+            translocateController:SetRootPart(nil)
             return
         end
 
@@ -2489,6 +2521,7 @@ stopTranslocateSync = function()
     config.orbit.serverpos = nil
     config.orbit.savedpos = nil
     oldpos = nil
+    translocateApplyForcedCrouch(false)
 
     local state = config.target.evasion.translocate
     state.active = false
@@ -2501,7 +2534,6 @@ stopTranslocateSync = function()
 end
 
 startsync = function()
-    if not Ragebot.enabled then return end
     if config.target.evasion.mode == "Translocate" then
         if not translocateConnection then
             startTranslocateSync()
@@ -3661,10 +3693,10 @@ RageGroupBox:AddToggle("RagebotEnabled", {
 })
 
 local RageNormalGate = { Type = "Toggle", Value = true }
-local RageNormalDep = RageGroupBox:AddDependencyBox()
-
 local RageTranslocateGate = { Type = "Toggle", Value = false }
-local RageTranslocateDep = RageGroupBox:AddDependencyBox()
+
+local RageNormalDep
+local RageTranslocateDep
 
 RageGroupBox:AddDropdown("RagebotMode", {
     Text = "Mode",
@@ -3674,6 +3706,9 @@ RageGroupBox:AddDropdown("RagebotMode", {
         v = tostring(v or "Normal")
 
         if v == "Translocate" then
+            -- Always stop the previous Normal/Translocate loop before
+            -- starting the new mode. This prevents two Heartbeat handlers
+            -- from writing RootPart.CFrame at the same time.
             if stopsync then stopsync() end
             Ragebot.config.target.evasion.mode = "Translocate"
             RageNormalGate.Value = false
@@ -3707,6 +3742,10 @@ RageGroupBox:AddDropdown("RagebotMode", {
         end
     end
 })
+
+RageNormalDep = RageGroupBox:AddDependencyBox()
+
+RageTranslocateDep = RageGroupBox:AddDependencyBox()
 
 RageTranslocateDep:AddSlider("RagebotTranslocateOffset", {
     Text = "Translocate Offset",
