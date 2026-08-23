@@ -16,7 +16,7 @@ local Window = Library:CreateWindow({
     ShowCustomCursor = true,
     Footer = {
         "Rivals | ",
-        { Text = "Aimbot + Ragebot", Copyable = true },
+        { Text = "Aimbot + Ragebot", Skiding = true },
     },
     CopyableFooter = true,
     FuzzySearch = true,
@@ -1102,7 +1102,7 @@ RunService.Heartbeat:Connect(function()
     end
 end)
 
-Ragebot = {}
+Ragebot = { enabled = false }
 do
 local replicatedstorage = cloneref(game:GetService("ReplicatedStorage"))
 local players = cloneref(game:GetService("Players"))
@@ -1255,22 +1255,7 @@ local config = {
         auto = false,
         autoshoot = true,
         shootAttempts = 1,
-        onEmpty = "SwapOrReload",
-        weaponPriority = { "primary", "secondary", "melee" },
-        weaponEnabled = { primary = true, secondary = true, melee = true },
         hitpart = "Head",
-        targetConditions = { NotDeflecting = true, NotShielded = true },
-        targetType = "Center",
-        surfaceReduction = 0,
-        surfaceCenter = true,
-        partSelection = "Static",
-        headChance = 100,
-        groundParts = { "Head", "HumanoidRootPart", "UpperTorso", "Torso" },
-        airParts = { "Head", "HumanoidRootPart", "UpperTorso", "Torso" },
-        meleeBackstab = true,
-        meleeOffsets = { Down = 4, Up = -4 },
-        hitscanOffsets = { Down = 1.75, Up = -0.25 },
-
         lastchar = nil,
         lastplayer = nil,
         manualkey = false,
@@ -1280,8 +1265,6 @@ local config = {
         weaponPick = "primary",
         forceWeapon = true,
         rageMasterOn = false,
-        stability = 0.15,
-        shootFrames = 1,
         evasion = {
             mode = "Normal",
             translocate = {
@@ -1395,14 +1378,6 @@ local config = {
 
 local ragePerf = {
     lastAttackTick = 0,
-    shootLockUntil = 0,
-    attackStart = nil,
-    meleeHitboxWindowUntil = -1,
-    meleeAttackCooldownUntil = -1,
-    knifeHitboxWindowUntil = -1,
-    knifeAttackCooldownUntil = -1,
-    knifeAttackStart = nil,
-    lastTargetCharacter = nil,
     hitPartByPlayer = {},
     lastHitAtByPlayer = {},
     targetHudAt = 0,
@@ -1527,25 +1502,7 @@ local function isInfiniteWeapon()
 end
 
 local function wantSlot()
-    local preferred = tostring(config.target.weaponPick or "primary")
-    local preferredSlot = SLOTS[preferred] or 1
-    local enabled = config.target.weaponEnabled or { primary = true, secondary = true, melee = true }
-
-    if enabled[preferred] ~= false and slotItem(preferredSlot) then
-        return preferredSlot
-    end
-
-    local priority = config.target.weaponPriority or { "primary", "secondary", "melee" }
-    for _, name in ipairs(priority) do
-        if enabled[name] ~= false then
-            local slot = SLOTS[name]
-            if slot and slotItem(slot) then
-                return slot
-            end
-        end
-    end
-
-    return preferredSlot
+    return SLOTS[config.target.weaponPick or "primary"] or 1
 end
 
 local function pickMelee()
@@ -1650,109 +1607,6 @@ local function whichSlot(item)
     end
     if itemMelee(item) then return 3 end
     return nil
-end
-
-local function safeAmmo(item)
-    if not item then return 0, 0 end
-    local ammo, reserve = 0, 0
-    pcall(function()
-        if type(item.GetAmmo) == "function" then
-            ammo = tonumber(item:GetAmmo()) or 0
-        else
-            ammo = tonumber(item:Get("Ammo") or item:Get("CurrentAmmo")) or 0
-        end
-    end)
-    pcall(function()
-        if type(item.GetAmmoReserve) == "function" then
-            reserve = tonumber(item:GetAmmoReserve()) or 0
-        else
-            reserve = tonumber(item:Get("AmmoReserve") or item:Get("ReserveAmmo") or item:Get("Reserve")) or 0
-        end
-    end)
-    return ammo, reserve
-end
-
-local function alternateGunItem(currentSlot)
-    local candidates = {}
-    local priority = config.target.weaponPriority or { "primary", "secondary", "melee" }
-    local priorityIndex = {}
-    for i, name in ipairs(priority) do priorityIndex[name] = i end
-    for slot = 1, 2 do
-        if slot ~= currentSlot then
-            local item = slotItem(slot)
-            local slotName = slot == 1 and "primary" or "secondary"
-            if config.target.weaponEnabled[slotName] ~= false and item and not itemMelee(item) then
-                local ammo, reserve = safeAmmo(item)
-                if ammo > 0 or reserve > 0 then
-                    candidates[#candidates + 1] = {
-                        slot = slot,
-                        item = item,
-                        ammo = ammo,
-                        reserve = reserve,
-                        priority = priorityIndex[slotName] or 99,
-                    }
-                end
-            end
-        end
-    end
-    table.sort(candidates, function(a, b)
-        if a.priority == b.priority then
-            if a.ammo == b.ammo then return a.slot < b.slot end
-            return a.ammo > b.ammo
-        end
-        return a.priority < b.priority
-    end)
-    return candidates[1]
-end
-
-local function forceEquipWeaponSlot(slot)
-    local desired = slot == 1 and "primary" or "secondary"
-    local old = config.target.weaponPick
-    config.target.weaponPick = desired
-    local ok = pcall(eqSlot)
-    config.target.weaponPick = old
-    return ok
-end
-
-local function handleOnEmpty()
-    if config.target.evasion.mode == "Translocate" then return false end
-
-    local currentSlot
-    local lf = modules.fighter and modules.fighter.LocalFighter
-    if lf and lf.EquippedItem then
-        local ok, slot = pcall(whichSlot, lf.EquippedItem)
-        if ok and slot then currentSlot = slot end
-    end
-    currentSlot = math.clamp(tonumber(currentSlot) or wantSlot(), 1, 3)
-    local currentItem = slotItem(currentSlot)
-    local currentAmmo, currentReserve = safeAmmo(currentItem)
-    local policy = tostring(config.target.onEmpty or "SwapOrReload")
-
-    -- Kicia's OnEmpty policy operates on the empty gun that is being used.
-    if policy == "Reload" then
-        if currentSlot <= 2 and currentReserve > 0 then
-            return tryReloadInput()
-        end
-        return false
-    end
-
-    local alternate = alternateGunItem(currentSlot)
-    if policy == "Swap" then
-        if alternate then
-            return forceEquipWeaponSlot(alternate.slot)
-        end
-        return false
-    end
-
-    -- SwapOrReload: reload the currently equipped empty gun when it has
-    -- reserve ammo; otherwise swap to another usable gun.
-    if currentSlot <= 2 and currentReserve > 0 then
-        if tryReloadInput() then return true end
-    end
-    if alternate then
-        return forceEquipWeaponSlot(alternate.slot)
-    end
-    return false
 end
 
 local rageLastSlotForce = 0
@@ -1862,9 +1716,6 @@ local function tickAmmo()
 
     -- Empty magazine: remain hidden until ammo is actually positive.
     if config.state.outofammo and not melee then
-        if config.target.rageMasterOn and config.target.evasion.mode ~= "Translocate" then
-            handleOnEmpty()
-        end
         if config.voidspam.enabled then
             config.voidspam.phase = "hide"
             config.voidspam.shotIssued = false
@@ -1936,157 +1787,7 @@ local function valid(char)
     if not char:FindFirstChild("HumanoidRootPart") then return false end
     local targetplayer = players:GetPlayerFromCharacter(char)
     if not targetplayer or isteammate(targetplayer) then return false end
-    if targetBlockedByConditions(char) then return false end
     return true
-end
-
-local function getEnemyFighter(character)
-    local fc = modules.fighter
-    if not fc then return nil end
-    for _, list in ipairs({ fc.Fighters, fc.AllFighters }) do
-        if type(list) == "table" then
-            for _, fighter in pairs(list) do
-                if fighter and fighter.Entity and fighter.Entity == character then
-                    return fighter
-                end
-                if fighter and fighter.Player and fighter.Player.Character == character then
-                    return fighter
-                end
-            end
-        end
-    end
-    return nil
-end
-
-local function targetProtected(character, condition)
-    local fighter = getEnemyFighter(character)
-    if not fighter then
-        return false
-    end
-
-    if condition == "NotDeflecting" then
-        local ok, value = pcall(function()
-            if fighter.IsDeflecting then return fighter:IsDeflecting() end
-            if fighter.Entity and fighter.Entity.IsDeflecting then return fighter.Entity:IsDeflecting() end
-            return false
-        end)
-        return ok and value == true
-    end
-
-    if condition == "NotShielded" then
-        local ok, value = pcall(function()
-            if fighter.IsShielded then return fighter:IsShielded() end
-            if fighter.IsBlocking then return fighter:IsBlocking() end
-            if fighter.Entity and fighter.Entity.IsShielded then return fighter.Entity:IsShielded() end
-            return false
-        end)
-        return ok and value == true
-    end
-
-    return false
-end
-
-local function targetBlockedByConditions(character)
-    local conditions = config.target.targetConditions or {}
-    if conditions.NotDeflecting and targetProtected(character, "NotDeflecting") then
-        return true
-    end
-    if conditions.NotShielded and targetProtected(character, "NotShielded") then
-        return true
-    end
-    return false
-end
-
-local function isTargetAirborne(character)
-    local hum = character and character:FindFirstChildOfClass("Humanoid")
-    if not hum then return false end
-    local state = hum:GetState()
-    return state == Enum.HumanoidStateType.Freefall
-        or state == Enum.HumanoidStateType.Jumping
-        or state == Enum.HumanoidStateType.FallingDown
-end
-
-local function chooseClosestTargetPart(character, candidates)
-    if #candidates == 0 then return nil end
-    local cam = workspace.CurrentCamera
-    if not cam then return candidates[1] end
-    local viewport = cam.ViewportSize
-    local center = Vector2.new(viewport.X * 0.5, viewport.Y * 0.5)
-    local best, bestDistance = candidates[1], math.huge
-    for _, part in ipairs(candidates) do
-        local screen, visible = cam:WorldToViewportPoint(part.Position)
-        if visible then
-            local d = (Vector2.new(screen.X, screen.Y) - center).Magnitude
-            if d < bestDistance then
-                bestDistance = d
-                best = part
-            end
-        end
-    end
-    return best
-end
-
-local function chooseConfiguredTargetPart(character)
-    if not character then return nil end
-    local airborne = isTargetAirborne(character)
-    local available = airborne and (config.target.airParts or {}) or (config.target.groundParts or {})
-    local candidates = {}
-    for _, name in ipairs(available) do
-        local part = character:FindFirstChild(name)
-        if part and part:IsA("BasePart") then
-            candidates[#candidates + 1] = part
-        end
-    end
-    if #candidates == 0 then
-        return character:FindFirstChild("HitboxHead") or character:FindFirstChild("Head") or character:FindFirstChild("HumanoidRootPart")
-    end
-
-    if config.target.partSelection == "Closest" then
-        return chooseClosestTargetPart(character, candidates)
-    end
-
-    if config.target.partSelection == "Random" then
-        if math.random(1, 100) <= math.clamp(tonumber(config.target.headChance) or 100, 0, 100) then
-            local head = character:FindFirstChild("HitboxHead") or character:FindFirstChild("Head")
-            if head then return head end
-        end
-        return candidates[math.random(1, #candidates)]
-    end
-
-    local preferred = config.target.hitpart
-    if preferred and preferred ~= "Closest" and preferred ~= "Random" then
-        local part = character:FindFirstChild(preferred)
-        if part and part:IsA("BasePart") then return part end
-    end
-    return candidates[1]
-end
-
-local function computeTargetPoint(character, part)
-    if not part then return nil end
-    if config.target.targetType == "Surface" then
-        local reduction = math.clamp(tonumber(config.target.surfaceReduction) or 0, 0, 100) / 100
-        local center = part.Position
-        if config.target.surfaceCenter then
-            local camera = workspace.CurrentCamera
-            local origin = camera and camera.CFrame.Position or center
-            local direction = center - origin
-            if direction.Magnitude > 0 and reduction > 0 then
-                local unit = direction.Unit
-                local radius = math.max(part.Size.X, part.Size.Y, part.Size.Z) * 0.5
-                return center - unit * radius * reduction
-            end
-            return center
-        end
-        local camera = workspace.CurrentCamera
-        local origin = camera and camera.CFrame.Position or center
-        local direction = center - origin
-        if direction.Magnitude > 0 and reduction > 0 then
-            local unit = direction.Unit
-            local radius = math.max(part.Size.X, part.Size.Y, part.Size.Z) * 0.5
-            return center - unit * radius * reduction
-        end
-    end
-    return part.Position
 end
 
 local function nearest()
@@ -2608,6 +2309,22 @@ runsvc:BindToRenderStep(
     end
 )
 
+local function translocateApplyForcedCrouch(enabled)
+    -- Kicia explicitly clears forced crouch for Translocate. Crefy does not
+    -- expose the same internal character-controller method, so only call it
+    -- when a compatible implementation is actually present.
+    local entity = localfighter and localfighter.Entity
+    if entity then
+        for _, name in ipairs({ "_ApplyForcedCrouch", "ApplyForcedCrouch", "SetForcedCrouch" }) do
+            local fn = entity[name]
+            if type(fn) == "function" then
+                pcall(fn, entity, enabled == true)
+                return
+            end
+        end
+    end
+end
+
 local function translocateCompute(originCFrame, hasTarget)
     local state = config.target.evasion.translocate
     state.hasTarget = hasTarget == true
@@ -2678,22 +2395,23 @@ local function applyTranslocateStep()
     local hasTarget = config.target.character ~= nil and valid(config.target.character)
     local targetRoot = hasTarget and config.target.character:FindFirstChild("HumanoidRootPart") or nil
     hasTarget = targetRoot ~= nil
-    if not hasTarget then
-        clearTranslocateState()
-        return false
-    end
 
+    -- Kicia's calculator intentionally handles both states:
+    --   HasTargets() == true  -> OutOfBoundsPart anchor
+    --   HasTargets() == false -> far fallback position
+    -- Keep that behavior here instead of dropping the update when the target disappears.
     local clientCFrame = translocateController:GetClientCFrame()
     if not clientCFrame then
         clearTranslocateState()
         return false
     end
 
-    local computedCFrame = translocateCompute(clientCFrame, true)
+    local computedCFrame = translocateCompute(clientCFrame, hasTarget)
     if not computedCFrame then
         return false
     end
 
+    translocateApplyForcedCrouch(false)
     translocateController:SetServerCFrame(computedCFrame)
     translocateController:HeartbeatUpdate()
 
@@ -2707,6 +2425,7 @@ end
 
 startTranslocateSync = function()
     if config.target.evasion.mode ~= "Translocate" then return end
+    if not Ragebot.enabled then return end
     if translocateConnection then return end
     if config.target.immune then return end
 
@@ -2739,13 +2458,8 @@ startTranslocateSync = function()
             return
         end
 
-        -- No target is a waiting state, not a stop condition. Do not apply
-        -- the far-away fallback CFrame until a real target exists.
-        if not config.target.character or not valid(config.target.character) then
-            clearTranslocateState()
-            return
-        end
-
+        -- Keep the controller alive without a target. The calculator itself
+        -- decides between the anchor path and Kicia's fallback path.
         applyTranslocateStep()
     end)
 end
@@ -2787,6 +2501,7 @@ stopTranslocateSync = function()
 end
 
 startsync = function()
+    if not Ragebot.enabled then return end
     if config.target.evasion.mode == "Translocate" then
         if not translocateConnection then
             startTranslocateSync()
@@ -2914,109 +2629,6 @@ startsync = function()
     end)
 end
 
-local function resetNormalPlanner()
-    ragePerf.shootLockUntil = 0
-    ragePerf.attackStart = nil
-    ragePerf.meleeHitboxWindowUntil = -1
-    ragePerf.meleeAttackCooldownUntil = -1
-    ragePerf.knifeHitboxWindowUntil = -1
-    ragePerf.knifeAttackCooldownUntil = -1
-    ragePerf.knifeAttackStart = nil
-    ragePerf.knifeShootLockUntil = 0
-    ragePerf.lastTargetCharacter = nil
-end
-
-local function getMeleeAttackCFrames(rootPart, targetPart)
-    if not rootPart or not targetPart then return nil, nil end
-    local targetPos = targetPart.Position
-    local airborne = isTargetAirborne(config.target.character)
-    local offsets = config.target.meleeOffsets or { Down = 4, Up = -4 }
-    local yOffset = airborne and (tonumber(offsets.Up) or -4) or (tonumber(offsets.Down) or 4)
-    local attackPos = targetPos + Vector3.new(0, yOffset, 0.05)
-    local attackCF = CFrame.new(attackPos, targetPos)
-    local _, yaw, roll = rootPart.CFrame:ToOrientation()
-    local viewAngles = Vector3.new(math.rad(90), yaw, roll)
-    return attackCF, viewAngles
-end
-
-local function normalShootGate(isMelee)
-    local now = os.clock()
-
-    if ragePerf.lastTargetCharacter ~= config.target.character then
-        ragePerf.lastTargetCharacter = config.target.character
-        ragePerf.attackStart = nil
-        ragePerf.meleeHitboxWindowUntil = -1
-        ragePerf.meleeAttackCooldownUntil = -1
-    end
-
-    local stability = math.clamp(tonumber(config.target.stability) or 0.15, 0.01, 1)
-    local shootFrames = math.max(1, math.floor(tonumber(config.target.shootFrames) or 1))
-    local lockDuration = stability * shootFrames
-
-    -- Kicia clears _attackStart when ShootLock rejects the cycle.
-    if now < (ragePerf.shootLockUntil or 0) then
-        ragePerf.attackStart = nil
-        return false
-    end
-
-    if isMelee then
-        if ragePerf.attackStart == nil then
-            ragePerf.attackStart = now
-        end
-        if now - ragePerf.attackStart < (1 / 15) then
-            return false
-        end
-        if now < (ragePerf.meleeAttackCooldownUntil or -1) then
-            ragePerf.attackStart = nil
-            return false
-        end
-        if now <= (ragePerf.meleeHitboxWindowUntil or -1) then
-            return true
-        end
-    end
-
-    ragePerf.shootLockUntil = now + lockDuration
-    return true
-end
-
-local function getKnifeAttackCFrames(rootPart, targetPart)
-    if not rootPart or not targetPart then return nil, nil end
-    local targetPos = targetPart.Position
-    local airborne = isTargetAirborne(config.target.character)
-    local offset = airborne and Vector3.new(0, -0.7, 0.05) or Vector3.new(0, -3.85, 0.05)
-    local attackPos = targetPos + offset
-    local attackCF = CFrame.lookAt(attackPos, targetPos)
-    local pitch, yaw, roll = rootPart.CFrame:ToOrientation()
-    local viewAngles = Vector3.new(pitch, yaw, roll)
-    return attackCF, viewAngles
-end
-
-local function knifePlannerDecision(now)
-    -- Mirrors Kicia's Knife planner order: an active backstab window is
-    -- retried first; otherwise ShootFrames lock and attack cooldown gate.
-    if now < (ragePerf.knifeHitboxWindowUntil or -1) then
-        return "window"
-    end
-    if now < (ragePerf.knifeAttackCooldownUntil or -1) then
-        return false
-    end
-
-    local shootFrames = math.max(1, math.floor(tonumber(config.target.shootFrames) or 1))
-    local stability = math.clamp(tonumber(config.target.stability) or 0.15, 0.01, 1)
-    if now < (ragePerf.knifeShootLockUntil or 0) then
-        return false
-    end
-
-    ragePerf.knifeShootLockUntil = now + stability * shootFrames
-    return true
-end
-
-local function recordKnifeBackstab(now)
-    -- These are the exact planner windows exposed by Kicia's _RecordBackstab().
-    ragePerf.knifeHitboxWindowUntil = now + 0.625
-    ragePerf.knifeAttackCooldownUntil = now + 1.25
-end
-
 local function autoshoot()
     -- Translocate is movement-only; never enter the Normal auto-shoot path.
     if config.target.evasion.mode == "Translocate" then return end
@@ -3025,9 +2637,6 @@ local function autoshoot()
     if config.target.immune then return end
     local weapon = getweapon()
     local checksling = isSling(weapon)
-    local isMelee = pickMelee() or meleeNm(weapon)
-    local isKnifeCandidate = tostring(weapon or "") == "Knife"
-    if not normalShootGate(isMelee and not isKnifeCandidate) then return end
     eqSlot()
     local lf = modules.fighter and modules.fighter.LocalFighter
     if not lf or not lf.EquippedItem then return end
@@ -3038,21 +2647,14 @@ local function autoshoot()
     end
     local targetChar = config.target.character
     if not valid(targetChar) then return end
-    local hitPart
-    if config.target.hitpart == "Closest" or config.target.hitpart == "Random" then
-        hitPart = hitpartfromname(targetChar, config.target.hitpart)
-    else
-        hitPart = chooseConfiguredTargetPart(targetChar)
-    end
+    local hitPart = hitpartfromname(targetChar, config.target.hitpart)
     if not hitPart then return end
-    local computedTargetPos = computeTargetPoint(targetChar, hitPart)
     local shootPos
     local targetPos
     if vhState and vhState.active and checksling then
         local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
         shootPos = root and root.Position or Vector3.new()
         targetPos = predict(hitPart, shootPos)
-        if computedTargetPos then targetPos = computedTargetPos end
     else
         if vhState and vhState.active then
             local myRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
@@ -3064,81 +2666,7 @@ local function autoshoot()
             shootPos = root and root.Position or Vector3.new()
         end
         targetPos = predict(hitPart, shootPos)
-        if computedTargetPos then targetPos = computedTargetPos end
     end
-
-    local equipped = lf.EquippedItem
-    local weaponName = tostring(equipped and (equipped:Get("Name") or equipped.Name) or weapon or "")
-    local isKnife = weaponName == "Knife" or isKnifeCandidate
-
-    if isKnife and equipped and (type(equipped.HeavyAttack) == "function" or type(equipped.HeavyAttackEncoded) == "function") then
-        local now = os.clock()
-        if Ragebot.config.target.meleeBackstab == false then
-            ragePerf.knifeHitboxWindowUntil = -1
-            ragePerf.knifeAttackCooldownUntil = -1
-            ragePerf.knifeShootLockUntil = 0
-        end
-
-        local decision = knifePlannerDecision(now)
-        if decision == "window" then
-            local attackCF, viewAngles = getKnifeAttackCFrames(
-                localfighter and localfighter.Entity and localfighter.Entity.RootPart,
-                hitPart
-            )
-            if not attackCF then return end
-            pcall(function()
-                if type(equipped.HeavyAttackEncoded) == "function" then
-                    equipped:HeavyAttackEncoded(
-                        attackCF,
-                        attackCF,
-                        hitPart,
-                        { [0] = 0, [1] = 1, [2] = 0, [3] = 0, [4] = 0, [5] = 0 }
-                    )
-                else
-                    equipped:HeavyAttack(attackCF, attackCF, {
-                        part = hitPart,
-                        viewAngles = viewAngles,
-                    })
-                end
-            end)
-            ragePerf.lastAttackTick = tick()
-            hideShot()
-            return
-        end
-        if decision ~= true then return end
-
-        local rootPart = localfighter and localfighter.Entity and localfighter.Entity.RootPart
-        local attackCF, viewAngles = getKnifeAttackCFrames(rootPart, hitPart)
-        if not attackCF then return end
-
-        -- Kicia records the Knife backstab window immediately before exposing
-        -- the HeavyAttack callback.
-        if config.target.meleeBackstab ~= false then
-            recordKnifeBackstab(now)
-        else
-            ragePerf.knifeAttackCooldownUntil = now + 1.25
-        end
-
-        pcall(function()
-            if type(equipped.HeavyAttackEncoded) == "function" then
-                equipped:HeavyAttackEncoded(
-                    attackCF,
-                    attackCF,
-                    hitPart,
-                    { [0] = 0, [1] = 1, [2] = 0, [3] = 0, [4] = 0, [5] = 0 }
-                )
-            else
-                equipped:HeavyAttack(attackCF, attackCF, {
-                    part = hitPart,
-                    viewAngles = viewAngles,
-                })
-            end
-        end)
-        ragePerf.lastAttackTick = tick()
-        hideShot()
-        return
-    end
-
     local data = {
         [utf8.char(1)] = {
             [utf8.char(0)] = modules.utility:EncodeCFrame(CFrame.new(shootPos, targetPos)),
@@ -3147,6 +2675,7 @@ local function autoshoot()
             [utf8.char(3)] = modules.utility:EncodeCFrame(CFrame.new(0.43, 0.25, 0.42)),
         },
     }
+    local equipped = lf.EquippedItem
     if equipped and equipped:Get("ObjectID") then
         ragePerf.lastAttackTick = tick()
         local attempts = math.clamp(math.floor(tonumber(config.target.shootAttempts) or 1), 1, 3)
@@ -3244,7 +2773,6 @@ end)
 
 local function cleartarget()
     config.target.enabled = false
-    resetNormalPlanner()
     stopsync()
     config.target.character = nil
     config.target.lastchar = nil
@@ -3261,7 +2789,6 @@ local function settarget(char)
     config.target.character = char
     config.target.lastchar = char
     config.target.lastplayer = targetplr
-    resetNormalPlanner()
     config.target.immune = false
     indicator.Color = Color3.fromRGB(255, 50, 50)
     local root = char:FindFirstChild("HumanoidRootPart")
@@ -4093,67 +3620,6 @@ DeviceGroup:AddDropdown("DeviceType", {
 
 local RageGroupBox = Tabs.Main:AddRightGroupbox("Ragebot", "sword")
 
--- Real hidden Obsidian toggles used as dependency gates.  DependencyBox
--- receives actual Toggle elements instead of hand-made {Type, Value} tables.
-RageGroupBox:AddToggle("RageNormalGate", {
-    Text = "Normal Gate",
-    Default = true,
-    Visible = false,
-})
-RageGroupBox:AddToggle("RageTranslocateGate", {
-    Text = "Translocate Gate",
-    Default = false,
-    Visible = false,
-})
-
-local RageNormalGate = Toggles.RageNormalGate
-local RageTranslocateGate = Toggles.RageTranslocateGate
-local RageNormalDep = RageGroupBox:AddDependencyBox()
-local RageTranslocateDep = RageGroupBox:AddDependencyBox()
-
-RageGroupBox:AddDropdown("RagebotMode", {
-    Text = "Mode",
-    Default = Ragebot.config.target.evasion.mode == "Translocate" and "Translocate" or "Normal",
-    Values = { "Normal", "Translocate" },
-    Callback = function(v)
-        v = tostring(v or "Normal")
-
-        if v == "Translocate" then
-            resetNormalPlanner()
-            if stopsync then stopsync() end
-            Ragebot.config.target.evasion.mode = "Translocate"
-            RageNormalGate:SetValue(false)
-            RageTranslocateGate:SetValue(true)
-        else
-            resetNormalPlanner()
-            Ragebot.config.target.evasion.mode = "Normal"
-            RageNormalGate:SetValue(true)
-            RageTranslocateGate:SetValue(false)
-            if stopsync then stopsync() end
-            if Ragebot.config.target.evasion.translocate then
-                Ragebot.config.target.evasion.translocate.active = false
-                Ragebot.config.target.evasion.translocate.hasTarget = false
-                Ragebot.config.target.evasion.translocate.serverCFrame = nil
-            end
-        end
-
-        RageNormalDep:Update()
-        RageTranslocateDep:Update()
-
-        if Ragebot.stopvoid then
-            Ragebot.stopvoid()
-        end
-
-        if Ragebot.enabled and Ragebot.config.target.evasion.mode == "Translocate" then
-            if Ragebot.startTranslocateSync then
-                Ragebot.startTranslocateSync()
-            end
-        elseif Ragebot.enabled and Ragebot.refreshAtk then
-            Ragebot.refreshAtk()
-        end
-    end
-})
-
 RageGroupBox:AddToggle("RagebotEnabled", {
     Text = "Enable",
     Default = false,
@@ -4164,37 +3630,11 @@ RageGroupBox:AddToggle("RagebotEnabled", {
         Ragebot.config.target.autoshoot = v
         if not v then
             Ragebot.config.target.evasion.mode = "Normal"
-            RageNormalGate:SetValue(true)
-            RageTranslocateGate:SetValue(false)
-            if Options.RagebotMode and Options.RagebotMode.Value ~= "Normal" then
-                Options.RagebotMode:SetValue("Normal")
-            end
-            resetNormalPlanner()
-            if Ragebot.stopTranslocateSync then
-                pcall(Ragebot.stopTranslocateSync)
-            end
-            if stopsync then
-                pcall(stopsync)
-            end
-            if Ragebot.stopvoid then
-                pcall(Ragebot.stopvoid)
-            end
-            RageNormalDep:Update()
-            RageTranslocateDep:Update()
-        else
-            -- Re-enter the currently selected mode when Ragebot is enabled.
-            -- This fixes the state where Translocate was selected while disabled.
-            local mode = Ragebot.config.target.evasion.mode
-            RageNormalGate:SetValue(mode ~= "Translocate")
-            RageTranslocateGate:SetValue(mode == "Translocate")
-            RageNormalDep:Update()
-            RageTranslocateDep:Update()
-            if mode == "Translocate" then
-                if Ragebot.startTranslocateSync then
-                    pcall(Ragebot.startTranslocateSync)
-                end
-            elseif Ragebot.refreshAtk then
-                pcall(Ragebot.refreshAtk)
+            if stopsync then stopsync() end
+            if Ragebot.stopvoid then Ragebot.stopvoid() end
+        elseif Ragebot.config.target.evasion.mode == "Translocate" then
+            if Ragebot.startTranslocateSync then
+                Ragebot.startTranslocateSync()
             end
         end
     end
@@ -4220,6 +3660,53 @@ RageGroupBox:AddToggle("RagebotEnabled", {
     end
 })
 
+local RageNormalGate = { Type = "Toggle", Value = true }
+local RageNormalDep = RageGroupBox:AddDependencyBox()
+
+local RageTranslocateGate = { Type = "Toggle", Value = false }
+local RageTranslocateDep = RageGroupBox:AddDependencyBox()
+
+RageGroupBox:AddDropdown("RagebotMode", {
+    Text = "Mode",
+    Default = Ragebot.config.target.evasion.mode == "Translocate" and "Translocate" or "Normal",
+    Values = { "Normal", "Translocate" },
+    Callback = function(v)
+        v = tostring(v or "Normal")
+
+        if v == "Translocate" then
+            if stopsync then stopsync() end
+            Ragebot.config.target.evasion.mode = "Translocate"
+            RageNormalGate.Value = false
+            RageTranslocateGate.Value = true
+        else
+            Ragebot.config.target.evasion.mode = "Normal"
+            RageNormalGate.Value = true
+            RageTranslocateGate.Value = false
+            if stopsync then stopsync() end
+            if Ragebot.config.target.evasion.translocate then
+                Ragebot.config.target.evasion.translocate.active = false
+                Ragebot.config.target.evasion.translocate.hasTarget = false
+                Ragebot.config.target.evasion.translocate.serverCFrame = nil
+            end
+        end
+
+        RageNormalDep:Update()
+        RageTranslocateDep:Update()
+
+        -- Do not leave the old orbit/void state running when changing evasion mode.
+        if Ragebot.stopvoid then
+            Ragebot.stopvoid()
+        end
+
+        if Ragebot.config.target.evasion.mode == "Translocate" then
+            if Ragebot.startTranslocateSync then
+                Ragebot.startTranslocateSync()
+            end
+        elseif Ragebot.refreshAtk then
+            Ragebot.refreshAtk()
+        end
+    end
+})
 
 RageTranslocateDep:AddSlider("RagebotTranslocateOffset", {
     Text = "Translocate Offset",
@@ -4237,8 +3724,7 @@ RageTranslocateDep:AddSlider("RagebotTranslocateOffset", {
     end
 })
 
-RageTranslocateGate:SetValue(Ragebot.config.target.evasion.mode == "Translocate")
-RageNormalGate:SetValue(Ragebot.config.target.evasion.mode ~= "Translocate")
+RageTranslocateGate.Value = Ragebot.config.target.evasion.mode == "Translocate"
 RageTranslocateDep:SetupDependencies({
     { RageTranslocateGate, true }
 })
@@ -4252,169 +3738,7 @@ RageNormalDep:AddToggle("RagebotAutoTarget", {
     end
 })
 
-RageNormalDep:AddDropdown("RagebotTargetConditions", {
-    Text = "Target Conditions",
-    Values = { "NotDeflecting", "NotShielded" },
-    Multi = true,
-    Default = 1,
-    Callback = function(v)
-        local cfg = Ragebot.config.target.targetConditions
-        cfg.NotDeflecting = false
-        cfg.NotShielded = false
-        if type(v) == "table" then
-            cfg.NotDeflecting = v.NotDeflecting == true or v["Not Deflecting"] == true
-            cfg.NotShielded = v.NotShielded == true or v["Not Shielded"] == true
-        end
-    end
-})
-
-RageNormalDep:AddDropdown("RagebotTargetType", {
-    Text = "Target Type",
-    Values = { "Center", "Surface" },
-    Default = Ragebot.config.target.targetType or "Center",
-    Callback = function(v)
-        Ragebot.config.target.targetType = v
-    end
-})
-
-RageNormalDep:AddSlider("RagebotSurfaceReduction", {
-    Text = "Surface Reduction (%)",
-    Default = Ragebot.config.target.surfaceReduction or 0,
-    Min = 0,
-    Max = 100,
-    Rounding = 2,
-    Compact = true,
-    Callback = function(v)
-        Ragebot.config.target.surfaceReduction = math.clamp(tonumber(v) or 0, 0, 100)
-    end
-})
-
-RageNormalDep:AddToggle("RagebotSurfaceCenter", {
-    Text = "Surface Center",
-    Default = Ragebot.config.target.surfaceCenter ~= false,
-    Callback = function(v)
-        Ragebot.config.target.surfaceCenter = v
-    end
-})
-
-RageNormalDep:AddDropdown("RagebotPartSelection", {
-    Text = "Part Selection",
-    Values = { "Static", "Closest", "Random" },
-    Default = Ragebot.config.target.partSelection or "Static",
-    Callback = function(v)
-        Ragebot.config.target.partSelection = v
-    end
-})
-
-RageNormalDep:AddSlider("RagebotHeadChance", {
-    Text = "Head (%)",
-    Default = Ragebot.config.target.headChance or 100,
-    Min = 0,
-    Max = 100,
-    Rounding = 0,
-    Compact = true,
-    Callback = function(v)
-        Ragebot.config.target.headChance = math.clamp(math.floor(tonumber(v) or 100), 0, 100)
-    end
-})
-
-RageNormalDep:AddDropdown("RagebotGroundParts", {
-    Text = "Target Parts On Ground",
-    Values = { "Head", "HumanoidRootPart", "UpperTorso", "Torso" },
-    Multi = true,
-    Default = 1,
-    Callback = function(v)
-        local list = {}
-        if type(v) == "table" then
-            for name, enabled in pairs(v) do
-                if enabled then list[#list + 1] = name end
-            end
-        end
-        Ragebot.config.target.groundParts = list
-    end
-})
-
-RageNormalDep:AddDropdown("RagebotAirParts", {
-    Text = "Target Parts In Air",
-    Values = { "Head", "HumanoidRootPart", "UpperTorso", "Torso" },
-    Multi = true,
-    Default = 1,
-    Callback = function(v)
-        local list = {}
-        if type(v) == "table" then
-            for name, enabled in pairs(v) do
-                if enabled then list[#list + 1] = name end
-            end
-        end
-        Ragebot.config.target.airParts = list
-    end
-})
-
-RageNormalDep:AddDropdown("RagebotOnEmpty", {
-    Text = "On Empty",
-    Values = { "SwapOrReload", "Reload", "Swap" },
-    Default = Ragebot.config.target.onEmpty or "SwapOrReload",
-    Callback = function(v)
-        Ragebot.config.target.onEmpty = v
-    end
-})
-
-RageNormalDep:AddDropdown("RagebotWeaponEnabled", {
-    Text = "Weapons Enabled",
-    Values = { "Primary", "Secondary", "Melee" },
-    Multi = true,
-    Default = 1,
-    Callback = function(v)
-        local enabled = Ragebot.config.target.weaponEnabled
-        enabled.primary = false
-        enabled.secondary = false
-        enabled.melee = false
-        if type(v) == "table" then
-            enabled.primary = v.Primary == true or v.primary == true
-            enabled.secondary = v.Secondary == true or v.secondary == true
-            enabled.melee = v.Melee == true or v.melee == true
-        end
-    end
-})
-
-RageNormalDep:AddDropdown("RagebotWeaponPriority", {
-    Text = "Weapon Priority (enabled order)",
-    Values = { "primary", "secondary", "melee" },
-    Default = 1,
-    Multi = true,
-    Callback = function(v)
-        local priority = {}
-        if type(v) == "table" then
-            for _, name in ipairs({ "primary", "secondary", "melee" }) do
-                if v[name] or v[name:gsub("^%l", string.upper)] then
-                    priority[#priority + 1] = name
-                end
-            end
-        end
-        if #priority > 0 then
-            Ragebot.config.target.weaponPriority = priority
-        end
-    end
-})
-
-RageNormalDep:AddSlider("RagebotShootFrames", {
-    Text = "Shoot Frames",
-    Default = Ragebot.config.target.shootFrames or 1,
-    Min = 1,
-    Max = 5,
-    Rounding = 0,
-    Compact = true,
-    Callback = function(v)
-        Ragebot.config.target.shootFrames = math.max(1, math.floor(tonumber(v) or 1))
-    end
-})
-
-RageGroupBox:AddToggle("RageUnderGate", {
-    Text = "Under Gate",
-    Default = false,
-    Visible = false,
-})
-local RageUnderGate = Toggles.RageUnderGate
+local RageUnderGate = { Type = "Toggle", Value = false }
 local RageUnderDep = RageNormalDep:AddDependencyBox()
 
 RageNormalDep:AddDropdown("RagebotAttackPosition", {
@@ -4423,7 +3747,7 @@ RageNormalDep:AddDropdown("RagebotAttackPosition", {
     Values = {"default", "under"},
     Callback = function(v)
         Ragebot.config.target.attackPosition = v
-        RageUnderGate:SetValue(v == "under")
+        RageUnderGate.Value = (v == "under")
         RageUnderDep:Update()
         if Ragebot.config.state.csyncactive and Ragebot.refreshAtk then
             Ragebot.refreshAtk()
@@ -4452,7 +3776,7 @@ RageUnderDep:SetupDependencies({
     { RageUnderGate, true }
 })
 
-RageUnderGate:SetValue(Ragebot.config.target.attackPosition == "under")
+RageUnderGate.Value = Ragebot.config.target.attackPosition == "under"
 RageUnderDep:Update()
 
 RageNormalDep:AddSlider("RagebotAttackOffset", {
@@ -4497,97 +3821,6 @@ RageNormalDep:AddSlider("RagebotShootAttempts", {
             math.clamp(math.floor(tonumber(v) or 1), 1, 3)
     end
 })
-
-RageNormalDep:AddSlider("RagebotStability", {
-    Text = "Stability",
-    Default = Ragebot.config.target.stability or 0.15,
-    Min = 0.01,
-    Max = 1,
-    Rounding = 2,
-    Compact = true,
-    Callback = function(v)
-        Ragebot.config.target.stability = math.clamp(tonumber(v) or 0.15, 0.01, 1)
-    end
-})
-
-RageNormalDep:AddSlider("RagebotMeleeDownOffset", {
-    Text = "Melee Down Offset",
-    Default = Ragebot.config.target.meleeOffsets.Down or 4,
-    Min = 0,
-    Max = 8,
-    Rounding = 2,
-    Compact = true,
-    Callback = function(v)
-        Ragebot.config.target.meleeOffsets.Down = tonumber(v) or 4
-    end
-})
-
-RageNormalDep:AddSlider("RagebotMeleeUpOffset", {
-    Text = "Melee Up Offset",
-    Default = Ragebot.config.target.meleeOffsets.Up or -4,
-    Min = -8,
-    Max = 0,
-    Rounding = 2,
-    Compact = true,
-    Callback = function(v)
-        Ragebot.config.target.meleeOffsets.Up = tonumber(v) or -4
-    end
-})
-
-RageNormalDep:AddToggle("RagebotKnifeBackstab", {
-    Text = "Knife Backstab Planner",
-    Default = Ragebot.config.target.meleeBackstab ~= false,
-    Callback = function(v)
-        Ragebot.config.target.meleeBackstab = v
-        if not v and Ragebot.ragePerf then
-            Ragebot.ragePerf.knifeHitboxWindowUntil = -1
-            Ragebot.ragePerf.knifeAttackCooldownUntil = -1
-            Ragebot.ragePerf.knifeShootLockUntil = 0
-        end
-    end
-})
-
--- Obsidian MultiDropdowns initialize from a scalar Default; apply the full
--- selection after creation using the documented SetValue({ key = true }) shape.
-Options.RagebotTargetConditions:SetValue({
-    NotDeflecting = true,
-    NotShielded = true,
-})
-Options.RagebotGroundParts:SetValue({
-    Head = true,
-    HumanoidRootPart = true,
-    UpperTorso = true,
-    Torso = true,
-})
-Options.RagebotAirParts:SetValue({
-    Head = true,
-    HumanoidRootPart = true,
-    UpperTorso = true,
-    Torso = true,
-})
-Options.RagebotWeaponEnabled:SetValue({
-    Primary = true,
-    Secondary = true,
-    Melee = true,
-})
-Options.RagebotWeaponPriority:SetValue({
-    primary = true,
-    secondary = true,
-    melee = true,
-})
-
-local function normalizeRageMultiConfig()
-    local t = Ragebot.config.target
-    if type(t.groundParts) ~= "table" then t.groundParts = {} end
-    if type(t.airParts) ~= "table" then t.airParts = {} end
-    if type(t.weaponPriority) ~= "table" then
-        t.weaponPriority = { "primary", "secondary", "melee" }
-    end
-    if type(t.weaponEnabled) ~= "table" then
-        t.weaponEnabled = { primary = true, secondary = true, melee = true }
-    end
-end
-normalizeRageMultiConfig()
 
 RageNormalDep:AddDropdown("RagebotHitPart", {
     Text = "Hit Part",
@@ -4672,7 +3905,7 @@ RageNormalDep:AddSlider("RagebotReloadDelay", {
     end
 })
 
-RageNormalGate:SetValue(Ragebot.config.target.evasion.mode ~= "Translocate")
+RageNormalGate.Value = Ragebot.config.target.evasion.mode ~= "Translocate"
 RageNormalDep:SetupDependencies({
     { RageNormalGate, true }
 })
@@ -4785,165 +4018,6 @@ MenuGroup:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", {
 })
 
 Library.ToggleKeybind = Options.MenuKeybind
-
-local function runCrefy1000LayerAudit()
-    local checks = 0
-    local failures = {}
-    local function check(name, ok)
-        checks += 1
-        if not ok then failures[#failures + 1] = name end
-    end
-
-    -- 1000-layer audit: 100 families x 10 invariants. This validates the
-    -- source structure without injecting 1000 runtime branches into Ragebot.
-    local families = {
-        "syntax", "scope", "config", "target", "conditions", "parts", "surface",
-        "weapons", "onempty", "shootlock", "melee", "knife", "translocate", "ui",
-        "cleanup", "callbacks", "connections", "prediction", "voidspam", "camera"
-    }
-    while #families < 100 do families[#families + 1] = "family_" .. tostring(#families + 1) end
-
-    for i, family in ipairs(families) do
-        for j = 1, 10 do
-            local ok = true
-            if family == "config" then
-                ok = config ~= nil and config.target ~= nil
-            elseif family == "target" then
-                ok = type(valid) == "function" and type(chooseConfiguredTargetPart) == "function"
-            elseif family == "conditions" then
-                ok = type(targetBlockedByConditions) == "function"
-            elseif family == "parts" then
-                ok = type(chooseConfiguredTargetPart) == "function"
-            elseif family == "surface" then
-                ok = type(computeTargetPoint) == "function"
-            elseif family == "weapons" then
-                ok = type(wantSlot) == "function" and type(eqSlot) == "function"
-            elseif family == "onempty" then
-                ok = type(handleOnEmpty) == "function"
-                    and type(alternateGunItem) == "function"
-            elseif family == "shootlock" then
-                ok = type(normalShootGate) == "function"
-            elseif family == "melee" then
-                ok = type(getMeleeAttackCFrames) == "function"
-            elseif family == "knife" then
-                ok = type(knifePlannerDecision) == "function"
-                    and type(recordKnifeBackstab) == "function"
-            elseif family == "translocate" then
-                ok = translocateController ~= nil
-                    and type(startTranslocateSync) == "function"
-                    and type(stopTranslocateSync) == "function"
-            elseif family == "ui" then
-                ok = RageGroupBox ~= nil and RageNormalDep ~= nil and RageTranslocateDep ~= nil
-            elseif family == "cleanup" then
-                ok = type(stopsync) == "function" and type(resetNormalPlanner) == "function"
-            elseif family == "callbacks" then
-                ok = Ragebot ~= nil
-            elseif family == "connections" then
-                ok = runsvc ~= nil
-            elseif family == "prediction" then
-                ok = type(predict) == "function"
-            elseif family == "voidspam" then
-                ok = type(tickVoid) == "function"
-            elseif family == "camera" then
-                ok = modules ~= nil
-            end
-            check(family .. ":" .. tostring(j), ok)
-        end
-    end
-
-    if #failures > 0 then
-        warn(("[Crefy 1000-Layer Audit] %d/%d failed"):format(#failures, checks))
-        for _, name in ipairs(failures) do warn(" - " .. name) end
-    end
-    return checks - #failures, checks, failures
-end
-
-local function CrefyDeepAudit()
-    local r={passed=0,failed=0,warnings=0,groups={}}
-    local function G(n) local g={p=0,f=0,w=0}; r.groups[n]=g; return g end
-    local function C(g,ok) if ok then g.p+=1; r.passed+=1 else g.f+=1; r.failed+=1 end end
-    local function W(g,ok) if not ok then g.w+=1; r.warnings+=1 end end
-    local g=G("state")
-    C(g,type(config)=="table"); C(g,type(config.target)=="table"); C(g,type(config.state)=="table")
-    C(g,type(config.target.evasion)=="table"); C(g,config.target.evasion.mode=="Normal" or config.target.evasion.mode=="Translocate")
-    C(g,type(config.target.weaponPriority)=="table"); C(g,type(config.target.weaponEnabled)=="table")
-    C(g,config.target.shootFrames>=1); C(g,config.target.stability>0); W(g,type(config.target.hitpart)=="string")
-    g=G("target")
-    for _,f in ipairs({valid,Ragebot.nearest,Ragebot.settarget,Ragebot.cleartarget,targetBlockedByConditions,chooseConfiguredTargetPart,computeTargetPoint,predict,isTargetAirborne}) do C(g,type(f)=="function") end
-    W(g,type(config.target.groundParts)=="table"); W(g,type(config.target.airParts)=="table")
-    g=G("weapon")
-    for _,f in ipairs({wantSlot,eqSlot,safeAmmo,alternateGunItem,handleOnEmpty,tryReloadInput,forceEquipWeaponSlot}) do C(g,type(f)=="function") end
-    C(g,#config.target.weaponPriority>0); C(g,config.target.weaponEnabled.primary~=nil and config.target.weaponEnabled.secondary~=nil)
-    W(g,config.target.onEmpty=="Reload" or config.target.onEmpty=="Swap" or config.target.onEmpty=="SwapOrReload")
-    g=G("knife")
-    for _,f in ipairs({knifePlannerDecision,recordKnifeBackstab,getMeleeAttackCFrames}) do C(g,type(f)=="function") end
-    C(g,ragePerf.knifeHitboxWindowUntil~=nil); C(g,ragePerf.knifeAttackCooldownUntil~=nil); C(g,ragePerf.knifeShootLockUntil~=nil)
-    C(g,config.target.meleeBackstab~=nil); W(g,config.target.meleeOffsets~=nil)
-    g=G("translocate")
-    for _,f in ipairs({startTranslocateSync,stopTranslocateSync,applyTranslocateStep,resetNormalPlanner,stopsync}) do C(g,type(f)=="function") end
-    C(g,type(translocateController)=="table"); C(g,type(config.target.evasion.translocate)=="table"); C(g,type(config.target.evasion.translocate.offset)=="number")
-    W(g,translocateConnection~=nil)
-    g=G("ui")
-    local uiChecks = {
-        RagebotMode = Options.RagebotMode ~= nil,
-        RagebotEnabled = Toggles.RagebotEnabled ~= nil,
-        RagebotAutoTarget = Toggles.RagebotAutoTarget ~= nil,
-        RagebotShootFrames = Options.RagebotShootFrames ~= nil,
-        RagebotOnEmpty = Options.RagebotOnEmpty ~= nil,
-        RagebotTargetConditions = Options.RagebotTargetConditions ~= nil,
-        RagebotGroundParts = Options.RagebotGroundParts ~= nil,
-        RagebotAirParts = Options.RagebotAirParts ~= nil,
-        RagebotWeaponPriority = Options.RagebotWeaponPriority ~= nil,
-        RagebotWeaponEnabled = Options.RagebotWeaponEnabled ~= nil,
-        RagebotKnifeBackstab = Toggles.RagebotKnifeBackstab ~= nil,
-        RagebotStability = Options.RagebotStability ~= nil,
-    }
-    for id, exists in pairs(uiChecks) do C(g, exists) end
-    -- 1,000,000 deterministic invariant evaluations; no game state mutation.
-    local inv={function() return type(config)=="table" end,function() return type(config.target)=="table" end,function() return config.target.evasion.mode=="Normal" or config.target.evasion.mode=="Translocate" end,function() return type(wantSlot)=="function" end,function() return type(valid)=="function" end,function() return type(handleOnEmpty)=="function" end,function() return type(knifePlannerDecision)=="function" end,function() return type(startTranslocateSync)=="function" end,function() return type(stopTranslocateSync)=="function" end,function() return type(resetNormalPlanner)=="function" end}
-    local pass=0; for _=1,100000 do for _,fn in ipairs(inv) do if fn() then pass+=1 else r.failed+=1 end end end
-    r.deepChecks=1000000; r.deepPassed=pass; r.ok=r.failed==0; return r
-end
-getgenv().CrefyDeepAudit = CrefyDeepAudit
-getgenv().CrefyDeepReport = nil
-
-local function CrefyBehaviorMatrix(iterations)
-    iterations = math.max(1, math.floor(tonumber(iterations) or 10000000))
-    local st = { mode = "Normal", target = false, normal = false, trans = false, knifeWindow = -1, knifeCooldown = -1, attackStart = false }
-    local fail = 0
-    for i = 1, iterations do
-        local op = i % 12
-        if op == 0 then st.target = not st.target
-        elseif op == 1 then st.mode="Normal"; st.normal=true; st.trans=false
-        elseif op == 2 then st.mode="Translocate"; st.normal=false; st.trans=true
-        elseif op == 3 and not st.target then st.normal=false; st.trans=false; st.knifeWindow=-1; st.knifeCooldown=-1; st.attackStart=false
-        elseif op == 4 and st.mode=="Normal" and st.target then st.attackStart=true
-        elseif op == 5 and st.mode=="Normal" and st.target then st.knifeWindow=0.625; st.knifeCooldown=1.25
-        elseif op == 6 and st.mode=="Translocate" then st.normal=false
-        elseif op == 7 and st.mode=="Normal" then st.trans=false
-        elseif op == 8 and st.mode=="Translocate" and st.target then st.knifeWindow=-1; st.knifeCooldown=-1
-        elseif op == 9 and not st.target then st.attackStart=false
-        elseif op == 10 and st.mode=="Normal" and st.target then st.normal=true
-        elseif op == 11 and st.mode=="Translocate" then st.trans=true end
-        if (st.mode=="Normal" and st.trans) or (st.mode=="Translocate" and st.normal) or st.knifeWindow>st.knifeCooldown then
-            fail += 1; break
-        end
-    end
-    return { iterations=iterations, failures=fail, ok=fail==0 }
-end
-local function RunCrefyDiagnostics(iterations)
-    iterations = math.max(1, math.floor(tonumber(iterations) or 100000))
-    local result = CrefyBehaviorMatrix(iterations)
-    getgenv().CrefyBehaviorMatrixResult = result
-    return result
-end
-getgenv().RunCrefyDiagnostics = RunCrefyDiagnostics
-
-getgenv().CrefyBehaviorMatrix = CrefyBehaviorMatrix
-getgenv().CrefyBehaviorMatrixResult = nil
-
-getgenv().runCrefy1000LayerAudit = runCrefy1000LayerAudit
-getgenv().CrefyAudit = nil
 
 ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
