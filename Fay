@@ -4423,8 +4423,8 @@ MenuGroup:AddSlider("UICornerSlider", {
     Text = "Corner Radius",
     Default = Library.CornerRadius,
     Min = 0,
-    Max = 20,
-    Rounding = 0,
+    Max = 200,
+    Rounding = 10,
     Callback = function(value)
         Window:SetCornerRadius(value)
     end,
