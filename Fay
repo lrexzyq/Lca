@@ -42,7 +42,7 @@ local RagebotSubTab = MainSubTabs:AddSubTab({ Name = "Ragebot", Icon = "sword" }
 local MiscSubTabs = Tabs.Misc
 MiscSubTabs:SetSubTabAlignment("Center")
 local WeaponsSubTab = MiscSubTabs:AddSubTab({ Name = "Weapons", Icon = "sword" })
-local ModsSubTab = MiscSubTabs:AddSubTab({ Name = "Mods", Icon = "wrench" })
+local ModsSubTab = MiscSubTabs:AddSubTab({ Name = "Mods", Icon = "zap" })
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -100,6 +100,7 @@ local Aimbot = {
     smoothing = 0,
     hitPart = "Head",
 
+    
     flickEnabled = false,
     flickDuration = 0.3,
     flickCurvature = 0.5,
@@ -358,6 +359,7 @@ function Aimbot:_updateFlick(dt)
     local cam = Workspace.CurrentCamera
     local cc = self:getCC()
 
+    
     if not target or not target.character or not target.character.Parent or not target.part.Parent
         or not cam then
         self:_finishFlick()
@@ -1083,6 +1085,8 @@ local clickRequest = false
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
+    
+    
     if input.UserInputType == Enum.UserInputType.MouseButton1
         and silentAim.fireMode == "ClickRequest" then
         clickRequest = true
@@ -1577,12 +1581,10 @@ local function getKnifeCooldown(item)
             end
         end
     end)
-
     cooldown = tonumber(cooldown)
     if not cooldown or cooldown <= 0 then
         cooldown = 1.25
     end
-
     return cooldown
 end
 
@@ -1750,6 +1752,7 @@ local function tickAmmo()
     end
     config.state.reloading = reloading
 
+    
     if config.state.outofammo and not melee then
         if config.voidspam.enabled then
             config.voidspam.phase = "hide"
@@ -1760,10 +1763,13 @@ local function tickAmmo()
         return
     end
 
+    
+    
     if not melee and not reloading and (wasReloading or wasOutOfAmmo) and (tonumber(current) or 0) > 0 then
         config.state.reloadReadyAt = now + math.clamp(tonumber(config.state.reloadDelay) or 0.5, 0.01, 1)
     end
 
+    
     if not melee and config.state.reloadReadyAt > now then
         if config.voidspam.enabled then
             config.voidspam.phase = "hide"
@@ -2101,6 +2107,7 @@ local function tickVoidSpam()
 
     local hasTarget = config.target.character and valid(config.target.character)
 
+    
     if not hasTarget then
         if config.voidspam.phase ~= "hide" then
             config.voidspam.phase = "hide"
@@ -2111,6 +2118,7 @@ local function tickVoidSpam()
         return
     end
 
+    
     if config.voidspam.phase == "hide" and config.voidspam.currentduration == math.huge then
         config.voidspam.phase = "shoot"
         config.voidspam.shotIssued = false
@@ -2122,6 +2130,7 @@ local function tickVoidSpam()
         return
     end
 
+    
     if config.state.outofammo or config.state.reloading then
         config.voidspam.phase = "hide"
         config.voidspam.shotIssued = false
@@ -2134,6 +2143,7 @@ local function tickVoidSpam()
     local elapsed = now - config.voidspam.lastswitch
 
     if config.voidspam.phase == "shoot" then
+        
         if config.voidspam.shotIssued then
             config.voidspam.phase = "hide"
             config.voidspam.currentduration = randVs(
@@ -2142,6 +2152,7 @@ local function tickVoidSpam()
             )
             config.voidspam.lastswitch = now
         elseif elapsed >= config.voidspam.currentduration then
+            
             config.voidspam.currentduration = randVs(
                 config.voidspam.shoot_min,
                 config.voidspam.shoot_max
@@ -2354,9 +2365,14 @@ function translocateController:Reset()
     end
 end
 
+
+
 translocateController:BindRenderStep()
 
 local function translocateApplyForcedCrouch(enabled)
+    
+    
+    
     local entity = localfighter and localfighter.Entity
     if entity then
         for _, name in ipairs({ "_ApplyForcedCrouch", "ApplyForcedCrouch", "SetForcedCrouch" }) do
@@ -2413,6 +2429,11 @@ local function translocateCompute(originCFrame, hasTarget)
 end
 
 local function clearTranslocateState()
+    
+    
+    
+    
+    
     local state = config.target.evasion.translocate
     state.active = false
     state.hasTarget = false
@@ -2440,6 +2461,10 @@ local function applyTranslocateStep()
     local targetRoot = hasTarget and config.target.character:FindFirstChild("HumanoidRootPart") or nil
     hasTarget = targetRoot ~= nil
 
+    
+    
+    
+    
     local clientCFrame = translocateController:GetClientCFrame()
     if not clientCFrame then
         clearTranslocateState()
@@ -2469,8 +2494,12 @@ startTranslocateSync = function()
     if translocateConnection then return end
     if config.target.immune then return end
 
+    
     translocateController:BindRenderStep()
 
+    
+    
+    
     config.state.csyncactive = true
     config.orbit.active = false
     config.voidspam.phase = nil
@@ -2494,10 +2523,15 @@ startTranslocateSync = function()
             return
         end
         if not localfighter or not localfighter.Entity or not localfighter.Entity.RootPart then
+            
+            
+            
             translocateController:SetRootPart(nil)
             return
         end
 
+        
+        
         applyTranslocateStep()
     end)
 end
@@ -2508,6 +2542,9 @@ stopTranslocateSync = function()
         translocateConnection = nil
     end
 
+    
+    
+    
     if config.orbit.savedpos
         and localfighter
         and localfighter.Entity
@@ -2688,7 +2725,6 @@ local function autoshoot()
         if isKnifeItem(equipped) then
             local now = os.clock()
             local nextAttack = tonumber(config.state.knifeNextAttackAt) or 0
-
             if now < nextAttack then
                 return
             end
@@ -2700,28 +2736,23 @@ local function autoshoot()
             if not hitPart then
                 hitPart = hitpartfromname(targetChar, config.target.hitpart)
             end
-            if not hitPart then
-                return
-            end
+            if not hitPart then return end
 
             local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
             local shootPos = root and root.Position or hitPart.Position
             local targetPos = predict(hitPart, shootPos)
-
             if typeof(targetPos) ~= "Vector3" then
                 targetPos = hitPart.Position
             end
 
             local aimCF = CFrame.new(shootPos, targetPos)
             local attackData = { part = hitPart }
-
             config.state.knifeHitboxWindowUntil = now + 0.625
 
-            local ok, err = pcall(function()
+            local ok = pcall(function()
                 if type(equipped.HeavyAttack) ~= "function" then
                     error("Knife HeavyAttack is unavailable")
                 end
-
                 equipped:HeavyAttack(aimCF, aimCF, attackData)
             end)
 
@@ -2731,12 +2762,10 @@ local function autoshoot()
                 return
             end
 
-            local cooldown = getKnifeCooldown(equipped)
-            config.state.knifeNextAttackAt = now + cooldown
+            config.state.knifeNextAttackAt = now + getKnifeCooldown(equipped)
             ragePerf.lastAttackTick = tick()
 
-            if config.voidspam.enabled
-                and config.voidspam.phase == "shoot" then
+            if config.voidspam.enabled and config.voidspam.phase == "shoot" then
                 config.voidspam.shotIssued = true
             end
 
@@ -2803,8 +2832,7 @@ local function autoshoot()
             end)
         end
 
-        if config.voidspam.enabled and not isSling(getweapon())
-            and config.voidspam.phase == "shoot" then
+        if config.voidspam.enabled and not isSling(getweapon()) and config.voidspam.phase == "shoot" then
             config.voidspam.shotIssued = true
         end
 
@@ -2819,6 +2847,8 @@ if modules.camcontrol and type(modules.camcontrol.Update) == "function" then
             return oldcamupdate(...)
         end
 
+        
+        
         if config.target.evasion.mode == "Translocate" then
             return oldcamupdate(...)
         end
@@ -3786,6 +3816,9 @@ RageGroupBox:AddDropdown("RagebotMode", {
         v = tostring(v or "Normal")
 
         if v == "Translocate" then
+            
+            
+            
             if stopsync then stopsync() end
             Ragebot.config.target.evasion.mode = "Translocate"
             RageNormalGate.Value = false
@@ -3805,6 +3838,7 @@ RageGroupBox:AddDropdown("RagebotMode", {
         RageNormalDep:Update()
         RageTranslocateDep:Update()
 
+        
         if Ragebot.stopvoid then
             Ragebot.stopvoid()
         end
@@ -3916,16 +3950,13 @@ RageNormalDep:AddDropdown("RagebotWeapon", {
     Callback = function(v)
         v = tostring(v or "primary")
         Ragebot.config.target.weaponPick = v
-
         if v == "melee" then
             Ragebot.config.state.knifeNextAttackAt = 0
             Ragebot.config.state.knifeHitboxWindowUntil = 0
         end
-
         if Ragebot.config.state.csyncactive and Ragebot.refreshAtk then
             Ragebot.refreshAtk()
         end
-
         if Ragebot.config.target.evasion.mode ~= "Translocate" and Ragebot.eqSlot then
             Ragebot.eqSlot()
         end
@@ -4033,6 +4064,7 @@ RageNormalDep:SetupDependencies({
     { RageNormalGate, true }
 })
 RageNormalDep:Update()
+
 
 
 
