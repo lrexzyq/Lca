@@ -1,3 +1,4 @@
+
 local repo = "https://raw.githubusercontent.com/lrexzyq/Crefy/main/"
 local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
 local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
@@ -10,13 +11,15 @@ Library.ForceCheckbox = false
 Library.ShowToggleFrameInKeybinds = true
 
 local Window = Library:CreateWindow({
-    Title = "Skiding",
+    Title = "mspaint",
     Icon = 95816097006870,
     NotifySide = "Right",
     ShowCustomCursor = true,
     Footer = {
-        "Rivals | ",
-        { Text = "Aimbot + Ragebot", Copyable = true },
+        "version: example |",
+        { Text = "discord.gg/mspaint", Copyable = true },
+        "|",
+        { Text = "user id", Copyable = true, CopyText = tostring(game.Players.LocalPlayer.UserId) },
     },
     CopyableFooter = true,
     FuzzySearch = true,
@@ -28,24 +31,22 @@ local Window = Library:CreateWindow({
 })
 
 local Tabs = {
-    Main = Window:AddTab({ Name = "Main", Icon = "crosshair", Description = "Aimbot & Ragebot" }),
-    Character = Window:AddTab({ Name = "Character", Icon = "user", Description = "Character utilities" }),
-    Misc = Window:AddTab({ Name = "Misc", Icon = "settings", Description = "Weapons & Mods" }),
+    Main = Window:AddTab({ Name = "Main", Icon = "user", Description = "Main features" }),
+    Key = Window:AddKeyTab("Key System"),
+    ["Sub Tabs"] = Window:AddTab({ Name = "Sub Tabs", Icon = "layers", Description = "Crefy features" }),
     ["UI Settings"] = Window:AddTab({ Name = "UI Settings", Icon = "settings", Description = "Configure the menu" }),
 }
-
-
 
 local MainSubTabs = Tabs.Main
 MainSubTabs:SetSubTabAlignment("Center")
 local AimbotSubTab = MainSubTabs:AddSubTab({ Name = "Aimbot", Icon = "crosshair" })
 local RagebotSubTab = MainSubTabs:AddSubTab({ Name = "Ragebot", Icon = "sword" })
 
-
-local MiscSubTabs = Tabs.Misc
-MiscSubTabs:SetSubTabAlignment("Center")
-local WeaponsSubTab = MiscSubTabs:AddSubTab({ Name = "Weapons", Icon = "sword" })
-local ModsSubTab = MiscSubTabs:AddSubTab({ Name = "Mods", Icon = "wrench" })
+local SubTabsTab = Tabs["Sub Tabs"]
+SubTabsTab:SetSubTabAlignment("Center")
+local WeaponsSubTab = SubTabsTab:AddSubTab({ Name = "Weapons", Icon = "sword" })
+local ModsSubTab = SubTabsTab:AddSubTab({ Name = "Mods", Icon = "wrench" })
+local CharacterSubTab = SubTabsTab:AddSubTab({ Name = "Character", Icon = "user" })
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -1311,6 +1312,7 @@ local config = {
         auto = false,
         autoshoot = true,
         shootAttempts = 1,
+        shootFrames = 1,
         hitpart = "Head",
         lastchar = nil,
         lastplayer = nil,
@@ -1319,6 +1321,8 @@ local config = {
         attackPosition = "default",
         attackCustomEnabled = false,
         weaponPick = "primary",
+        weaponSelection = { primary = true, secondary = false, melee = true },
+        swapReloadMode = "Swap & Reload",
         forceWeapon = true,
         rageMasterOn = false,
         evasion = {
@@ -1339,18 +1343,6 @@ local config = {
         customVertical = 0,
         customRadius = 0,
     },
-    prediction = {
-        enabled = false,
-        multiplier = 1.2,
-        velocity = Vector3.new(0, 0, 0),
-        acceleration = Vector3.new(0, 0, 0),
-        lastposition = nil,
-        lasttime = 0,
-        velbuffer = {},
-        posbuffer = {},
-        maxvelsamples = 15,
-        maxpossamples = 5
-    },
     orbit = {
         active = false,
         angle = 0,
@@ -1367,6 +1359,7 @@ local config = {
         csyncactive = false,
         reloadStartedAt = 0,
         reloadReadyAt = 0,
+        reloadCooldownUntil = 0,
         reloadDelay = 0.5,
     },
     voidhide = {
@@ -1432,6 +1425,63 @@ local config = {
         fontName = "gotham",
     },
 }
+
+local rageShootLock = {
+    target = nil,
+    nextAt = 0,
+    interval = 0,
+}
+
+function rageShootLock:Reset()
+    self.target = nil
+    self.nextAt = 0
+    self.interval = 0
+end
+
+function rageShootLock:ShouldFire(target, threshold)
+    local now = os.clock()
+    local window = math.max(0, tonumber(threshold) or 0)
+    if self.target ~= target then
+        self.target = target
+        self.nextAt = 0
+        self.interval = 0
+    end
+    if now < self.nextAt then
+        return false
+    end
+    self.interval = window
+    return true
+end
+
+local ragePlanner = {
+    _partGlue = nil,
+    _shootLock = rageShootLock,
+    _attackStart = nil,
+    _hitboxWindowUntil = -1,
+    _attackCooldown = -1,
+}
+
+function ragePlanner:ResetState()
+    self._attackStart = nil
+    self._hitboxWindowUntil = -1
+    self._attackCooldown = -1
+    self._shootLock:Reset()
+    resetKnifeAttackState()
+end
+
+function ragePlanner:ShouldPlan(target, distance, shootFrames)
+    local threshold = (tonumber(distance) or 0) * math.clamp(math.floor(tonumber(shootFrames) or 1), 1, 5)
+    if not self._shootLock:ShouldFire(target, threshold) then
+        self._attackStart = nil
+        return false
+    end
+    local now = os.clock()
+    if not self._attackStart then
+        self._attackStart = now
+        return false
+    end
+    return now - self._attackStart >= 0.06666666666666667
+end
 
 local ragePerf = {
     lastAttackTick = 0,
@@ -1558,12 +1608,60 @@ local function isInfiniteWeapon()
     return INFINITE_AMMO_WEAPONS[w] == true
 end
 
+local function selectedWeaponTable()
+    local selected = config.target.weaponSelection or {}
+    if selected.secondary then
+        return { primary = false, secondary = true, melee = false }
+    end
+    local primary = selected.primary == true
+    local melee = selected.melee == true
+    if not primary and not melee then
+        primary = true
+    end
+    return { primary = primary, secondary = false, melee = melee }
+end
+
+local function selectionHas(kind)
+    return selectedWeaponTable()[kind] == true
+end
+
+local function selectedSlots()
+    local selected = selectedWeaponTable()
+    local out = {}
+    if selected.primary then out[#out + 1] = 1 end
+    if selected.secondary then out[#out + 1] = 2 end
+    if selected.melee then out[#out + 1] = 3 end
+    return out
+end
+
 local function wantSlot()
-    return SLOTS[config.target.weaponPick or "primary"] or 1
+    local current = modules.fighter and modules.fighter.LocalFighter and modules.fighter.LocalFighter.EquippedItem
+    local currentSlot = whichSlot(current)
+    local slots = selectedSlots()
+    if currentSlot then
+        for _, slot in ipairs(slots) do
+            if slot == currentSlot then
+                return slot
+            end
+        end
+    end
+    return slots[1] or 1
 end
 
 local function pickMelee()
-    return (config.target.weaponPick or "primary") == "melee"
+    return selectionHas("melee") and not selectionHas("primary") and not selectionHas("secondary")
+end
+
+local function nextSelectedSlot(currentSlot)
+    local slots = selectedSlots()
+    if #slots == 0 then return 1 end
+    if #slots == 1 then return slots[1] end
+    for i, slot in ipairs(slots) do
+        if slot == currentSlot then
+            return slots[(i % #slots) + 1]
+        end
+    end
+    return slots[1]
 end
 
 local function getammo()
@@ -1669,6 +1767,7 @@ end
 local rageLastSlotForce = 0
 local rageEquipPending = false
 local rageEquipIndex = nil
+local rageNextAttackAt = 0
 
 local function getItemIndex(item, fallback)
     if not item then return fallback end
@@ -1809,6 +1908,7 @@ local function tickAmmo()
         config.state.reloading = false
         config.state.reloadStartedAt = 0
         config.state.reloadReadyAt = 0
+        config.state.reloadCooldownUntil = 0
         return
     end
 
@@ -1954,42 +2054,6 @@ local function hitpartfromname(character, partname)
     else
         return character:FindFirstChild(partname) or character:FindFirstChild("Head")
     end
-end
-
-local function updatevel()
-    if not config.target.character or not config.prediction.enabled then
-        config.prediction.velocity = Vector3.new(0, 0, 0)
-        config.prediction.lastposition = nil
-        return
-    end
-    local root = config.target.character:FindFirstChild("HumanoidRootPart")
-    if not root then return end
-    local now = tick()
-    local dt = now - config.prediction.lasttime
-    if dt > 0 and dt < 0.1 then
-        local currentpos = root.Position
-        if config.prediction.lastposition then
-            local instantvel = (currentpos - config.prediction.lastposition) / dt
-            config.prediction.velocity = config.prediction.velocity:Lerp(instantvel, 0.6)
-        end
-        config.prediction.lastposition = currentpos
-        config.prediction.lasttime = now
-    end
-end
-
-local function predict(targetpart, origin)
-    if not config.prediction.enabled or not targetpart then
-        return targetpart and targetpart.Position or Vector3.new()
-    end
-    local basepos = targetpart.Position
-    local distance = (basepos - origin).Magnitude
-    local ping = 0
-    pcall(function()
-        ping = game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
-    end)
-    local traveltime = distance / 3000
-    local totaltime = (traveltime + ping) * config.prediction.multiplier
-    return basepos + (config.prediction.velocity * totaltime)
 end
 
 local function canuse()
@@ -2633,131 +2697,14 @@ end
 
 startsync = function()
     if config.target.evasion.mode == "Translocate" then
-        if not translocateConnection then
-            startTranslocateSync()
+        if Ragebot and Ragebot.startTranslocateSync then
+            Ragebot.startTranslocateSync()
         end
         return
     end
-    if config.state.csyncactive then return end
-    if config.target.immune then return end
+    if not Ragebot.enabled then return end
     if not config.target.character or not valid(config.target.character) then return end
     eqSlot()
-    config.state.csyncactive = true
-    config.orbit.active = true
-    local weapon = getweapon()
-    setOrbH(weapon)
-    setOrbR()
-    if not config.orbit.savedpos then
-        if localfighter and localfighter.Entity and localfighter.Entity.RootPart then
-            config.orbit.savedpos = localfighter.Entity.RootPart.CFrame
-        end
-    end
-    config.orbit.connection = runsvc.Heartbeat:Connect(function(dt)
-        if not config.state.csyncactive then return end
-        if config.target.immune then stopsync() return end
-        if not config.target.character or not valid(config.target.character) then stopsync() return end
-        if not localfighter or not localfighter.Entity or not localfighter.Entity.RootPart then stopsync() return end
-
-        if config.target.immune then stopsync() return end
-
-        setOrbR()
-
-        oldpos = localfighter.Entity.RootPart.CFrame
-
-        local function isQuickSwapActive()
-            if pickMelee() then return false end
-            local lf = modules.fighter and modules.fighter.LocalFighter
-            if not lf or not lf.EquippedItem then return false end
-            local name = tostring(lf.EquippedItem:Get("Name") or ""):lower()
-            return name:find("fist", 1, true) or name:find("utility", 1, true)
-        end
-
-        local _weapon = getweapon()
-        local checksling = isSling(_weapon)
-
-        if isQuickSwapActive() then return end
-
-        eqSlot()
-
-        if reloadHide(checksling) then return end
-
-        if not checksling and config.voidspam.enabled
-            and not config.target.immune
-            and config.target.character
-            and valid(config.target.character) then
-            tickVoidSpam()
-            if config.voidspam.phase == "hide" then
-                local range = math.clamp(tonumber(config.voidspam.range) or 10000, 5, 10000000000)
-                local randomX = (math.random() * 2 - 1) * range
-                local randomZ = (math.random() * 2 - 1) * range
-                config.orbit.serverpos = Vector3.new(randomX, -99999999999, randomZ)
-                pcall(function()
-                    localfighter.Entity.RootPart.CFrame = CFrame.new(config.orbit.serverpos)
-                end)
-                return
-            end
-        end
-
-        if not config.target.character then stopsync() return end
-        local root = config.target.character:FindFirstChild("HumanoidRootPart")
-        if not root then stopsync() return end
-
-        if not checksling and isHidingPhase() then
-            local range = math.max(5, math.min(10000000000, tonumber(config.voidspam.range) or 10000))
-            config.orbit.serverpos = Vector3.new(randomRangeCoordinate(range), -math.max(100000, math.min(10000000000, range * 10)), randomRangeCoordinate(range))
-            pcall(function()
-                localfighter.Entity.RootPart.CFrame = CFrame.new(config.orbit.serverpos)
-            end)
-            return
-        end
-
-        if checksling then
-            if vhState and vhState.active then
-                local trg = config.target.character:FindFirstChild("HumanoidRootPart")
-                if trg then
-                    local flat = Vector3.new(trg.CFrame.LookVector.X, 0, trg.CFrame.LookVector.Z).Unit
-                    config.orbit.serverpos = trg.Position + Vector3.new(0, 15, 0) + (flat * 5)
-                end
-            end
-        end
-
-        if config.state.outofammo and not checksling and _weapon and not isInfiniteWeapon() then
-            local hrp = voidHrp()
-            if hrp then
-                snapVoid(hrp)
-            else
-                local range = math.clamp(tonumber(config.voidspam.range) or 10000, 5, 10000000000)
-                local randomX = (math.random() * 2 - 1) * range
-                local randomZ = (math.random() * 2 - 1) * range
-                config.orbit.serverpos = Vector3.new(randomX, -99999999999, randomZ)
-                pcall(function()
-                    localfighter.Entity.RootPart.CFrame = CFrame.new(config.orbit.serverpos)
-                end)
-            end
-            return
-        end
-
-        local targetpos = orbBase(root)
-        config.orbit.angle = config.orbit.angle + (config.orbit.speed * dt)
-        local offset = Vector3.new(
-            math.cos(config.orbit.angle) * config.orbit.radius,
-            config.orbit.height,
-            math.sin(config.orbit.angle) * config.orbit.radius
-        )
-        config.orbit.serverpos = targetpos + offset
-
-        if not getgenv().InstanceUndergroundEnabled then
-            if localfighter and localfighter.Entity and localfighter.Entity.RootPart then
-                local currentPos = localfighter.Entity.RootPart.CFrame
-                local newPos = CFrame.new(config.orbit.serverpos)
-                local distance = (newPos.Position - currentPos.Position).Magnitude
-                if distance < 2000 then
-                    localfighter.Entity.RootPart.CFrame = newPos
-                    config.orbit.savedpos = currentPos
-                end
-            end
-        end
-    end)
 end
 
 local meleeAttackState = {
@@ -2828,90 +2775,178 @@ local function recordKnifeBackstab(now)
     meleeAttackState.attackCooldown = now + 1.25
 end
 
-local function performKnifeRageAttack(item, targetChar, hitPart, aimPosition)
-    if not item or not targetChar or not hitPart or not isKnifeItem(item) then
-        return false
+local ragePartGlue = {}
+function ragePartGlue:Acquire(item, targetPart)
+    local character = LocalPlayer.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    local origin = root and root.Position or targetPart.Position
+    local targetPosition = targetPart.Position
+    if item and item.Get then
+        pcall(function()
+            local offset = item:Get("AttackOffset")
+            if typeof(offset) == "Vector3" then
+                targetPosition += offset
+            end
+        end)
     end
+    if (targetPosition - origin).Magnitude <= 1e-4 then
+        return CFrame.new(targetPosition)
+    end
+    return CFrame.lookAt(origin, targetPosition)
+end
 
-    local now = tick()
 
+ragePlanner._partGlue = ragePartGlue
 
+local function kiciaPlanPosition(targetChar, hitPart)
+    if not hitPart then return nil end
+    local state
+    pcall(function()
+        state = targetChar and (targetChar:GetAttribute("FighterState") or targetChar:GetAttribute("State"))
+    end)
+    if tostring(state) == "Below" then
+        return hitPart.Position + Vector3.new(0, -3, 0)
+    end
+    return hitPart.Position + Vector3.new(0, 0.5, 0)
+end
+
+local function buildKiciaAttack(item, targetChar, hitPart, aimPosition)
+    if not item or not targetChar or not hitPart then return nil end
+    local localChar = LocalPlayer.Character
+    local root = localChar and localChar:FindFirstChild("HumanoidRootPart")
+    local origin = root and root.Position or hitPart.Position
+    local planned = aimPosition or kiciaPlanPosition(targetChar, hitPart) or hitPart.Position
+    local acquire = ragePartGlue:Acquire(item, hitPart)
+    local attackPosition = acquire.Position
+    if (planned - attackPosition).Magnitude > 0.001 then
+        attackPosition = planned
+    end
+    local lookCF = CFrame.lookAt(attackPosition, hitPart.Position)
+    local rootCF = root and root.CFrame
+    local rx, ry, rz = 0, 0, 0
+    if rootCF then
+        rz, ry, rx = rootCF:ToOrientation()
+    end
+    local attackCF = CFrame.lookAt(attackPosition, hitPart.Position)
+    return lookCF, attackCF, {part = hitPart}, origin
+end
+
+local function performKnifeRageAttack(item, targetChar, hitPart, aimPosition)
+    if not item or not targetChar or not hitPart or not isKnifeItem(item) then return false end
+    local now = os.clock()
     if meleeAttackState.lastTarget ~= targetChar or meleeAttackState.lastWeapon ~= item then
         resetKnifeAttackState()
     end
     meleeAttackState.lastTarget = targetChar
     meleeAttackState.lastWeapon = item
-
-
-
-    if now >= meleeAttackState.hitboxWindowUntil then
-        if now < meleeAttackState.attackCooldown then
-            return false
-        end
-        recordKnifeBackstab(now)
-    end
-
-    local localChar = LocalPlayer.Character
-    local localRoot = localChar and localChar:FindFirstChild("HumanoidRootPart")
-    local targetRoot = targetChar:FindFirstChild("HumanoidRootPart")
-    local targetPosition = aimPosition or (targetRoot and targetRoot.Position) or hitPart.Position
-    if not targetPosition then
-        return false
-    end
-
-    local origin = localRoot and localRoot.Position or targetPosition
-    if (targetPosition - origin).Magnitude <= 1e-4 then
-        return false
-    end
-
-    local lookCF = CFrame.new(origin, targetPosition)
-    local attackCF = CFrame.new(origin, targetPosition)
-    local attackArgs = { part = hitPart }
-
-    local heavyAttack = item.HeavyAttack
-    local startAiming = item.StartAiming
-    local attackSucceeded = false
-
-
-
-
-    if type(heavyAttack) == "function" then
-        local kiciaOK = pcall(function()
-            heavyAttack(item, lookCF, attackCF, attackArgs)
+    local lookCF, attackCF, attackArgs = buildKiciaAttack(item, targetChar, hitPart, aimPosition)
+    if not lookCF then return false end
+    local function doHeavyAttack()
+        local ok = false
+        local encodedLook, encodedAttack
+        local encodeOK = pcall(function()
+            encodedLook = modules.utility:EncodeCFrame(lookCF)
+            encodedAttack = modules.utility:EncodeCFrame(attackCF)
         end)
-        if kiciaOK then
-            attackSucceeded = true
-        end
-    end
-
-
-
-
-
-    if not attackSucceeded and type(startAiming) == "function" and type(heavyAttack) == "function" then
-        local aimOK = pcall(function()
-            startAiming(item, targetPosition)
-        end)
-        if aimOK then
-            attackSucceeded = pcall(function()
-                heavyAttack(item, targetPosition)
+        if encodeOK and type(item.HeavyAttackEncoded) == "function" then
+            ok = pcall(function()
+                item:HeavyAttackEncoded(encodedLook, encodedAttack, hitPart, CFrame.lookAt)
             end)
         end
+        if not ok and type(item.HeavyAttack) == "function" then
+            ok = pcall(function()
+                item:HeavyAttack(lookCF, attackCF, attackArgs)
+            end)
+        end
+        if not ok and type(item.StartAiming) == "function" and type(item.HeavyAttack) == "function" then
+            local aimOK = pcall(function() item:StartAiming(aimPosition or hitPart.Position) end)
+            if aimOK then
+                ok = pcall(function() item:HeavyAttack(aimPosition or hitPart.Position) end)
+            end
+        end
+        return ok
     end
-
-    if not attackSucceeded then
+    if now < meleeAttackState.hitboxWindowUntil then
+        if not doHeavyAttack() then return false end
+        meleeAttackState.lastAttack = now
+        ragePerf.lastAttackTick = now
+        config.target.lastchar = targetChar
+        if config.voidspam.enabled and config.voidspam.phase == "shoot" then config.voidspam.shotIssued = true end
+        hideShot()
+        return true
+    end
+    if now < meleeAttackState.attackCooldown then return false end
+    recordKnifeBackstab(now)
+    if not doHeavyAttack() then
+        meleeAttackState.hitboxWindowUntil = -math.huge
         return false
     end
-
     meleeAttackState.lastAttack = now
     ragePerf.lastAttackTick = now
     config.target.lastchar = targetChar
-
-    if config.voidspam.enabled and config.voidspam.phase == "shoot" then
-        config.voidspam.shotIssued = true
-    end
-
+    if config.voidspam.enabled and config.voidspam.phase == "shoot" then config.voidspam.shotIssued = true end
     hideShot()
+    return true
+end
+
+local function ragePlannerReset()
+    ragePlanner:ResetState()
+end
+
+local function getReserveAmmo(item)
+    if not item then return 0 end
+    local reserve = 0
+    pcall(function()
+        reserve = tonumber(item:Get("AmmoReserve") or item:Get("ReserveAmmo") or item:Get("Reserve")) or 0
+    end)
+    return reserve
+end
+
+local function reloadCurrentItem(item)
+    if not item or itemMelee(item) then return false end
+    local now = tick()
+    if now < (config.state.reloadCooldownUntil or 0) then return false end
+    if getReserveAmmo(item) <= 0 then return false end
+    local fn = item.StartReloading
+    if type(fn) ~= "function" then return false end
+    local ok = pcall(fn, item)
+    if ok then
+        config.state.reloadStartedAt = now
+        config.state.reloadReadyAt = 0
+        config.state.reloadCooldownUntil = now + 0.4
+        return true
+    end
+    return false
+end
+
+local function manageSwapReload()
+    if not Ragebot.enabled or config.target.evasion.mode == "Translocate" then return false end
+    local lf = modules.fighter and modules.fighter.LocalFighter
+    local currentItem = lf and lf.EquippedItem
+    if not currentItem or itemMelee(currentItem) then return false end
+    if isInfiniteWeapon() then return false end
+    local currentAmmo, _, melee = getammo()
+    if melee or (tonumber(currentAmmo) or 0) > 0 then return false end
+    local mode = tostring(config.target.swapReloadMode or "Swap & Reload")
+    local currentSlot = whichSlot(currentItem) or wantSlot()
+    local selected = selectedWeaponTable()
+    local selectedCount = 0
+    for _, enabled in pairs(selected) do
+        if enabled then
+            selectedCount = selectedCount + 1
+        end
+    end
+    local hasAlternate = selectedCount > 1
+    local shouldReload = (not hasAlternate) or mode == "Swap & Reload" or mode == "Reload, No Swap"
+    local shouldSwap = hasAlternate and (mode == "Swap & Reload" or mode == "Swap, No Reload")
+    if shouldReload then
+        reloadCurrentItem(currentItem)
+    end
+    if not shouldSwap then return false end
+    local nextSlot = nextSelectedSlot(currentSlot)
+    if nextSlot == currentSlot then return false end
+    config.target.weaponPick = (nextSlot == 1 and "primary") or (nextSlot == 2 and "secondary") or "melee"
+    eqSlot()
     return true
 end
 
@@ -2928,6 +2963,15 @@ local function autoshoot()
     if not lf or not lf.EquippedItem then return end
 
     local equipped = lf.EquippedItem
+    local now = tick()
+    local shootFrames = math.clamp(math.floor(tonumber(config.target.shootFrames) or 1), 1, 5)
+    local frameDelay = 0.06666666666666667 * shootFrames
+    local targetLock = config.target.character
+    if now < rageNextAttackAt then return end
+    local targetRootForLock = targetLock and targetLock:FindFirstChild("HumanoidRootPart")
+    local myRootForLock = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    local lockDistance = (targetRootForLock and myRootForLock) and (targetRootForLock.Position - myRootForLock.Position).Magnitude or 0
+    if not ragePlanner:ShouldPlan(targetLock, lockDistance, shootFrames) then return end
 
     if itemMelee(equipped) then
         if not isKnifeItem(equipped) then return end
@@ -2937,8 +2981,16 @@ local function autoshoot()
         if not hitPart then return end
         local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
         local origin = root and root.Position or hitPart.Position
+        local plannedPos = kiciaPlanPosition(targetChar, hitPart) or hitPart.Position
         local targetPos = predict(hitPart, origin)
-        performKnifeRageAttack(equipped, targetChar, hitPart, targetPos)
+        if targetPos == hitPart.Position then
+            targetPos = plannedPos
+        end
+        local didAttack = performKnifeRageAttack(equipped, targetChar, hitPart, targetPos)
+        if didAttack then
+            rageShootLock.interval = frameDelay
+            rageShootLock.nextAt = os.clock() + frameDelay
+        end
         return
     end
     if not isInfiniteWeapon() then
@@ -2947,7 +2999,10 @@ local function autoshoot()
         if not canuse() then return end
     end
     local targetChar = config.target.character
-    if not valid(targetChar) then return end
+    if not valid(targetChar) then
+        ragePlanner:ResetState()
+        return
+    end
     local hitPart = hitpartfromname(targetChar, config.target.hitpart)
     if not hitPart then return end
     local shootPos
@@ -2955,7 +3010,7 @@ local function autoshoot()
     if vhState and vhState.active and checksling then
         local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
         shootPos = root and root.Position or Vector3.new()
-        targetPos = predict(hitPart, shootPos)
+        targetPos = predict(hitPart)
     else
         if vhState and vhState.active then
             local myRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
@@ -2966,18 +3021,37 @@ local function autoshoot()
             local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
             shootPos = root and root.Position or Vector3.new()
         end
-        targetPos = predict(hitPart, shootPos)
+        targetPos = predict(hitPart)
     end
+    local lookCF = CFrame.new(shootPos, targetPos)
+    local encodedLook = modules.utility:EncodeCFrame(lookCF)
     local data = {
         [utf8.char(1)] = {
-            [utf8.char(0)] = modules.utility:EncodeCFrame(CFrame.new(shootPos, targetPos)),
-            [utf8.char(1)] = modules.utility:EncodeCFrame(CFrame.new(shootPos, targetPos)),
+            [utf8.char(0)] = encodedLook,
+            [utf8.char(1)] = encodedLook,
             [utf8.char(2)] = hitPart,
             [utf8.char(3)] = modules.utility:EncodeCFrame(CFrame.new(0.43, 0.25, 0.42)),
         },
     }
     local equipped = lf.EquippedItem
     if equipped and equipped:Get("ObjectID") then
+        local encodedAttackFn = equipped.AttackEncoded
+        if type(encodedAttackFn) == "function" then
+            local encodedOK = pcall(function()
+                encodedAttackFn(equipped, encodedLook, encodedLook, hitPart, modules.utility)
+            end)
+            if encodedOK then
+                ragePerf.lastAttackTick = now
+                rageNextAttackAt = now + frameDelay
+                rageShootLock.interval = frameDelay
+                rageShootLock.nextAt = now + frameDelay
+                if config.voidspam.enabled and not isSling(getweapon()) and config.voidspam.phase == "shoot" then
+                    config.voidspam.shotIssued = true
+                end
+                hideShot()
+                return
+            end
+        end
         ragePerf.lastAttackTick = tick()
         local attempts = math.clamp(math.floor(tonumber(config.target.shootAttempts) or 1), 1, 3)
         for _ = 1, attempts do
@@ -2991,6 +3065,10 @@ local function autoshoot()
             end)
         end
 
+        rageNextAttackAt = now + frameDelay
+        rageShootLock.interval = frameDelay
+        rageShootLock.nextAt = os.clock() + frameDelay
+        ragePlanner._attackStart = nil
         if config.voidspam.enabled and not isSling(getweapon())
             and config.voidspam.phase == "shoot" then
             config.voidspam.shotIssued = true
@@ -3081,6 +3159,11 @@ local function cleartarget()
     config.target.manualkey = false
     config.target.immune = false
     resetKnifeAttackState()
+    rageShootLock.target = nil
+    rageShootLock.nextAt = 0
+    rageShootLock.interval = 0
+    resetRagePlannerState()
+    rageNextAttackAt = 0
     indicator.Color = Color3.fromRGB(255, 50, 50)
 end
 
@@ -3101,7 +3184,6 @@ local function settarget(char)
         if config.target.evasion.mode ~= "Translocate" then
             eqSlot()
         end
-        startsync()
     end
 end
 
@@ -3227,7 +3309,7 @@ runsvc.RenderStepped:Connect(function()
     local hudNeeded = config.visualizer.enabled
         or (config.ragestatus and config.ragestatus.enabled)
         or (config.hitNotifications and config.hitNotifications.enabled)
-        or (config.target.enabled and config.target.character and config.prediction.enabled)
+
     if inLobby and not hudNeeded then
         return
     end
@@ -3253,15 +3335,13 @@ runsvc.RenderStepped:Connect(function()
     if Ragebot.updateHitNotifications then
         Ragebot.updateHitNotifications(hudDt)
     end
-    if config.target.enabled and config.target.character and config.prediction.enabled then
-        updatevel()
-    end
 end)
 
 runsvc.Heartbeat:Connect(function()
     fflag()
     updatesling()
     tickAmmo()
+    manageSwapReload()
     if config.target.auto and not config.target.manualkey then
         local current, _, melee = getammo()
         local hasammo = current == nil or current > 0 or melee
@@ -3282,6 +3362,9 @@ runsvc.Heartbeat:Connect(function()
         end
         if config.target.evasion.mode ~= "Translocate" then
             eqSlot()
+            if config.voidspam.enabled then
+                tickVoidSpam()
+            end
             if config.target.autoshoot and not config.target.immune then
                 autoshoot()
             end
@@ -3302,6 +3385,7 @@ Ragebot.valid = valid
 Ragebot.player = player
 Ragebot.eqSlot = eqSlot
 Ragebot.refreshAtk = refreshAtk
+Ragebot.tickVoidSpam = tickVoidSpam
 Ragebot.applyTranslocateStep = applyTranslocateStep
 Ragebot.startTranslocateSync = startTranslocateSync
 Ragebot.stopTranslocateSync = stopTranslocateSync
@@ -3585,7 +3669,6 @@ local function togglekey()
 end
 end
 end
-
 local LeftGroupBox = AimbotSubTab:AddLeftGroupbox("Aimbot", "crosshair")
 
 LeftGroupBox:AddToggle("AimbotEnabled", {
@@ -3783,7 +3866,7 @@ SilentGroupBox:AddDropdown("SilentFireMode", {
 })
 
 
-local CharacterGroupBox = Tabs.Character:AddLeftGroupbox("Character", "user")
+local CharacterGroupBox = CharacterSubTab:AddLeftGroupbox("Character", "user")
 
 CharacterGroupBox:AddToggle("UndergroundEnabled", {
     Text = "Underground",
@@ -3899,8 +3982,35 @@ DeviceGroup:AddDropdown("DeviceType", {
 
 local RageGroupBox = RagebotSubTab:AddRightGroupbox("Ragebot", "sword")
 
+RageGroupBox:AddDropdown("RagebotMode", {
+    Text = "Mode",
+    Values = { "Normal", "Translocate" },
+    Default = Ragebot.config.target.evasion.mode == "Translocate" and "Translocate" or "Normal",
+    Callback = function(v)
+        local mode = tostring(v or "Normal")
+        local current = Ragebot.config.target.evasion.mode
+        if mode == "Translocate" then
+            if Ragebot.stopvoid then Ragebot.stopvoid() end
+            if Ragebot.stopTranslocateSync then Ragebot.stopTranslocateSync() end
+            Ragebot.config.target.evasion.mode = "Translocate"
+            if Ragebot.enabled and Ragebot.startTranslocateSync then
+                Ragebot.startTranslocateSync()
+            end
+        else
+            if Ragebot.stopTranslocateSync then Ragebot.stopTranslocateSync() end
+            Ragebot.config.target.evasion.mode = "Normal"
+            if Ragebot.enabled and Ragebot.refreshAtk then
+                Ragebot.refreshAtk()
+            end
+            if Ragebot.config.target.enabled and Ragebot.config.target.character and Ragebot.config.target.autoshoot then
+                if Ragebot.startsync then Ragebot.startsync() end
+            end
+        end
+    end
+})
+
 RageGroupBox:AddToggle("RagebotEnabled", {
-    Text = "Enable",
+    Text = "Ragebot",
     Default = false,
     Callback = function(v)
         Ragebot.enabled = v
@@ -3909,10 +4019,12 @@ RageGroupBox:AddToggle("RagebotEnabled", {
         Ragebot.config.target.autoshoot = v
         Ragebot.config.ragestatus.enabled = v
         if not v then
+            Ragebot.cleartarget()
+            if Ragebot.stopvoid then Ragebot.stopvoid() end
+            if Ragebot.stopTranslocateSync then Ragebot.stopTranslocateSync() end
             Ragebot.config.target.evasion.mode = "Normal"
             resetKnifeAttackState()
-            if stopsync then stopsync() end
-            if Ragebot.stopvoid then Ragebot.stopvoid() end
+            ragePlannerReset()
         elseif Ragebot.config.target.evasion.mode == "Translocate" then
             if Ragebot.startTranslocateSync then
                 Ragebot.startTranslocateSync()
@@ -3926,276 +4038,45 @@ RageGroupBox:AddToggle("RagebotEnabled", {
     NoUI = true,
     SyncToggleState = false,
     Callback = function()
-        if Ragebot.config.target.auto then
-            return
-        end
+        if not Ragebot.enabled then return end
         if Ragebot.config.target.enabled and Ragebot.config.target.character then
             Ragebot.cleartarget()
-        else
-            local target = Ragebot.nearest()
-            if target then
-                Ragebot.config.target.manualkey = true
-                Ragebot.settarget(target)
-            end
+            return
+        end
+        local target = Ragebot.nearest()
+        if target then
+            Ragebot.config.target.manualkey = true
+            Ragebot.settarget(target)
         end
     end
 })
 
-local RageNormalGate = { Type = "Toggle", Value = true }
-local RageTranslocateGate = { Type = "Toggle", Value = false }
-
-local RageNormalDep
-local RageTranslocateDep
-
-RageGroupBox:AddDropdown("RagebotMode", {
-    Text = "Mode",
-    Default = Ragebot.config.target.evasion.mode == "Translocate" and "Translocate" or "Normal",
-    Values = { "Normal", "Translocate" },
-    Callback = function(v)
-        v = tostring(v or "Normal")
-
-        if v == "Translocate" then
-
-
-
-            if stopsync then stopsync() end
-            Ragebot.config.target.evasion.mode = "Translocate"
-            RageNormalGate.Value = false
-            RageTranslocateGate.Value = true
-        else
-            Ragebot.config.target.evasion.mode = "Normal"
-            RageNormalGate.Value = true
-            RageTranslocateGate.Value = false
-            if stopsync then stopsync() end
-            if Ragebot.config.target.evasion.translocate then
-                Ragebot.config.target.evasion.translocate.active = false
-                Ragebot.config.target.evasion.translocate.hasTarget = false
-                Ragebot.config.target.evasion.translocate.serverCFrame = nil
-            end
-        end
-
-        RageNormalDep:Update()
-        RageTranslocateDep:Update()
-
-
-        if Ragebot.stopvoid then
-            Ragebot.stopvoid()
-        end
-
-        if Ragebot.config.target.evasion.mode == "Translocate" then
-            if Ragebot.startTranslocateSync then
-                Ragebot.startTranslocateSync()
-            end
-        elseif Ragebot.refreshAtk then
-            Ragebot.refreshAtk()
-        end
-    end
-})
-
-RageNormalDep = RageGroupBox:AddDependencyBox()
-
-RageTranslocateDep = RageGroupBox:AddDependencyBox()
-
-RageTranslocateDep:AddSlider("RagebotTranslocateOffset", {
-    Text = "Translocate Offset",
-    Default = Ragebot.config.target.evasion.translocate.offset or -5,
-    Min = -5,
-    Max = 5,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(v)
-        Ragebot.config.target.evasion.translocate.offset = tonumber(v) or -5
-        if Ragebot.config.target.evasion.mode == "Translocate"
-            and Ragebot.startTranslocateSync then
-            Ragebot.startTranslocateSync()
-        end
-    end
-})
-
-RageTranslocateGate.Value = Ragebot.config.target.evasion.mode == "Translocate"
-RageTranslocateDep:SetupDependencies({
-    { RageTranslocateGate, true }
-})
-RageTranslocateDep:Update()
-
-RageNormalDep:AddToggle("RagebotAutoTarget", {
-    Text = "Auto Target",
-    Default = false,
-    Callback = function(v)
-        Ragebot.config.target.auto = v
-    end
-})
-
-local RageUnderGate = { Type = "Toggle", Value = false }
-local RageUnderDep = RageNormalDep:AddDependencyBox()
-
-RageNormalDep:AddDropdown("RagebotAttackPosition", {
-    Text = "Attack Position",
-    Default = "default",
-    Values = {"default", "under"},
-    Callback = function(v)
-        Ragebot.config.target.attackPosition = v
-        RageUnderGate.Value = (v == "under")
-        RageUnderDep:Update()
-        if Ragebot.config.state.csyncactive and Ragebot.refreshAtk then
-            Ragebot.refreshAtk()
-        end
-    end
-})
-
-RageUnderDep:AddSlider("RagebotUnderOffset", {
-    Text = "Under Offset",
-    Default = Ragebot.config.target.underOffset or 4,
-    Min = 1,
-    Max = 25,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(v)
-        Ragebot.config.target.underOffset = v
-        if Ragebot.config.target.attackPosition == "under"
-            and Ragebot.config.state.csyncactive
-            and Ragebot.refreshAtk then
-            Ragebot.refreshAtk()
-        end
-    end
-})
-
-RageUnderDep:SetupDependencies({
-    { RageUnderGate, true }
-})
-
-RageUnderGate.Value = Ragebot.config.target.attackPosition == "under"
-RageUnderDep:Update()
-
-RageNormalDep:AddSlider("RagebotAttackOffset", {
-    Text = "Attack Offset",
-    Default = 4,
-    Min = 1,
-    Max = 25,
-    Rounding = 0,
-    Compact = true,
-    Callback = function(v)
-        Ragebot.config.target.attackOffset = math.clamp(tonumber(v) or 4, 1, 25)
-        if Ragebot.refreshAtk then
-            Ragebot.refreshAtk()
-        end
-    end
-})
-
-RageNormalDep:AddDropdown("RagebotWeapon", {
-    Text = "Weapon",
-    Values = {"primary", "secondary", "melee"},
-    Default = Ragebot.config.target.weaponPick or "primary",
-    Callback = function(v)
-        Ragebot.config.target.weaponPick = v
-        if Ragebot.config.state.csyncactive and Ragebot.refreshAtk then
-            Ragebot.refreshAtk()
-        end
-        if Ragebot.config.target.evasion.mode ~= "Translocate" and Ragebot.eqSlot then
-            Ragebot.eqSlot()
-        end
-    end
-})
-
-RageNormalDep:AddSlider("RagebotShootAttempts", {
-    Text = "Shoot Attempts",
-    Default = Ragebot.config.target.shootAttempts or 1,
-    Min = 1,
-    Max = 3,
-    Rounding = 0,
-    Suffix = "x",
-    Callback = function(v)
-        Ragebot.config.target.shootAttempts =
-            math.clamp(math.floor(tonumber(v) or 1), 1, 3)
-    end
-})
-
-RageNormalDep:AddDropdown("RagebotHitPart", {
-    Text = "Hit Part",
-    Default = Ragebot.config.target.hitpart or "Head",
-    Values = {"Head", "HumanoidRootPart", "Torso", "UpperTorso", "Closest", "Random"},
-    Callback = function(v)
-        Ragebot.config.target.hitpart = v
-    end
-})
-
-RageNormalDep:AddToggle("RagebotPrediction", {
-    Text = "Prediction",
-    Default = Ragebot.config.prediction.enabled or false,
-    Callback = function(v)
-        Ragebot.config.prediction.enabled = v
-    end
-})
-
-RageNormalDep:AddSlider("RagebotPredictionMult", {
-    Text = "Prediction Mult",
-    Default = Ragebot.config.prediction.multiplier or 1.2,
-    Min = 0.1,
-    Max = 3,
-    Rounding = 1,
-    Callback = function(v)
-        Ragebot.config.prediction.multiplier = v
-    end
-})
-
-RageNormalDep:AddToggle("RagebotVoidSpam", {
-    Text = "Voidspam",
+RageGroupBox:AddToggle("RagebotVoidSpam", {
+    Text = "Void",
     Default = Ragebot.config.voidspam.enabled or false,
     Callback = function(v)
         Ragebot.config.voidspam.enabled = v
         if not v then
             Ragebot.config.voidspam.phase = nil
-            if Ragebot.clrVoidSnap then
-                Ragebot.clrVoidSnap()
-            end
-        end
-    end
-})
-
-RageNormalDep:AddSlider("RagebotAttack", {
-    Text = "Attack",
-    Default = Ragebot.config.voidspam.shoot_min or 1,
-    Min = 0,
-    Max = 2,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(v)
-        v = math.clamp(tonumber(v) or 0, 0, 2)
-        Ragebot.config.voidspam.shoot_min = v
-        Ragebot.config.voidspam.shoot_max = v
-        if Ragebot.config.voidspam.phase == "shoot" then
-            Ragebot.config.voidspam.currentduration = v
+            Ragebot.config.voidspam.shotIssued = false
+            if Ragebot.clrVoidSnap then Ragebot.clrVoidSnap() end
+        elseif Ragebot.enabled then
+            Ragebot.config.voidspam.phase = "hide"
+            Ragebot.config.voidspam.currentduration = 0
             Ragebot.config.voidspam.lastswitch = tick()
         end
     end
 })
 
-RageNormalDep:AddInput("RagebotAttackCustom", {
-    Text = "Attack Time",
-    Default = tostring(Ragebot.config.voidspam.shoot_min or 1),
-    Placeholder = "Seconds...",
-    Callback = function(v)
-        local n = tonumber(v)
-        if n and n >= 0 and n <= 2 then
-            Ragebot.config.voidspam.shoot_min = n
-            Ragebot.config.voidspam.shoot_max = n
-            if Ragebot.config.voidspam.phase == "shoot" then
-                Ragebot.config.voidspam.currentduration = n
-                Ragebot.config.voidspam.lastswitch = tick()
-            end
-        end
-    end
-})
-
-RageNormalDep:AddSlider("RagebotHide", {
+RageGroupBox:AddSlider("RagebotHide", {
     Text = "Hide",
-    Default = Ragebot.config.voidspam.hide_min or 1,
-    Min = 0,
-    Max = 2,
+    Default = math.clamp(tonumber(Ragebot.config.voidspam.hide_min) or 0.5, 0.1, 1),
+    Min = 0.1,
+    Max = 1,
     Rounding = 1,
     Compact = true,
     Callback = function(v)
-        v = math.clamp(tonumber(v) or 0, 0, 2)
+        v = math.clamp(tonumber(v) or 0.1, 0.1, 1)
         Ragebot.config.voidspam.hide_min = v
         Ragebot.config.voidspam.hide_max = v
         if Ragebot.config.voidspam.phase == "hide" and Ragebot.config.voidspam.currentduration ~= math.huge then
@@ -4205,24 +4086,62 @@ RageNormalDep:AddSlider("RagebotHide", {
     end
 })
 
-RageNormalDep:AddInput("RagebotHideCustom", {
-    Text = "Hide Time",
-    Default = tostring(Ragebot.config.voidspam.hide_min or 1),
-    Placeholder = "Seconds...",
+RageGroupBox:AddSlider("RagebotAttack", {
+    Text = "Attack",
+    Default = math.clamp(tonumber(Ragebot.config.voidspam.shoot_min) or 0.5, 0.1, 2),
+    Min = 0.1,
+    Max = 2,
+    Rounding = 1,
+    Compact = true,
     Callback = function(v)
-        local n = tonumber(v)
-        if n and n >= 0 and n <= 2 then
-            Ragebot.config.voidspam.hide_min = n
-            Ragebot.config.voidspam.hide_max = n
-            if Ragebot.config.voidspam.phase == "hide" then
-                Ragebot.config.voidspam.currentduration = n
-                Ragebot.config.voidspam.lastswitch = tick()
-            end
+        v = math.clamp(tonumber(v) or 0.1, 0.1, 2)
+        Ragebot.config.voidspam.shoot_min = v
+        Ragebot.config.voidspam.shoot_max = v
+        if Ragebot.config.voidspam.phase == "shoot" then
+            Ragebot.config.voidspam.currentduration = v
+            Ragebot.config.voidspam.lastswitch = tick()
         end
     end
 })
 
-RageNormalDep:AddSlider("RagebotVoidRange", {
+RageGroupBox:AddDropdown("RagebotWeapons", {
+    Text = "Weapons",
+    Values = { "primary", "secondary", "melee" },
+    Default = { primary = true, melee = true },
+    Multi = true,
+    SelectAllButtons = false,
+    Callback = function(v)
+        local selected = { primary = false, secondary = false, melee = false }
+        if type(v) == "table" then
+            for key, value in pairs(v) do
+                if selected[key] ~= nil and value == true then
+                    selected[key] = true
+                end
+            end
+        end
+        if selected.secondary then
+            selected.primary = false
+            selected.melee = false
+        end
+        if not selected.primary and not selected.secondary and not selected.melee then
+            selected.primary = true
+        end
+        Ragebot.config.target.weaponSelection = selected
+        Ragebot.config.target.weaponPick = selected.secondary and "secondary" or (selected.primary and "primary" or "melee")
+        if Ragebot.eqSlot then Ragebot.eqSlot() end
+    end
+})
+
+RageGroupBox:AddDropdown("RagebotSwapReload", {
+    Text = "Swap / Reload",
+    Values = { "Swap & Reload", "Reload, No Swap", "Swap, No Reload" },
+    Default = Ragebot.config.target.swapReloadMode or "Swap & Reload",
+    Callback = function(v)
+        Ragebot.config.target.swapReloadMode = tostring(v or "Swap & Reload")
+    end
+})
+
+RageGroupBox:AddSlider("RagebotVoidRange", {
     Text = "Void Range",
     Default = Ragebot.config.voidspam.range or 10000,
     Min = 5,
@@ -4234,36 +4153,20 @@ RageNormalDep:AddSlider("RagebotVoidRange", {
     end
 })
 
-RageNormalDep:AddInput("RagebotVoidRangeCustom", {
+RageGroupBox:AddInput("RagebotVoidRangeCustom", {
     Text = "Void Range Custom",
     Default = tostring(Ragebot.config.voidspam.range or 10000),
     Placeholder = "5 - 10000000000",
+    Numeric = true,
     Callback = function(v)
         local n = tonumber(v)
-        if n and n >= 5 then
-            Ragebot.config.voidspam.range = math.max(5, math.min(n, 10000000000))
+        if n then
+            Ragebot.config.voidspam.range = math.clamp(n, 5, 10000000000)
         end
     end
 })
 
-RageNormalDep:AddSlider("RagebotReloadDelay", {
-    Text = "Reload -> Attack Delay",
-    Default = Ragebot.config.state.reloadDelay or 0.5,
-    Min = 0.01,
-    Max = 1,
-    Rounding = 2,
-    Suffix = " s",
-    Compact = true,
-    Callback = function(v)
-        Ragebot.config.state.reloadDelay = math.clamp(tonumber(v) or 0.5, 0.01, 1)
-    end
-})
 
-RageNormalGate.Value = Ragebot.config.target.evasion.mode ~= "Translocate"
-RageNormalDep:SetupDependencies({
-    { RageNormalGate, true }
-})
-RageNormalDep:Update()
 
 
 
@@ -4573,3 +4476,19 @@ SaveManager:SetFolder("RivalsScript/configs")
 SaveManager:BuildConfigSection(Tabs["UI Settings"])
 ThemeManager:ApplyToTab(Tabs["UI Settings"])
 SaveManager:LoadAutoloadConfig()
+
+
+Tabs.Key:AddLabel({ Text = "Crefy key system", DoesWrap = true, Size = 16 })
+Tabs.Key:AddKeyBox(function(receivedKey)
+    Library:Notify({
+        Title = "Key",
+        Description = "Received: " .. tostring(receivedKey),
+        Time = 3,
+    })
+end)
+
+Library:OnUnload(function()
+    pcall(function()
+        if Ragebot and Ragebot.stopvoid then Ragebot.stopvoid() end
+    end)
+end)
