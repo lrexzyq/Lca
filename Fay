@@ -11,13 +11,13 @@ Library.ForceCheckbox = false
 Library.ShowToggleFrameInKeybinds = true
 
 local Window = Library:CreateWindow({
-    Title = "mspaint",
+    Title = "pro skidder",
     Icon = 95816097006870,
     NotifySide = "Right",
     ShowCustomCursor = true,
     Footer = {
-        "version: example |",
-        { Text = "discord.gg/mspaint", Copyable = true },
+        "version: v5 |",
+        { Text = "discord.gg/kicia", Copyable = true },
         "|",
         { Text = "user id", Copyable = true, CopyText = tostring(game.Players.LocalPlayer.UserId) },
     },
