@@ -1,8 +1,12 @@
-local repo = "https://raw.githubusercontent.com/rexzyq/ObsidianQui/main/"
-local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
-local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
-local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
+--// Crefy — ObsidianUltra UI //--
+local Repo = "https://raw.githubusercontent.com/lrexzyq/Crefy/main/"
+local Library = loadstring(game:HttpGet(Repo .. "Library.lua"))()
+local ThemeManager = loadstring(game:HttpGet(Repo .. "addons/ThemeManager.lua"))()
+local SaveManager = loadstring(game:HttpGet(Repo .. "addons/SaveManager.lua"))()
 
+local Players = game:GetService("Players")
+local Stats = game:GetService("Stats")
+local LocalPlayer = Players.LocalPlayer
 local Options = Library.Options
 local Toggles = Library.Toggles
 
@@ -10,13 +14,13 @@ Library.ForceCheckbox = false
 Library.ShowToggleFrameInKeybinds = true
 
 local Window = Library:CreateWindow({
-    Title = "Skiding",
+    Title = "crefy",
     Icon = 95816097006870,
-    NotifySide = "Right",
     ShowCustomCursor = true,
+    NotifySide = "Right",
     Footer = {
-        "Rivals | ",
-        { Text = "Aimbot + Ragebot", Copyable = true },
+        "Crefy | ",
+        { Text = "join discord for more updates!", Copyable = true, CopyText = "https://discord.gg/NdpYnJuuN4" },
     },
     CopyableFooter = true,
     FuzzySearch = true,
@@ -25,6 +29,17 @@ local Window = Library:CreateWindow({
     Minimizable = true,
     MinimizeKeybind = Enum.KeyCode.RightBracket,
     MinimizedWidth = 300,
+    Animations = {
+        ToggleWindow = true,
+        TabSwitch = true,
+        Groupbox = true,
+        Dropdown = true,
+        KeyPicker = true,
+        SubTabUnderline = true,
+    },
+    TabTransitionTime = 0.22,
+    TabSwipeOffset = 26,
+    TabSwipeFrom = "right",
 })
 
 local Tabs = {
@@ -34,20 +49,32 @@ local Tabs = {
     ["UI Settings"] = Window:AddTab({ Name = "UI Settings", Icon = "settings", Description = "Configure the menu" }),
 }
 
--- Main sub-tabs: keep all existing Aimbot/Silent/Flick UI under Aimbot,
--- and keep Ragebot + its dependencies under Ragebot.
 local MainSubTabs = Tabs.Main
 MainSubTabs:SetSubTabAlignment("Center")
 local AimbotSubTab = MainSubTabs:AddSubTab({ Name = "Aimbot", Icon = "crosshair" })
 local RagebotSubTab = MainSubTabs:AddSubTab({ Name = "Ragebot", Icon = "sword" })
 
--- Misc sub-tabs: preserve the old Misc tab in Weapons and the old Combat tab in Mods.
 local MiscSubTabs = Tabs.Misc
 MiscSubTabs:SetSubTabAlignment("Center")
 local WeaponsSubTab = MiscSubTabs:AddSubTab({ Name = "Weapons", Icon = "sword" })
 local ModsSubTab = MiscSubTabs:AddSubTab({ Name = "Mods", Icon = "wrench" })
 
-local Players = game:GetService("Players")
+-- Floating watermark: intentionally independent of tabs.
+do
+    local Watermark = Library:AddWatermark({
+        { Icon = "flame", Text = "crefy", Accent = true },
+        { Icon = "message-circle", Text = "join discord for more updates!", Accent = true },
+        { Icon = "wifi", Text = function()
+            local Ping = 0
+            pcall(function()
+                Ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue() + 0.5)
+            end)
+            return string.format("%d ms", Ping)
+        end },
+    })
+    Watermark.RefreshRate = 1
+end
+
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
@@ -574,12 +601,6 @@ stopUnderground = function()
     undergroundFirstRun = true
 end
 
-local ModOriginals = {
-    NoMeleeAnimation = {}, NoDashCooldown = {}, NoMeleeCooldown = {}, NoShootAnimation = {},
-    NoEquipAnimation = {}, InstantADS = {}, RapidFire = {}, NoSpread = {}, NoSmokeScreen = {},
-    NoSmokeCloud = {}, NoRecoil = {}, NoFlash = {}, DeviceSpoof = {},
-}
-
 local ModSettings = {
     NoMeleeAnimation = false,
     NoDashCooldown = false,
@@ -596,28 +617,12 @@ local ModSettings = {
     NoFlash = false,
 }
 
-local function restore(tbl)
-    for obj, methods in pairs(tbl) do
-        for name, old in pairs(methods) do
-            pcall(function() obj[name] = old end)
-        end
-    end
-    table.clear(tbl)
-end
-
-local function save(tbl, obj, name, value)
-    tbl[obj] = tbl[obj] or {}
-    if tbl[obj][name] == nil then tbl[obj][name] = value end
-end
-
 local function applyMeleeAnimation()
-    if not ModSettings.NoMeleeAnimation then restore(ModOriginals.NoMeleeAnimation) return end
     if ModSettings.NoMeleeAnimation then
         task.spawn(function()
             local ok, Melee = pcall(function() return require(lp.PlayerScripts.Modules.ItemTypes.Melee) end)
             if ok and Melee and Melee.StartShooting then
                 local old = Melee.StartShooting
-                save(ModOriginals.NoMeleeAnimation, Melee, "StartShooting", old)
                 Melee.StartShooting = function(self, p1, p2)
                     local vm = self.ViewModel; local savedPlay
                     if vm then savedPlay = vm.PlayAnimation; vm.PlayAnimation = function() end end
@@ -638,7 +643,6 @@ local function applyMeleeAnimation()
 end
 
 local function applyDashCooldown()
-    if not ModSettings.NoDashCooldown then restore(ModOriginals.NoDashCooldown) return end
     if ModSettings.NoDashCooldown then
         task.spawn(function()
             local modules = ReplicatedStorage:FindFirstChild("Modules")
@@ -652,8 +656,8 @@ local function applyDashCooldown()
                             if type(item) == "table" then
                                 local itemName = item.Name or name
                                 if string.lower(itemName) == "scythe" then
-                                    if item.DashCooldown then save(ModOriginals.NoDashCooldown, item, "DashCooldown", item.DashCooldown); item.DashCooldown = 0 end
-                                    if item.AbilityCooldown then save(ModOriginals.NoDashCooldown, item, "AbilityCooldown", item.AbilityCooldown); item.AbilityCooldown = 0 end
+                                    if item.DashCooldown then item.DashCooldown = 0 end
+                                    if item.AbilityCooldown then item.AbilityCooldown = 0 end
                                 end
                             end
                         end
@@ -665,7 +669,6 @@ local function applyDashCooldown()
 end
 
 local function applyMeleeCooldown()
-    if not ModSettings.NoMeleeCooldown then restore(ModOriginals.NoMeleeCooldown) return end
     if ModSettings.NoMeleeCooldown then
         task.spawn(function()
             local modules = ReplicatedStorage:FindFirstChild("Modules")
@@ -679,7 +682,7 @@ local function applyMeleeCooldown()
                         for _, item in pairs(items) do
                             if type(item) == "table" and (item.Type == "Melee" or item.Category == "Melee" or (item.Damage and not item.AmmoType)) then
                                 for _, field in ipairs(cooldowns) do
-                                    if item[field] then save(ModOriginals.NoMeleeCooldown, item, field, item[field]); item[field] = 0 end
+                                    if item[field] then item[field] = 0 end
                                 end
                             end
                         end
@@ -691,14 +694,12 @@ local function applyMeleeCooldown()
 end
 
 local function applyShootAnimation()
-    if not ModSettings.NoShootAnimation then restore(ModOriginals.NoShootAnimation) return end
     if ModSettings.NoShootAnimation then
         task.spawn(function()
             local ok, Gun = pcall(function() return require(lp.PlayerScripts.Modules.ItemTypes.Gun) end)
             if ok and Gun then
                 if Gun.StartShooting then
                     local old = Gun.StartShooting
-                    save(ModOriginals.NoShootAnimation, Gun, "StartShooting", old)
                     Gun.StartShooting = function(self, p1, p2)
                         local vm = self.ViewModel; local savedPlay
                         if vm then savedPlay = vm.PlayAnimation; vm.PlayAnimation = function() end end
@@ -716,7 +717,6 @@ local function applyShootAnimation()
                 end
                 if Gun.FinishShooting then
                     local old = Gun.FinishShooting
-                    save(ModOriginals.NoShootAnimation, Gun, "FinishShooting", old)
                     Gun.FinishShooting = function(self, ...)
                         if not self.ViewModel then return old(self, ...) end
                         local vm = self.ViewModel; local oldPlay = vm.PlayAnimation
@@ -733,7 +733,6 @@ local function applyShootAnimation()
                 end
                 if Gun.ShootBurst then
                     local old = Gun.ShootBurst
-                    save(ModOriginals.NoShootAnimation, Gun, "ShootBurst", old)
                     Gun.ShootBurst = function(self, ...)
                         if not self.ViewModel then return old(self, ...) end
                         local vm = self.ViewModel; local oldPlay = vm.PlayAnimation
@@ -754,13 +753,11 @@ local function applyShootAnimation()
 end
 
 local function applyEquipAnimation()
-    if not ModSettings.NoEquipAnimation then restore(ModOriginals.NoEquipAnimation) return end
     if ModSettings.NoEquipAnimation then
         task.spawn(function()
             local ok, Gun = pcall(function() return require(lp.PlayerScripts.Modules.ItemTypes.Gun) end)
             if ok and Gun and Gun.Equip then
                 local old = Gun.Equip
-                save(ModOriginals.NoEquipAnimation, Gun, "Equip", old)
                 Gun.Equip = function(self, ...)
                     local r = { old(self, ...) }
                     if self.ViewModel then
@@ -775,13 +772,11 @@ local function applyEquipAnimation()
 end
 
 local function applyInstantADS()
-    if not ModSettings.InstantADS then restore(ModOriginals.InstantADS) return end
     if ModSettings.InstantADS then
         task.spawn(function()
             local ok, Gun = pcall(function() return require(lp.PlayerScripts.Modules.ItemTypes.Gun) end)
             if ok and Gun then
                 if Gun.StartAiming then
-                    save(ModOriginals.InstantADS, Gun, "StartAiming", Gun.StartAiming)
                     Gun.StartAiming = function(self, p)
                         self:SetReplicate("IsAiming", true)
                         self.StopSprinting:Fire()
@@ -792,7 +787,6 @@ local function applyInstantADS()
                     end
                 end
                 if Gun.GetAimSpeed then
-                    save(ModOriginals.InstantADS, Gun, "GetAimSpeed", Gun.GetAimSpeed)
                     Gun.GetAimSpeed = function(self) return 999 end
                 end
             end
@@ -801,13 +795,11 @@ local function applyInstantADS()
 end
 
 local function applyRapidFire()
-    if not ModSettings.RapidFire then restore(ModOriginals.RapidFire) return end
     if ModSettings.RapidFire then
         task.spawn(function()
             local ok, Gun = pcall(function() return require(lp.PlayerScripts.Modules.ItemTypes.Gun) end)
             if ok and Gun and Gun.Update then
                 local old = Gun.Update
-                save(ModOriginals.RapidFire, Gun, "Update", old)
                 Gun.Update = function(self, dt, ...)
                     if self._shoot_cooldown then self._shoot_cooldown = 0 end
                     return old(self, dt, ...)
@@ -818,13 +810,11 @@ local function applyRapidFire()
 end
 
 local function applyNoSpread()
-    if not ModSettings.NoSpread then restore(ModOriginals.NoSpread) return end
     if ModSettings.NoSpread then
         task.spawn(function()
             local ok, GameplayUtility = pcall(function() return require(ReplicatedStorage.Modules.GameplayUtility) end)
             if ok and GameplayUtility then
                 local old = GameplayUtility.GetSpread
-                save(ModOriginals.NoSpread, GameplayUtility, "GetSpread", old)
                 GameplayUtility.GetSpread = function() return CFrame.identity end
             end
             local FighterController = require(lp.PlayerScripts.Controllers.FighterController)
@@ -844,13 +834,11 @@ local function applyNoSpread()
 end
 
 local function applyNoSmoke()
-    if not ModSettings.NoSmoke then restore(ModOriginals.NoSmokeScreen); restore(ModOriginals.NoSmokeCloud); return end
     if ModSettings.NoSmoke then
         task.spawn(function()
             local ok, SmokeScreen = pcall(function() return require(lp.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.FighterInterface.SmokeScreen) end)
             if ok and SmokeScreen and SmokeScreen.Update then
                 local old = SmokeScreen.Update
-                save(ModOriginals.NoSmokeScreen, SmokeScreen, "Update", old)
                 SmokeScreen.Update = function(self)
                     self._smoke_cloud_spring.Target = 0
                     self._smoke_cloud_cover.Transparency = 1
@@ -861,7 +849,6 @@ local function applyNoSmoke()
             local ok2, SmokeCloud = pcall(function() return require(lp.PlayerScripts.Modules.SmokeCloud) end)
             if ok2 and SmokeCloud and SmokeCloud.Update then
                 local old2 = SmokeCloud.Update
-                save(ModOriginals.NoSmokeCloud, SmokeCloud, "Update", old2)
                 SmokeCloud.Update = function(self)
                     if self.Model then self.Model:Destroy() end
                     return true
@@ -872,12 +859,10 @@ local function applyNoSmoke()
 end
 
 local function applyNoRecoil()
-    if not ModSettings.NoRecoil then restore(ModOriginals.NoRecoil) return end
     if ModSettings.NoRecoil then
         task.spawn(function()
             local ok, ClientItem = pcall(function() return require(lp.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.ClientItem) end)
             if ok and ClientItem and ClientItem._Recoil then
-                save(ModOriginals.NoRecoil, ClientItem, "_Recoil", ClientItem._Recoil)
                 ClientItem._Recoil = function() return end
             end
         end)
@@ -885,7 +870,6 @@ local function applyNoRecoil()
 end
 
 local function applyDeviceSpoof()
-    if not ModSettings.DeviceSpoof then restore(ModOriginals.DeviceSpoof) return end
     if ModSettings.DeviceSpoof then
         task.spawn(function()
             local device = ModSettings.DeviceType or "VR"
@@ -894,7 +878,6 @@ local function applyDeviceSpoof()
             local ok, fighterController = pcall(function() return require(controllers:WaitForChild("FighterController", 10)) end)
             if ok and fighterController and fighterController._ReplicateControls then
                 local old = fighterController._ReplicateControls
-                save(ModOriginals.DeviceSpoof, fighterController, "_ReplicateControls", old)
                 fighterController._ReplicateControls = function(self)
                     remote:FireServer(device)
                     if not self._last_controls_replicated_time then
@@ -909,13 +892,11 @@ local function applyDeviceSpoof()
 end
 
 local function applyNoFlash()
-    if not ModSettings.NoFlash then restore(ModOriginals.NoFlash) return end
     if ModSettings.NoFlash then
         task.spawn(function()
             local ok, Flashed = pcall(function() return require(lp.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.FighterInterface.Flashed) end)
             if ok and Flashed and Flashed.Flash then
                 local old = Flashed.Flash
-                save(ModOriginals.NoFlash, Flashed, "Flash", old)
                 Flashed.Flash = function() return end
             end
         end)
@@ -3600,17 +3581,94 @@ CharacterGroupBox:AddInput("UndergroundCustomDepth", {
 })
 
 local WeaponGroup = WeaponsSubTab:AddLeftGroupbox("Weapon Mods", "sword")
-WeaponGroup:AddToggle("WeaponNoMeleeAnimation", { Text = "No Melee Animation", Default = false, Callback = function(v) ModSettings.NoMeleeAnimation = v; applyMeleeAnimation() end })
-WeaponGroup:AddToggle("WeaponNoDashCooldown", { Text = "No Dash Cooldown (Scythe)", Default = false, Callback = function(v) ModSettings.NoDashCooldown = v; applyDashCooldown() end })
-WeaponGroup:AddToggle("WeaponNoMeleeCooldown", { Text = "No Melee Cooldown", Default = false, Callback = function(v) ModSettings.NoMeleeCooldown = v; applyMeleeCooldown() end })
-WeaponGroup:AddToggle("WeaponNoShootAnimation", { Text = "No Shoot Animation", Default = false, Callback = function(v) ModSettings.NoShootAnimation = v; applyShootAnimation() end })
-WeaponGroup:AddToggle("WeaponNoEquipAnimation", { Text = "No Equip Animation", Default = false, Callback = function(v) ModSettings.NoEquipAnimation = v; applyEquipAnimation() end })
-WeaponGroup:AddToggle("WeaponInstantADS", { Text = "Instant ADS", Default = false, Callback = function(v) ModSettings.InstantADS = v; applyInstantADS() end })
-WeaponGroup:AddToggle("WeaponRapidFire", { Text = "Rapid Fire", Default = false, Callback = function(v) ModSettings.RapidFire = v; applyRapidFire() end })
-WeaponGroup:AddToggle("WeaponNoSpread", { Text = "No Spread", Default = false, Callback = function(v) ModSettings.NoSpread = v; applyNoSpread() end })
-WeaponGroup:AddToggle("WeaponNoSmoke", { Text = "No Smoke", Default = false, Callback = function(v) ModSettings.NoSmoke = v; applyNoSmoke() end })
-WeaponGroup:AddToggle("WeaponNoRecoil", { Text = "No Recoil", Default = false, Callback = function(v) ModSettings.NoRecoil = v; applyNoRecoil() end })
-WeaponGroup:AddToggle("WeaponNoFlash", { Text = "No Flash", Default = false, Callback = function(v) ModSettings.NoFlash = v; applyNoFlash() end })
+WeaponGroup:AddToggle("WeaponNoMeleeAnimation", {
+    Text = "No Melee Animation",
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoMeleeAnimation = v
+        if v then applyMeleeAnimation() end
+    end
+})
+WeaponGroup:AddToggle("WeaponNoDashCooldown", {
+    Text = "No Dash Cooldown (Scythe)",
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoDashCooldown = v
+        if v then applyDashCooldown() end
+    end
+})
+WeaponGroup:AddToggle("WeaponNoMeleeCooldown", {
+    Text = "No Melee Cooldown",
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoMeleeCooldown = v
+        if v then applyMeleeCooldown() end
+    end
+})
+WeaponGroup:AddToggle("WeaponNoShootAnimation", {
+    Text = "No Shoot Animation",
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoShootAnimation = v
+        if v then applyShootAnimation() end
+    end
+})
+WeaponGroup:AddToggle("WeaponNoEquipAnimation", {
+    Text = "No Equip Animation",
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoEquipAnimation = v
+        if v then applyEquipAnimation() end
+    end
+})
+WeaponGroup:AddToggle("WeaponInstantADS", {
+    Text = "Instant ADS",
+    Default = false,
+    Callback = function(v)
+        ModSettings.InstantADS = v
+        if v then applyInstantADS() end
+    end
+})
+WeaponGroup:AddToggle("WeaponRapidFire", {
+    Text = "Rapid Fire",
+    Default = false,
+    Callback = function(v)
+        ModSettings.RapidFire = v
+        if v then applyRapidFire() end
+    end
+})
+WeaponGroup:AddToggle("WeaponNoSpread", {
+    Text = "No Spread",
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoSpread = v
+        if v then applyNoSpread() end
+    end
+})
+WeaponGroup:AddToggle("WeaponNoSmoke", {
+    Text = "No Smoke",
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoSmoke = v
+        if v then applyNoSmoke() end
+    end
+})
+WeaponGroup:AddToggle("WeaponNoRecoil", {
+    Text = "No Recoil",
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoRecoil = v
+        if v then applyNoRecoil() end
+    end
+})
+WeaponGroup:AddToggle("WeaponNoFlash", {
+    Text = "No Flash",
+    Default = false,
+    Callback = function(v)
+        ModSettings.NoFlash = v
+        if v then applyNoFlash() end
+    end
+})
 
 local DeviceGroup = WeaponsSubTab:AddRightGroupbox("Device Spoof", "smartphone")
 DeviceGroup:AddToggle("DeviceSpoof", {
@@ -3946,97 +4004,57 @@ local Exploits = (function()
         local self = setmetatable({}, Exploits)
         self.clientFighter = clientFighter
         self.clientItem = clientItem
-        self.lastShot = 0
 
         local function getEquippedItem(character)
             return character and character:FindFirstChild("EquippedItem")
         end
 
-        local function getCurrentItem()
-            local item = getEquippedItem(LocalPlayer.Character)
-            if item then
-                self.clientItem = item
-                return item
-            end
-            return self.clientItem
-        end
+        local lastFullAuto = 0
 
         local function fullAuto()
-            if not Toggles.exploits_full_auto or not Toggles.exploits_full_auto.Value then
-                return
-            end
-
-            local item = getCurrentItem()
+            if not Toggles.exploits_full_auto.Value then return end
+            local item = getEquippedItem(LocalPlayer.Character)
             if not item then return end
+            local info = item.Info
+            if not info or info.Type ~= "Gun" then return end
 
-            local info = item:FindFirstChild("Info") or item.Info
-            if not info then return end
-
-            local itemType
-            pcall(function() itemType = info.Type end)
-            if itemType ~= "Gun" then return end
-
-            local now = tick()
-            local cooldown = 0.1
-            pcall(function()
-                local value = info.ShootCooldown or info.FireCooldown or info.Cooldown
-                cooldown = math.max(0.01, tonumber(value) or 0.1)
-            end)
-            if now - self.lastShot < cooldown then return end
-            self.lastShot = now
+            local delayMs = Options.exploits_full_auto_delay.Value or 1
+            local delaySec = math.clamp(delayMs, 1, 100) / 1000
+            local now = os.clock()
+            if now - lastFullAuto < delaySec then return end
+            lastFullAuto = now
 
             pcall(function()
                 local camera = workspace.CurrentCamera
                 if not camera then return end
-
                 local direction = camera.CFrame.Position + camera.CFrame.LookVector * 100
 
-                if self.clientItem and type(self.clientItem.StartShooting) == "function" then
+                if self.clientItem then
                     self.clientItem:StartShooting(direction)
-                elseif type(item.StartShooting) == "function" then
+                elseif item.StartShooting then
                     item:StartShooting(direction)
                 end
             end)
         end
 
-        function self:removeSpread(payload)
-            if not Toggles.removed_exploit_no_spread or not Toggles.removed_exploit_no_spread.Value then
-                return payload
-            end
-
-            if type(payload) == "table" then
-                payload.spread = 0
-                payload.randomSpread = 0
-            end
-
-            return payload
-        end
-
         function self:forceBackstab(character)
-            if not Toggles.exploits_always_backstab
-                or not Toggles.exploits_always_backstab.Value then
-                return false
-            end
-
-            local item = getCurrentItem()
+            if not Toggles.exploits_always_backstab.Value then return false end
+            local item = getEquippedItem(LocalPlayer.Character)
             if not item then return false end
+            local info = item.Info
+            if not info or info.Type ~= "Melee" then return false end
+            local target = character
+            if not target then return false end
 
-            local info = item:FindFirstChild("Info") or item.Info
-            if not info then return false end
-
-            local itemType
-            pcall(function() itemType = info.Type end)
-            if itemType ~= "Melee" or not character then return false end
-
-            local root = character:FindFirstChild("HumanoidRootPart")
-            if not root then return false end
-
-            return pcall(function()
-                if type(item.HeavyAttack) == "function" then
-                    item:HeavyAttack(root.Position)
+            pcall(function()
+                if item.HeavyAttack then
+                    item:HeavyAttack(target:FindFirstChild("HumanoidRootPart") and target.HumanoidRootPart.Position or target.Position)
                 end
             end)
+            return true
         end
+
+        local autoRespawnConnection
 
         local function autoRespawn()
             if not Toggles.arcade_auto_respawn or not Toggles.arcade_auto_respawn.Value then
@@ -4046,34 +4064,61 @@ local Exploits = (function()
             local character = LocalPlayer.Character
             local hum = character and character:FindFirstChildOfClass("Humanoid")
             if hum and hum.Health <= 0 then
-                task.wait(1)
-                pcall(function() LocalPlayer:LoadCharacter() end)
+                task.spawn(function()
+                    while Toggles.arcade_auto_respawn and Toggles.arcade_auto_respawn.Value do
+                        local char = LocalPlayer.Character
+                        local currentHum = char and char:FindFirstChildOfClass("Humanoid")
+                        if currentHum and currentHum.Health > 0 then
+                            break
+                        end
+
+                        local okPress = pcall(function() keypress(0x20) end)
+                        if okPress then
+                            task.wait(0.1)
+                            pcall(function() keyrelease(0x20) end)
+                            task.wait(0.1)
+                        else
+                            break
+                        end
+                    end
+                end)
             end
         end
 
-        local function autoAmmo()
-            if not Toggles.arcade_auto_ammo or not Toggles.arcade_auto_ammo.Value then
+        local function autoCollect()
+            if not ((Toggles.arcade_auto_health and Toggles.arcade_auto_health.Value)
+                or (Toggles.arcade_auto_ammo and Toggles.arcade_auto_ammo.Value)) then
                 return
             end
 
-            local item = getCurrentItem()
-            if not item then return end
+            local character = LocalPlayer.Character
+            local hrp = character and character:FindFirstChild("HumanoidRootPart")
+            if not hrp then return end
 
-            local data = item:FindFirstChild("Data") or item.Data
-            if not data then return end
+            local bounce = math.sin(os.clock() * 8) * 4
 
-            local ammo, reserve
-            pcall(function()
-                ammo = data.Ammo
-                reserve = data.AmmoReserve
-            end)
+            for _, obj in ipairs(workspace:GetChildren()) do
+                if obj.Name == "_drop" and obj:IsA("BasePart") then
+                    local collect = (Toggles.arcade_auto_ammo and Toggles.arcade_auto_ammo.Value and obj:FindFirstChild("Ammo"))
+                        or (Toggles.arcade_auto_health and Toggles.arcade_auto_health.Value and obj:FindFirstChild("Health"))
 
-            if ammo == 0 and tonumber(reserve) and reserve > 0 then
-                pcall(function()
-                    if type(item.StartReloading) == "function" then
-                        item:StartReloading()
+                    if collect then
+                        pcall(function()
+                            obj.Anchored = true
+                            obj.CFrame = CFrame.new(hrp.Position + Vector3.new(0, bounce, 0))
+                            obj.Transparency = 1
+
+                            for _, child in ipairs(obj:GetDescendants()) do
+                                if child:IsA("BasePart") or child:IsA("UnionOperation") or child:IsA("MeshPart") or child:IsA("SpecialMesh") then
+                                    pcall(function() child.Transparency = 1 end)
+                                elseif child:IsA("BillboardGui") or child:IsA("SurfaceGui")
+                                    or child:IsA("ParticleEmitter") or child:IsA("SelectionBox") then
+                                    pcall(function() child.Enabled = false end)
+                                end
+                            end
+                        end)
                     end
-                end)
+                end
             end
         end
 
@@ -4108,13 +4153,64 @@ local Exploits = (function()
             end
         end
 
+        local function autoBackstab()
+            if not Toggles.exploits_always_backstab or not Toggles.exploits_always_backstab.Value then
+                return
+            end
+
+            local now = os.clock()
+            if now - (self.lastBackstab or 0) < 0.15 then
+                return
+            end
+
+            local myCharacter = LocalPlayer.Character
+            local myRoot = myCharacter and myCharacter:FindFirstChild("HumanoidRootPart")
+            if not myRoot then return end
+
+            local nearest, nearestDistance
+            for _, player in ipairs(Players:GetPlayers()) do
+                if player ~= LocalPlayer and player.Character then
+                    local targetHum = player.Character:FindFirstChildOfClass("Humanoid")
+                    local targetRoot = player.Character:FindFirstChild("HumanoidRootPart")
+                    if targetHum and targetHum.Health > 0 and targetRoot then
+                        local sameTeam = false
+                        pcall(function() sameTeam = player.Team == LocalPlayer.Team end)
+                        if not sameTeam then
+                            local distance = (targetRoot.Position - myRoot.Position).Magnitude
+                            if not nearestDistance or distance < nearestDistance then
+                                nearestDistance = distance
+                                nearest = player.Character
+                            end
+                        end
+                    end
+                end
+            end
+
+            if nearest and self:forceBackstab(nearest) then
+                self.lastBackstab = now
+            end
+        end
+
+        autoRespawnConnection = LocalPlayer.CharacterAdded:Connect(function(character)
+            local humanoid = character:WaitForChild("Humanoid", 10)
+            if humanoid then
+                humanoid.Died:Connect(function()
+                    if not Toggles.arcade_auto_respawn or not Toggles.arcade_auto_respawn.Value then
+                        return
+                    end
+                    task.spawn(autoRespawn)
+                end)
+            end
+        end)
+
         self.connections = {
             RunService.Heartbeat:Connect(fullAuto),
-            RunService.Heartbeat:Connect(autoRespawn),
-            RunService.Heartbeat:Connect(autoAmmo),
+            RunService.Heartbeat:Connect(autoBackstab),
             RunService.Heartbeat:Connect(function()
                 self:grenadeSettings(LocalPlayer.Character)
             end),
+            RunService.RenderStepped:Connect(autoCollect),
+            autoRespawnConnection,
         }
 
         return self
@@ -4144,44 +4240,12 @@ end)
 local CombatExploits = Exploits.new(_exploitsFighter, _exploitsItem)
 
 local ModsGroupBox = ModsSubTab:AddLeftGroupbox("Gun Mods", "gun")
-ModsGroupBox:AddToggle("NoCooldown", {
-    Text = "Rapid Fire",
-    Default = false,
-    Callback = function(v)
-        ModSettings.RapidFire = v
-        if v then applyRapidFire() end
-    end
-})
-ModsGroupBox:AddToggle("NoSpread", {
-    Text = "No Spread",
-    Default = false,
-    Callback = function(v)
-        ModSettings.NoSpread = v
-        if v then applyNoSpread() end
-    end
-})
 ModsGroupBox:AddToggle("NoRecoil", {
     Text = "No Recoil",
     Default = false,
     Callback = function(v)
         ModSettings.NoRecoil = v
         if v then applyNoRecoil() end
-    end
-})
-ModsGroupBox:AddToggle("MaxAccuracy", {
-    Text = "Max Accuracy",
-    Default = false,
-    Callback = function(v)
-        ModSettings.NoSpread = v
-        if v then applyNoSpread() end
-    end
-})
-ModsGroupBox:AddToggle("RapidAttack", {
-    Text = "Rapid Attack",
-    Default = false,
-    Callback = function(v)
-        ModSettings.RapidFire = v
-        if v then applyRapidFire() end
     end
 })
 ModsGroupBox:AddToggle("NoMuzzleFlash", {
@@ -4198,17 +4262,30 @@ ExploitsGroupBox:AddToggle("exploits_full_auto", {
     Text = "Full Auto",
     Default = false,
 })
+ExploitsGroupBox:AddSlider("exploits_full_auto_delay", {
+    Text = "Full Auto Delay",
+    Default = 1,
+    Min = 1,
+    Max = 100,
+    Rounding = 0,
+    Suffix = " ms",
+})
 ExploitsGroupBox:AddToggle("exploits_always_backstab", {
     Text = "Always Backstab",
     Default = false,
 })
+
 local ArcadeGroupBox = ModsSubTab:AddRightGroupbox("Arcade", "refresh-cw")
-ArcadeGroupBox:AddToggle("arcade_auto_respawn", {
-    Text = "Auto Respawn",
+ArcadeGroupBox:AddToggle("arcade_auto_health", {
+    Text = "Auto Health",
     Default = false,
 })
 ArcadeGroupBox:AddToggle("arcade_auto_ammo", {
     Text = "Auto Ammo",
+    Default = false,
+})
+ArcadeGroupBox:AddToggle("arcade_auto_respawn", {
+    Text = "Auto Respawn",
     Default = false,
 })
 
@@ -4278,7 +4355,7 @@ MenuGroup:AddSlider("UICornerSlider", {
     Default = Library.CornerRadius,
     Min = 0,
     Max = 20,
-    Rounding = 0,
+    Rounding = 8,
     Callback = function(value)
         Window:SetCornerRadius(value)
     end,
