@@ -1,0 +1,2851 @@
+﻿if game.GameId ~= 6035872082 then return end
+if not game:IsLoaded() then game.Loaded:Wait() end
+
+local function GS(n)
+    local s = game:GetService(n)
+    return cloneref and cloneref(s) or s
+end
+
+local Players            = GS("Players")
+local ReplicatedStorage  = GS("ReplicatedStorage")
+local ReplicatedFirst    = GS("ReplicatedFirst")
+local ScriptContext      = GS("ScriptContext")
+local CoreGui            = GS("CoreGui")
+local MarketplaceService = GS("MarketplaceService")
+local RunService         = GS("RunService")
+local GuiService         = GS("GuiService")
+local UserInputService   = GS("UserInputService")
+local Workspace          = GS("Workspace")
+local Lighting           = GS("Lighting")
+local SoundService       = GS("SoundService")
+
+local LocalPlayer = Players.LocalPlayer
+local LocalChar
+
+local function GetCharacter()
+    local c = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    pcall(function() c:WaitForChild("Humanoid", 5) end)
+    pcall(function() c:WaitForChild("HumanoidRootPart", 5) end)
+    return c
+end
+LocalChar = GetCharacter()
+LocalPlayer.CharacterAdded:Connect(function(c)
+    LocalChar = c
+    pcall(function() c:WaitForChild("Humanoid", 5) end)
+    pcall(function() c:WaitForChild("HumanoidRootPart", 5) end)
+end)
+
+pcall(function()
+    local bypassed = false
+    local kKickNames = {"Kick", "kick"}
+    local kProtectedProperties = {Enabled = true, Disabled = false}
+    local kSlotMap = {[69]=2,[138]=3,[207]=4,[276]=5,[345]=6,[414]=7}
+    local kFilledSub = {1,2,3,4,5}
+
+    local ac_script = ReplicatedFirst:WaitForChild("LocalScript3", 10)
+    local ac_event  = ReplicatedStorage:WaitForChild("Remotes", 10):WaitForChild("RemoteEvent", 10)
+    if not ac_script or not ac_event then return end
+
+    local last, first_seen, hijack_ready, client_id
+    local expected_interval, min_interval, ema_alpha, samples = 0.6, 0.25, 0.5, 0
+    local hidden_fn, max_stack_depth = {}, 128
+
+    setstackhidden = setstackhidden or function(fn_or_level, hidden)
+        local ok, fn = pcall(function()
+            if typeof(fn_or_level) == "number" then return debug.info(fn_or_level + 2, "f") end
+            return fn_or_level
+        end)
+        if ok and fn then hidden_fn[fn] = not hidden end
+    end
+
+    local TrustedFunctions = setmetatable({}, {__mode = "k"})
+    local HookReferences = {}
+    local function TrustFunction(fn)
+        if type(fn) == "function" then TrustedFunctions[fn] = true end
+        return fn
+    end
+
+    local function SafeHook(hookfn, ...)
+        local args = {...}
+        local func, inst, metamethod, detour
+        if hookfn == hookmetamethod then
+            inst, metamethod, detour = args[1], args[2], args[3]
+        else
+            func, detour = args[1], args[2]
+        end
+        if hookfn == hookfunction and iscclosure(func) then detour = newcclosure(detour) end
+        if not iscclosure(detour) then detour = newcclosure(detour) end
+        pcall(setstackhidden, detour, true)
+        HookReferences[#HookReferences + 1] = detour
+        local original
+        pcall(function()
+            TrustFunction(detour)
+            if hookfn == hookmetamethod then
+                original = hookfn(inst, metamethod, detour)
+            else
+                original = hookfn(func, detour)
+            end
+        end)
+        if original then HookReferences[#HookReferences + 1] = original end
+        return original
+    end
+
+    local function SafeCall(func, ...)
+        if checkcaller() then return func(...) end
+        local old = getthreadidentity()
+        if old ~= 2 then setthreadidentity(2) end
+        local r = {func(...)}
+        if old ~= 2 then setthreadidentity(old) end
+        return table.unpack(r)
+    end
+
+    local oldindex
+    oldindex = SafeHook(hookmetamethod, ac_script, "__index", function(t, k)
+        if t == ac_script and not checkcaller() and kProtectedProperties[k] ~= nil and not bypassed then
+            return kProtectedProperties[k]
+        end
+        if checkcaller() then return oldindex(t, k) end
+        return SafeCall(oldindex, t, k)
+    end)
+
+    local oldnewindex
+    oldnewindex = SafeHook(hookmetamethod, ac_script, "__newindex", function(t, k, v)
+        if t == ac_script and not checkcaller() and kProtectedProperties[k] ~= nil and not bypassed then
+            kProtectedProperties[k] = v
+            if k == "Enabled" then kProtectedProperties.Disabled = not v end
+            if k == "Disabled" then kProtectedProperties.Enabled = not v end
+            return
+        end
+        if checkcaller() then return oldnewindex(t, k, v) end
+        return SafeCall(oldnewindex, t, k, v)
+    end)
+
+    client_id, last = "", tick()
+    local oldfireserver
+    oldfireserver = SafeHook(hookfunction, ac_event.FireServer, function(self, ...)
+        local now, args = tick(), {...}
+        if not first_seen then
+            first_seen = true
+            local a = args[1]
+            if type(a) == "table" and #a >= 1 and (type(a[1]) == "string" or type(a[1]) == "number") then
+                client_id = tostring(a[1])
+            end
+            last, samples, hijack_ready = tick(), 1, true
+            return SafeCall(oldfireserver, self, ...)
+        end
+        local interval = now - (last or now)
+        if interval > 0 then
+            expected_interval = samples == 0 and interval or (ema_alpha * interval + (1 - ema_alpha) * expected_interval)
+            samples += 1
+            if expected_interval < min_interval then expected_interval = min_interval end
+        end
+        local res = SafeCall(oldfireserver, self, ...)
+        last = tick()
+        return res
+    end)
+
+    local function BuildSubTable()
+        local num_empty = math.random(1, 5)
+        local empty_map, empty_slots = {[7]=true}, {7}
+        while #empty_slots < num_empty do
+            local s = math.random(1, 6)
+            if not empty_map[s] then empty_map[s] = true; table.insert(empty_slots, s) end
+        end
+        table.sort(empty_slots)
+        local r = {}
+        for i = 1, 7 do r[i] = empty_map[i] and {} or kFilledSub end
+        return r, empty_slots
+    end
+
+    local function ApplyTransforms(t, mask, empty_slots)
+        local payload = t[1]
+        local outer_index = #payload
+        local inner_index = empty_slots[math.random(1, #empty_slots)]
+        local derived, outer_val = nil, payload[outer_index]
+        if type(outer_val) == "table" and type(inner_index) == "number" then
+            derived = outer_val[inner_index]
+        else
+            for i = outer_index, 1, -1 do
+                if type(payload[i]) == "table" then
+                    local c = payload[i]
+                    derived = (type(inner_index) == "number" and c[inner_index] ~= nil) and c[inner_index] or c
+                    break
+                end
+            end
+            derived = derived or {}
+        end
+        local written = {}
+        for _, v in ipairs(mask) do
+            local slot = kSlotMap[v]
+            if slot and not written[slot] then t[slot] = derived; written[slot] = true end
+        end
+        return t
+    end
+
+    local function BuildPayload(challenge, mask)
+        local sub, empty = BuildSubTable()
+        local total = math.random(1, 8)
+        local payload = {client_id, buffer.tostring(challenge)}
+        for _ = 1, math.random(0, 2) do payload[#payload+1] = "" end
+        while #payload < (total - 1) do payload[#payload+1] = math.random(5, 100000) end
+        payload[#payload+1] = sub
+        return ApplyTransforms({payload, {}, nil, nil, nil, nil, nil}, mask, empty)
+    end
+
+    task.spawn(function()
+        getfenv().script = ac_script
+        while not hijack_ready do task.wait() end
+        ac_script.Enabled = false
+        ac_event.OnClientEvent:Connect(function(...)
+            last = tick()
+            local remote = Instance.new("RemoteEvent")
+            remote:FireServer()
+            local t = {...}
+            local challenge, index, mask = t[1], t[2], t[3]
+            if typeof(challenge) ~= "buffer" or type(index) ~= "number" or type(mask) ~= "table" then
+                LocalPlayer:Kick("[AethSec]: Bypass failed!")
+                return
+            end
+            local payload = BuildPayload(challenge, mask)
+            task.defer(function()
+                local wait_t = expected_interval - (tick() - (last or 0))
+                if wait_t > 0 then task.wait(wait_t) end
+                ac_event:FireServer(table.unpack(payload, 1, 5))
+                last = tick()
+                remote:Destroy()
+            end)
+        end)
+        bypassed = true
+    end)
+
+    for _, name in ipairs(kKickNames) do
+        local f = LocalPlayer[name]
+        if type(f) == "function" then
+            local old
+            old = SafeHook(hookfunction, f, function(self, ...)
+                if self == LocalPlayer and not checkcaller() then return end
+                return old(self, ...)
+            end)
+        end
+    end
+
+    while not bypassed do task.wait(0.5) end
+    task.wait(0.5)
+end)
+
+pcall(function()
+    local AuditState = {
+        active = false,
+        violations = {},
+        executor_name = "",
+        checks_passed = 0,
+        checks_failed = 0,
+    }
+
+    local APIs = {}
+    local function CacheAPIs()
+        pcall(function() APIs.islclosure = islclosure end)
+        pcall(function() APIs.iscclosure = iscclosure end)
+        pcall(function() APIs.isourclosure = isourclosure end)
+        pcall(function() APIs.isexecutorclosure = isexecutorclosure end)
+        pcall(function() APIs.isnewcclosure = isnewcclosure end)
+        pcall(function() APIs.isfunctionhooked = isfunctionhooked end)
+        pcall(function() APIs.clonefunction = clonefunction end)
+        pcall(function() APIs.hookfunction = hookfunction end)
+        pcall(function() APIs.setrawmetatable = setrawmetatable end)
+        pcall(function() APIs.getrawmetatable = getrawmetatable end)
+        pcall(function() APIs.sethiddenproperty = sethiddenproperty end)
+        pcall(function() APIs.identifyexecutor = identifyexecutor end)
+        pcall(function() APIs.gethui = gethui end)
+        if APIs.identifyexecutor then
+            local ok, name = pcall(APIs.identifyexecutor)
+            if ok and name then AuditState.executor_name = tostring(name) end
+        end
+    end
+
+    local function ReportViolation(tag, details)
+        AuditState.checks_failed += 1
+        AuditState.violations[#AuditState.violations + 1] = {tag = tag, details = details or "", timestamp = tick()}
+    end
+
+    local function ReportSuccess(tag)
+        AuditState.checks_passed += 1
+    end
+
+    local function VerifyClosureAPIs()
+        if not APIs.islclosure or not APIs.iscclosure then return end
+        local lua_closure = function() return 1 end
+        local c_closure = print
+        if APIs.islclosure(lua_closure) ~= true then ReportViolation("audit:islclosure.lua_mismatch") else ReportSuccess("audit:islclosure.lua") end
+        if APIs.islclosure(c_closure) ~= false then ReportViolation("audit:islclosure.c_mismatch") else ReportSuccess("audit:islclosure.c") end
+        if APIs.iscclosure(c_closure) ~= true then ReportViolation("audit:iscclosure.c_mismatch") else ReportSuccess("audit:iscclosure.c") end
+        if APIs.iscclosure(lua_closure) ~= false then ReportViolation("audit:iscclosure.lua_mismatch") else ReportSuccess("audit:iscclosure.lua") end
+    end
+
+    local function VerifyMetatableAPIs()
+        if not APIs.setrawmetatable or not APIs.getrawmetatable then return end
+        local info = debug.info
+        if info then
+            local ok, source = pcall(info, APIs.setrawmetatable, "s")
+            if ok and source ~= "[C]" then ReportViolation("pre:setrawmetatable.src_not_C") else ReportSuccess("pre:setrawmetatable.src") end
+            ok, source = pcall(info, APIs.getrawmetatable, "s")
+            if ok and source ~= "[C]" then ReportViolation("pre:getrawmetatable.src_not_C") else ReportSuccess("pre:getrawmetatable.src") end
+        end
+    end
+
+    local function VerifyFireServerIntegrity()
+        local ok, remote = pcall(function() return Instance.new("RemoteEvent") end)
+        if not ok or not remote then return end
+        local fireserver = remote.FireServer
+        if debug.info and fireserver then
+            local src_ok, source = pcall(debug.info, fireserver, "s")
+            if src_ok and source ~= "[C]" then ReportViolation("fs:src_not_C") else ReportSuccess("fs:src") end
+        end
+        pcall(function() remote:Destroy() end)
+    end
+
+    local function VerifyKnownTruths()
+        if APIs.isexecutorclosure and APIs.isfunctionhooked then
+            local ok, hooked = pcall(APIs.isfunctionhooked, APIs.isexecutorclosure)
+            if ok and hooked == true then ReportViolation("known-truth:iec_hooked") else ReportSuccess("known-truth:iec") end
+        end
+    end
+
+    CacheAPIs()
+    VerifyClosureAPIs()
+    VerifyMetatableAPIs()
+    VerifyFireServerIntegrity()
+    VerifyKnownTruths()
+    AuditState.active = true
+
+    if AuditState.checks_failed > 0 then
+        warn("[Audit System]: " .. AuditState.checks_failed .. " violations detected!")
+        for _, v in ipairs(AuditState.violations) do warn("  - " .. v.tag) end
+    end
+end)
+
+local modules = {}
+pcall(function()
+    local PS = LocalPlayer:WaitForChild("PlayerScripts", 10)
+    local Controllers = PS and PS:FindFirstChild("Controllers")
+    local RSModules = ReplicatedStorage:FindFirstChild("Modules")
+
+    if Controllers then
+        pcall(function() modules.PlayerDataController = require(Controllers:WaitForChild("PlayerDataController", 5)) end)
+        pcall(function() modules.LeaderboardController = require(Controllers:WaitForChild("LeaderboardController", 5)) end)
+        pcall(function() modules.ControlsController = require(Controllers:WaitForChild("ControlsController", 5)) end)
+        pcall(function() modules.MonetizationController = require(Controllers:WaitForChild("MonetizationController", 5)) end)
+    end
+    if RSModules then
+        pcall(function() modules.SeasonLibrary = require(RSModules:WaitForChild("SeasonLibrary", 5)) end)
+        pcall(function() modules.MonetizationLibrary = require(RSModules:WaitForChild("MonetizationLibrary", 5)) end)
+        pcall(function() modules.CosmeticLibrary = require(RSModules:WaitForChild("CosmeticLibrary", 5)) end)
+        pcall(function() modules.ShopLibrary = require(RSModules:WaitForChild("ShopLibrary", 5)) end)
+        pcall(function() modules.ItemLibrary = require(RSModules:WaitForChild("ItemLibrary", 5)) end)
+    end
+end)
+
+pcall(function()
+    if modules.PlayerDataController and modules.PlayerDataController.WaitUntilLoaded then
+        modules.PlayerDataController:WaitUntilLoaded()
+    end
+end)
+
+local Connections = {}
+local function Bind(name, signal, fn)
+    if Connections[name] then Connections[name]:Disconnect() end
+    Connections[name] = signal:Connect(fn)
+end
+local function Unbind(name)
+    if Connections[name] then Connections[name]:Disconnect(); Connections[name] = nil end
+end
+
+local function SafeGet(key, fallback)
+    local ok, v = pcall(function()
+        return modules.PlayerDataController and modules.PlayerDataController:Get(key)
+    end)
+    return (ok and v ~= nil) and v or fallback
+end
+
+local states = {
+    spoofer_state = {
+        device = "Desktop",
+        old_device = tostring(modules.ControlsController and modules.ControlsController.CurrentControls or "Desktop"),
+        spoof_device = false,
+        device_spam = false,
+        spam_rate = 1,
+
+        display_name_value = LocalPlayer.DisplayName,
+        username_value = LocalPlayer.Name,
+        display_name = false,
+        username = false,
+        name_spoof_conn = {},
+
+        avatar_userid = LocalPlayer.UserId,
+        spoof_avatar = false,
+        thumb_spoof_conn = {},
+
+        anonymous_mode = false,
+        fake_names = {},
+        anon_connections = {},
+
+        leaderboard = {
+            elo_value = 0,
+            streak_value = LocalPlayer:GetAttribute("StatisticDuelsWinStreak") or 0,
+            kills_value = 0,
+            wins_value = 0,
+            level_value = LocalPlayer:GetAttribute("Level") or 0,
+            old_streak_value = LocalPlayer:GetAttribute("StatisticDuelsWinStreak"),
+            old_level_value = LocalPlayer:GetAttribute("Level"),
+            ELO = false, Streak = false, Kills = false, Wins = false, Level = false,
+        },
+
+        badges = {Premium = false, Verified = false, Influencer = false, Admin = false},
+
+        charm = {
+            charm_rank = "Use Spoofed ELO", arch_rank = 1,
+            s0_charm = false, s1_charm = false, s2_charm = false, s3_charm = false,
+        },
+
+        currency = {
+            weapon_keys = false, unlock_tokens = false, event_currency = false,
+            glory = false, skin_tickets = false,
+            weapon_keys_value = SafeGet("WeaponKeys", 0),
+            unlock_tokens_value = SafeGet("UnlockTokens", 0),
+            event_currency_value = SafeGet("EventCurrency", 0),
+            glory_value = SafeGet("Glory", 0),
+            skin_tickets_value = SafeGet("SkinTickets", 0),
+        },
+
+        duel_history = {
+            duel_history_value = SafeGet("DuelHistory", {}),
+            logged_elo_events = SafeGet("LoggedELOEvents", {}),
+            match_index = 1, mode = "Ranked", result = "Victory", map = "Factory",
+            team1score = 5, team2score = 0, dueler_index = 1,
+            username = "", display_name = "",
+            kills = 15, deaths = 2, assists = 6, damage = 5000, elo = 2000, elo_change = 35,
+        },
+
+        marketplace = {
+            fake_bundles_owned = SafeGet("GamepassBundlesClaimed", {}),
+            fake_gift_robux_spent = SafeGet("GiftRobuxSpentProgress", 0),
+            fake_gift_rewards_claimed = SafeGet("GiftRobuxSpentRewardsClaimed", {}),
+            fake_robux = false, robux_amount = 0, fake_gifting = false,
+        },
+    },
+
+    skinchanger_state = {
+        fake_owned = SafeGet("CosmeticInventory", {}),
+        fake_weapon_owned = SafeGet("WeaponInventory", {}),
+        equipped = {},
+        favorites = {},
+        fake_weapon_names = {},
+        constructing_weapon = nil,
+        last_used_weapon = nil,
+        placed_object_map = {},
+        viewing_profile = nil,
+
+        general_unlocker = {
+            unlock_type = "Skin",
+            unlock_rarity = "Common",
+        },
+
+        specific_unlocker = {
+            unlock_type = "Skin",
+            cosmetic_name = "",
+            weapon_name = "",
+        },
+
+        equip_unlocker = {
+            unlock_type = "Skin",
+            cosmetic_name = "",
+            weapon_name = "",
+            inverted = false,
+        },
+    },
+
+    inventory_state = {
+        fake_owned = SafeGet("UnclaimedRewards", {}),
+    },
+}
+
+local kCharmEloMap = {
+    ["Unranked"] = -1, ["Bronze 1"] = 0, ["Bronze 2"] = 200, ["Bronze 3"] = 400,
+    ["Silver 1"] = 600, ["Silver 2"] = 800, ["Silver 3"] = 1000,
+    ["Gold 1"] = 1200, ["Gold 2"] = 1400, ["Gold 3"] = 1600,
+    ["Platinum 1"] = 1800, ["Platinum 2"] = 2000, ["Platinum 3"] = 2200,
+    ["Diamond 1"] = 2400, ["Diamond 2"] = 2600, ["Diamond 3"] = 2800,
+    ["Onyx 1"] = 3000, ["Onyx 2"] = 3200, ["Onyx 3"] = 3400,
+    ["Nemesis"] = 3600, ["Archnemesis"] = 3600,
+}
+local kSeasonNameMap = {[0]="Zero",[1]="Warp",[2]="Polar",[3]="Fame", Zero=0, Warp=1, Polar=2, Fame=3}
+local kSeasonToggleMap = {[0]="s0_charm",[1]="s1_charm",[2]="s2_charm",[3]="s3_charm"}
+local kWordList = {
+    "late","couple","economic","obscure","landscape","spot","college","rainbow","leg","mixture",
+    "frank","commitment","draft","motivation","fuss","settle","jelly","confine","pin","modernize",
+    "velvet","quarter","physical","differ","dish","aisle","happen","council","appeal","depart",
+    "urgency","vessel",
+}
+
+pcall(function()
+    if not modules.PlayerDataController then return end
+    local original = modules.PlayerDataController.Get
+    modules.PlayerDataController.Get = function(self, key, ...)
+        local data = original(self, key, ...)
+        local s = states.spoofer_state
+        if key == "WeaponKeys" and s.currency.weapon_keys then return s.currency.weapon_keys_value end
+        if key == "UnlockTokens" and s.currency.unlock_tokens then return s.currency.unlock_tokens_value end
+        if key == "EventCurrency" and s.currency.event_currency then return s.currency.event_currency_value end
+        if key == "Glory" and s.currency.glory then return s.currency.glory_value end
+        if key == "SkinTickets" and s.currency.skin_tickets then return s.currency.skin_tickets_value end
+        if key == "DuelHistory" then return s.duel_history.duel_history_value or data end
+        if key == "LoggedELOEvents" then return s.duel_history.logged_elo_events or data end
+        if key == "GamepassBundlesClaimed" then return s.marketplace.fake_bundles_owned or data end
+        if key == "GiftRobuxSpentProgress" then return s.marketplace.fake_gift_robux_spent or data end
+        if key == "GiftRobuxSpentRewardsClaimed" then return s.marketplace.fake_gift_rewards_claimed or data end
+        if key == "CosmeticInventory" then return states.skinchanger_state.fake_owned or data end
+        if key == "WeaponInventory" or key == "FreeWeaponUnlockCheck" then return states.skinchanger_state.fake_weapon_owned or data end
+        if key == "UnclaimedRewards" then return states.inventory_state.fake_owned or data end
+        return data
+    end
+end)
+
+pcall(function()
+    if not modules.CosmeticLibrary then return end
+    local cos = modules.CosmeticLibrary
+
+    local function WrapOwnership(old, expected_args)
+        return function(...)
+            local args = {...}
+            local name = args[expected_args]
+            if type(name) == "string" and states.skinchanger_state.fake_owned[name] then return true end
+            if old then return old(...) end
+            return false
+        end
+    end
+
+    local orig_normal = cos.OwnsCosmeticNormally
+    cos.OwnsCosmeticNormally = WrapOwnership(orig_normal, 3)
+    local orig_universal = cos.OwnsCosmeticUniversally
+    cos.OwnsCosmeticUniversally = WrapOwnership(orig_universal, 3)
+    local orig_for_something = cos.OwnsCosmeticForSomething
+    cos.OwnsCosmeticForSomething = WrapOwnership(orig_for_something, 3)
+    local orig_for_weapon = cos.OwnsCosmeticForWeapon
+    cos.OwnsCosmeticForWeapon = WrapOwnership(orig_for_weapon, 3)
+
+    local orig_owns = cos.OwnsCosmetic
+    cos.OwnsCosmetic = function(self, inventory, name, weapon)
+        if type(name) == "string" and states.skinchanger_state.fake_owned[name] then return true end
+        if orig_owns then return orig_owns(self, inventory, name, weapon) end
+        return false
+    end
+end)
+
+pcall(function()
+    if not modules.PlayerDataController then return end
+    local pdc = modules.PlayerDataController
+
+    if pdc.HasGamepass then
+        local orig_hasgamepass = pdc.HasGamepass
+        pdc.HasGamepass = function(p11, ...)
+            local has_gamepass = orig_hasgamepass and orig_hasgamepass(p11, ...)
+            local name = ({...})[1]
+            return type(name) == "string" and states.spoofer_state.marketplace.fake_bundles_owned[name] or has_gamepass
+        end
+    end
+
+    if pdc.GetWeaponData then
+        local orig_getweapondata = pdc.GetWeaponData
+        pdc.GetWeaponData = function(p1, ...)
+            local weapon_name = ({...})[1]
+            local original_data, index = orig_getweapondata(p1, ...)
+
+            local fake_owned = false
+            for _, weapon in ipairs(states.skinchanger_state.fake_weapon_owned) do
+                if weapon.Name == weapon_name then fake_owned = true break end
+            end
+
+            if fake_owned and not original_data then
+                local fake_data = {
+                    Name = weapon_name,
+                    Level = 1,
+                    XP = 0,
+                    IsFavorited = false,
+                    Skin = nil,
+                }
+                local equipped = states.skinchanger_state.equipped
+                if equipped and equipped[weapon_name] then
+                    for cos_type, cos_data in pairs(equipped[weapon_name]) do
+                        if type(cos_data) == "table" and (cos_data.Name == "NONE_COSMETIC" or cos_data.Name == "None") then
+                            fake_data[cos_type] = nil
+                        else
+                            fake_data[cos_type] = cos_data
+                        end
+                    end
+                end
+                return fake_data, index
+            end
+
+            local equipped = states.skinchanger_state.equipped
+            if original_data and equipped and equipped[weapon_name] then
+                for cos_type, cos_data in pairs(equipped[weapon_name]) do
+                    if type(cos_data) == "table" and (cos_data.Name == "NONE_COSMETIC" or cos_data.Name == "None") then
+                        original_data[cos_type] = nil
+                    else
+                        original_data[cos_type] = cos_data
+                    end
+                end
+            end
+
+            return original_data, index
+        end
+    end
+end)
+
+local function PatchCurrentDataGet(current_data)
+    if not current_data or type(current_data.Get) ~= "function" or current_data._fakeWeaponOwnedPatched then
+        return
+    end
+    local old_get = current_data.Get
+    current_data.Get = function(self, ...)
+        local data = old_get(self, ...)
+        local key = ({...})[1]
+        if key == "CosmeticInventory" then return states.skinchanger_state.fake_owned or data end
+        if key == "UnclaimedRewards" then return states.inventory_state.fake_owned or data end
+        if key == "WeaponInventory" or key == "FreeWeaponUnlockCheck" then return states.skinchanger_state.fake_weapon_owned or data end
+        return data
+    end
+    current_data._fakeWeaponOwnedPatched = true
+end
+
+task.spawn(function()
+    while not (modules.PlayerDataController and modules.PlayerDataController.CurrentData) do
+        task.wait(0.1)
+    end
+    PatchCurrentDataGet(modules.PlayerDataController.CurrentData)
+end)
+
+local device_cancel = 0
+local function SetDevice(use_old)
+    local map = {Desktop="MouseKeyboard", Mobile="Touch", Console="Gamepad", VR="VR"}
+    local key = use_old and states.spoofer_state.old_device or states.spoofer_state.device
+    pcall(function()
+        ReplicatedStorage.Remotes.Replication.Fighter.SetControls:FireServer(map[key] or "MouseKeyboard")
+    end)
+end
+
+local function SpoofDevice()
+    SetDevice(not states.spoofer_state.spoof_device)
+end
+
+local function DeviceSpam()
+    device_cancel += 1
+    local token = device_cancel
+    task.spawn(function()
+        local list = {"Desktop","Mobile","Console","VR"}
+        while states.spoofer_state.device_spam and token == device_cancel do
+            states.spoofer_state.device = list[math.random(1, #list)]
+            SetDevice(false)
+            task.wait(states.spoofer_state.spam_rate)
+        end
+        SetDevice(true)
+    end)
+end
+
+local function IsTextObject(obj)
+    return obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox")
+end
+
+local function FormatNumber(n)
+    n = tostring(n)
+    return n:reverse():gsub("%d%d%d", "%1,"):reverse():gsub("^,", "")
+end
+
+local function ApplyNameSpoof(obj)
+    if not IsTextObject(obj) then return end
+    local text = obj.Text
+    if typeof(text) ~= "string" then return end
+
+    if states.spoofer_state.display_name and obj.Name == "DisplayName" then
+        text = text:gsub(LocalPlayer.DisplayName, states.spoofer_state.display_name_value)
+    end
+    if states.spoofer_state.username and obj.Name == "Username" then
+        text = text:gsub(LocalPlayer.Name, states.spoofer_state.username_value)
+    end
+    if states.spoofer_state.display_name and obj.Parent.Name == "NameContainer" and obj.Name == "Name" then
+        text = text:gsub(LocalPlayer.DisplayName, states.spoofer_state.display_name_value)
+    end
+    if states.spoofer_state.username and obj.Parent.Name == "NameContainer" and obj.Name == "Handle" then
+        text = text:gsub(LocalPlayer.Name, states.spoofer_state.username_value)
+    end
+    if states.spoofer_state.display_name and obj.Parent.Name == "Title" and obj.Name == "TitleText" then
+        text = text:gsub(LocalPlayer.DisplayName, states.spoofer_state.display_name_value)
+    end
+    if states.spoofer_state.username and obj.Parent.Name == "Subtitle" and obj.Name == "SubtitleText" then
+        text = text:gsub(LocalPlayer.Name, states.spoofer_state.username_value)
+    end
+    if states.spoofer_state.display_name and obj.Name == "HeaderText" then
+        text = text:gsub(LocalPlayer.DisplayName, states.spoofer_state.display_name_value)
+    end
+    if states.spoofer_state.display_name and obj.Name == "Title" then
+        text = text:gsub(LocalPlayer.DisplayName, states.spoofer_state.display_name_value)
+    end
+    if states.spoofer_state.leaderboard.Wins and obj.Name == "Wins" then
+        text = FormatNumber(states.spoofer_state.leaderboard.wins_value)
+    end
+    if states.spoofer_state.leaderboard.Level and obj.Parent.Name == "Level" and obj.Name == "Value" then
+        text = FormatNumber(states.spoofer_state.leaderboard.level_value)
+    end
+    if states.spoofer_state.leaderboard.Streak and obj.Parent.Name == "Streak" and obj.Name == "Value" then
+        text = FormatNumber(states.spoofer_state.leaderboard.streak_value)
+    end
+
+    if obj.Text ~= text then obj.Text = text end
+end
+
+local function RefreshAllNameSpoofs()
+    for obj in pairs(states.spoofer_state.name_spoof_conn) do
+        if obj and obj.Parent then ApplyNameSpoof(obj) end
+    end
+end
+
+local function RegisterTextObject(obj)
+    if not IsTextObject(obj) then return end
+    local allowed = {
+        DisplayName=true, Username=true, Name=true, Handle=true,
+        TitleText=true, SubtitleText=true, HeaderText=true, Title=true, Wins=true, Value=true,
+    }
+    if not allowed[obj.Name] then return end
+    ApplyNameSpoof(obj)
+    if states.spoofer_state.name_spoof_conn[obj] then return end
+    states.spoofer_state.name_spoof_conn[obj] = obj:GetPropertyChangedSignal("Text"):Connect(function()
+        ApplyNameSpoof(obj)
+    end)
+    obj.Destroying:Connect(function()
+        if states.spoofer_state.name_spoof_conn[obj] then
+            states.spoofer_state.name_spoof_conn[obj]:Disconnect()
+            states.spoofer_state.name_spoof_conn[obj] = nil
+        end
+    end)
+end
+
+for _, o in ipairs(game:GetDescendants()) do RegisterTextObject(o) end
+game.DescendantAdded:Connect(RegisterTextObject)
+
+local function ApplyThumbnailSpoof(obj)
+    if not obj:IsA("ImageLabel") then return end
+    local image = obj.Image
+    if typeof(image) ~= "string" then return end
+
+    if states.spoofer_state.spoof_avatar and obj.Name == "AvatarThumbnail" then
+        image = image:gsub(LocalPlayer.UserId, states.spoofer_state.avatar_userid)
+    end
+    if states.spoofer_state.spoof_avatar and obj.Parent.Name == "Thumbnail" and obj.Name == "ImageLabel" then
+        image = image:gsub(LocalPlayer.UserId, states.spoofer_state.avatar_userid)
+    end
+    if states.spoofer_state.spoof_avatar and obj.Name == "Headshot" then
+        image = image:gsub(LocalPlayer.UserId, states.spoofer_state.avatar_userid)
+    end
+
+    if obj.Image ~= image then obj.Image = image end
+end
+
+local function RefreshAllThumbnailSpoofs()
+    for obj in pairs(states.spoofer_state.thumb_spoof_conn) do
+        if obj and obj.Parent then ApplyThumbnailSpoof(obj) end
+    end
+end
+
+local function RegisterImageObject(obj)
+    if not obj:IsA("ImageLabel") then return end
+    if not ({AvatarThumbnail=true, ImageLabel=true, Headshot=true})[obj.Name] then return end
+    ApplyThumbnailSpoof(obj)
+    if states.spoofer_state.thumb_spoof_conn[obj] then return end
+    states.spoofer_state.thumb_spoof_conn[obj] = obj:GetPropertyChangedSignal("Image"):Connect(function()
+        ApplyThumbnailSpoof(obj)
+    end)
+    obj.Destroying:Connect(function()
+        if states.spoofer_state.thumb_spoof_conn[obj] then
+            states.spoofer_state.thumb_spoof_conn[obj]:Disconnect()
+            states.spoofer_state.thumb_spoof_conn[obj] = nil
+        end
+    end)
+end
+
+for _, o in ipairs(game:GetDescendants()) do RegisterImageObject(o) end
+game.DescendantAdded:Connect(RegisterImageObject)
+
+local function FindFirstMatchingAttachment(model, name)
+    for _, child in pairs(model:GetChildren()) do
+        if child:IsA("Attachment") and child.Name == name then return child end
+        if not child:IsA("Accoutrement") and not child:IsA("Tool") then
+            local f = FindFirstMatchingAttachment(child, name)
+            if f then return f end
+        end
+    end
+end
+
+local function BuildWeld(weld_name, parent, part0, part1, c0, c1)
+    local weld = Instance.new("Weld")
+    weld.Name = weld_name
+    weld.Part0 = part0
+    weld.Part1 = part1
+    weld.C0 = c0
+    weld.C1 = c1
+    weld.Parent = parent
+    return weld
+end
+
+local function WeldAttachments(a1, a2)
+    local w = Instance.new("Weld")
+    w.Part0, w.Part1 = a1.Parent, a2.Parent
+    w.C0, w.C1 = a1.CFrame, a2.CFrame
+    w.Parent = a1.Parent
+    return w
+end
+
+local function AddAccoutrement(character, acc)
+    acc.Parent = character
+    local handle = acc:FindFirstChild("Handle")
+    if not handle then return end
+    local att = handle:FindFirstChildOfClass("Attachment")
+    if att then
+        local ca = FindFirstMatchingAttachment(character, att.Name)
+        if ca then WeldAttachments(ca, att) end
+    else
+        local head = character:FindFirstChild("Head")
+        if head then
+            local attachmentCFrame = CFrame.new(0, 0.5, 0)
+            local hatCFrame = acc.AttachmentPoint
+            BuildWeld("HeadWeld", head, head, handle, attachmentCFrame, hatCFrame)
+        end
+    end
+end
+
+local function FindHeadPart(inst)
+    if not inst then return end
+    if inst:IsA("BasePart") then return inst end
+    local h = inst:FindFirstChild("Head")
+    if h and h:IsA("BasePart") then return h end
+    for _, d in ipairs(inst:GetDescendants()) do
+        if d:IsA("BasePart") and d.Name == "Head" then return d end
+    end
+    for _, d in ipairs(inst:GetDescendants()) do
+        if d:IsA("BasePart") then return d end
+    end
+end
+
+local function CopyHeadVisuals(real_head, source_head)
+    if not real_head or not source_head then return end
+    if not real_head:IsA("BasePart") or not source_head:IsA("BasePart") then return end
+    for _, c in ipairs(real_head:GetChildren()) do
+        if c:IsA("Decal") or c:IsA("Texture") or c:IsA("SpecialMesh") or c:IsA("Mesh") then c:Destroy() end
+    end
+    real_head.Material = source_head.Material
+    real_head.Color = source_head.Color
+    real_head.Reflectance = source_head.Reflectance
+    real_head.Transparency = source_head.Transparency
+    real_head.LocalTransparencyModifier = source_head.LocalTransparencyModifier
+    real_head.CastShadow = source_head.CastShadow
+    real_head.CanCollide = false
+    if real_head:IsA("MeshPart") and source_head:IsA("MeshPart") then
+        real_head.MeshId = source_head.MeshId
+        real_head.TextureID = source_head.TextureID
+        real_head.Size = source_head.Size
+    end
+    for _, c in ipairs(source_head:GetChildren()) do
+        if c:IsA("Decal") or c:IsA("Texture") or c:IsA("SpecialMesh") or c:IsA("Mesh") then
+            c:Clone().Parent = real_head
+        end
+    end
+end
+
+local function ApplyFakeHead(character, source_head)
+    local real = character and character:FindFirstChild("Head")
+    if not real or not real:IsA("BasePart") or not source_head then return end
+    CopyHeadVisuals(real, source_head)
+end
+
+local function SetAvatar(use_old)
+    local uid = use_old and LocalPlayer.UserId or states.spoofer_state.avatar_userid
+    if not uid then return end
+    if not LocalChar or not LocalChar.Parent then LocalChar = GetCharacter() end
+
+    local ok, rig = pcall(function() return Players:CreateHumanoidModelFromUserId(uid) end)
+    if not ok or not rig then return end
+
+    for _, v in ipairs(LocalChar:GetDescendants()) do
+        if v:IsA("Accessory") or v:IsA("Shirt") or v:IsA("Pants") or v:IsA("ShirtGraphic")
+            or v:IsA("BodyColors") or v:IsA("CharacterMesh") or v:IsA("LayeredClothing")
+            or (v:IsA("Decal") and v.Name == "face") then
+            pcall(function() v:Destroy() end)
+        end
+    end
+
+    for _, item in ipairs(rig:GetChildren()) do
+        if item:IsA("Accessory") then
+            pcall(function() AddAccoutrement(LocalChar, item:Clone()) end)
+        elseif item:IsA("Shirt") or item:IsA("Pants") or item:IsA("ShirtGraphic")
+            or item:IsA("BodyColors") or item:IsA("LayeredClothing") or item:IsA("CharacterMesh") then
+            pcall(function() item:Clone().Parent = LocalChar end)
+        end
+    end
+
+    local head = FindHeadPart(rig)
+    if head then ApplyFakeHead(LocalChar, head) end
+    pcall(function() rig:Destroy() end)
+end
+
+local function SpoofAvatar()
+    SetAvatar(not states.spoofer_state.spoof_avatar)
+end
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(0.5)
+    if states.spoofer_state.spoof_avatar then SetAvatar(false) end
+end)
+
+local function GenerateRandomName()
+    local result = ""
+    for i = 1, math.random(2, 4) do
+        local index = math.random(1, #kWordList)
+        result ..= kWordList[index]
+    end
+    return result .. tostring(math.random(12, 36))
+end
+
+local function GetFakeName(player)
+    if not states.spoofer_state.fake_names[player] then
+        states.spoofer_state.fake_names[player] = GenerateRandomName()
+    end
+    return states.spoofer_state.fake_names[player]
+end
+
+local AnonymousRigTemplate
+local function GetAnonymousRig()
+    if AnonymousRigTemplate and AnonymousRigTemplate.Parent then
+        return AnonymousRigTemplate:Clone()
+    end
+    local ok, rig = pcall(function()
+        return Players:CreateHumanoidModelFromUserId(6942067)
+    end)
+    if not ok or not rig then return nil end
+    AnonymousRigTemplate = rig
+    AnonymousRigTemplate.Parent = nil
+    return AnonymousRigTemplate:Clone()
+end
+
+local function ApplyAnonymousNameSpoof(obj)
+    if not IsTextObject(obj) then return end
+    local text = obj.Text
+    for _, player in ipairs(Players:GetPlayers()) do
+        local fakeName = GetFakeName(player)
+        text = text:gsub(player.Name, fakeName)
+        text = text:gsub(player.DisplayName, fakeName)
+    end
+    if obj.Text ~= text then obj.Text = text end
+end
+
+local function ApplyAnonymousThumbnailSpoof(obj)
+    if not obj:IsA("ImageLabel") then return end
+    local image = obj.Image
+    for _, player in ipairs(Players:GetPlayers()) do
+        image = image:gsub(tostring(player.UserId), tostring(6942067))
+    end
+    if obj.Image ~= image then obj.Image = image end
+end
+
+local function ApplyAnonymousAvatar(character)
+    if not character then return end
+    local rig = GetAnonymousRig()
+    if not rig then return end
+    for _, v in ipairs(character:GetDescendants()) do
+        local isFaceDecal = v:IsA("Decal") and v.Name == "face"
+        if v:IsA("Accessory") or v:IsA("Shirt") or v:IsA("Pants") or v:IsA("ShirtGraphic")
+            or v:IsA("BodyColors") or v:IsA("CharacterMesh") or v:IsA("LayeredClothing")
+            or isFaceDecal then
+            pcall(function() v:Destroy() end)
+        end
+    end
+    for _, item in ipairs(rig:GetChildren()) do
+        if item:IsA("Accessory") then
+            AddAccoutrement(character, item:Clone())
+        elseif item:IsA("Shirt") or item:IsA("Pants") or item:IsA("ShirtGraphic")
+            or item:IsA("BodyColors") or item:IsA("CharacterMesh") or item:IsA("LayeredClothing") then
+            item:Clone().Parent = character
+        end
+    end
+    local head = FindHeadPart(rig)
+    if head then ApplyFakeHead(character, head) end
+    rig:Destroy()
+end
+
+local function RegisterAnonymousObject(obj)
+    if IsTextObject(obj) then
+        ApplyAnonymousNameSpoof(obj)
+        obj:GetPropertyChangedSignal("Text"):Connect(function()
+            ApplyAnonymousNameSpoof(obj)
+        end)
+    elseif obj:IsA("ImageLabel") then
+        ApplyAnonymousThumbnailSpoof(obj)
+        obj:GetPropertyChangedSignal("Image"):Connect(function()
+            ApplyAnonymousThumbnailSpoof(obj)
+        end)
+    end
+end
+
+local function DisableAnonymousMode()
+    for _, c in ipairs(states.spoofer_state.anon_connections) do
+        if c and c.Disconnect then
+            pcall(function() c:Disconnect() end)
+        end
+    end
+    table.clear(states.spoofer_state.anon_connections)
+    table.clear(states.spoofer_state.fake_names)
+end
+
+local function AnonymousMode()
+    if not states.spoofer_state.anonymous_mode then
+        DisableAnonymousMode()
+        return
+    end
+    DisableAnonymousMode()
+    math.randomseed(os.clock() * 100000)
+    for _, player in ipairs(Players:GetPlayers()) do
+        GetFakeName(player)
+        if player.Character then
+            task.defer(ApplyAnonymousAvatar, player.Character)
+        end
+        table.insert(states.spoofer_state.anon_connections,
+            player.CharacterAdded:Connect(function(character)
+                task.defer(ApplyAnonymousAvatar, character)
+            end))
+    end
+    table.insert(states.spoofer_state.anon_connections,
+        Players.PlayerAdded:Connect(function(player)
+            GetFakeName(player)
+            player.CharacterAdded:Connect(function(character)
+                task.defer(ApplyAnonymousAvatar, character)
+            end)
+        end))
+    for _, obj in ipairs(game:GetDescendants()) do
+        RegisterAnonymousObject(obj)
+    end
+    table.insert(states.spoofer_state.anon_connections,
+        game.DescendantAdded:Connect(RegisterAnonymousObject))
+end
+
+local function UpdateBadgesOptions()
+    LocalPlayer:SetAttribute("IsInfluencer", states.spoofer_state.badges.Influencer and true or false)
+    LocalPlayer:SetAttribute("IsRobloxEmployee", states.spoofer_state.badges.Admin and true or false)
+    -- Premium/Verified are usually membership flags; attribute spoof covers common UI checks
+    LocalPlayer:SetAttribute("IsPremium", states.spoofer_state.badges.Premium and true or false)
+    LocalPlayer:SetAttribute("HasVerifiedBadge", states.spoofer_state.badges.Verified and true or false)
+end
+
+pcall(function()
+    local old_badge_index
+    old_badge_index = hookmetamethod(game, "__index", function(self, key)
+        if self == LocalPlayer then
+            if key == "MembershipType" and states.spoofer_state.badges.Premium then
+                return Enum.MembershipType.Premium
+            end
+            if key == "HasVerifiedBadge" and states.spoofer_state.badges.Verified then
+                return true
+            end
+        end
+        return old_badge_index(self, key)
+    end)
+end)
+
+local function InsertPlayerByValue(list, user_id, value)
+    for i = #list, 1, -1 do
+        if tonumber(list[i].key) == user_id then table.remove(list, i) break end
+    end
+    local rank = 1
+    for i, e in ipairs(list) do
+        if tonumber(e.value) >= value then rank = i + 1 else break end
+    end
+    table.insert(list, rank, {key = tostring(user_id), value = value})
+end
+
+local function ResetLeaderboard(name, config_idx)
+    if not modules.LeaderboardController then return end
+    Unbind(config_idx)
+    local serial = modules.LeaderboardController.LeaderboardSerials
+        and modules.LeaderboardController.LeaderboardSerials[name]
+    if serial and serial.Players then
+        local uid = LocalPlayer.UserId
+        for i = #serial.Players, 1, -1 do
+            local p = serial.Players[i]
+            if p.UserId == uid or p.UserID == uid or p.PlayerId == uid then
+                table.remove(serial.Players, i)
+            end
+        end
+        if modules.LeaderboardController.Refreshed then
+            modules.LeaderboardController.Refreshed:Fire(name)
+        end
+    end
+end
+
+local function ModifyLeaderboard(config_idx, name, value)
+    if not modules.LeaderboardController then return end
+    task.spawn(function()
+        while not modules.LeaderboardController.LeaderboardSerials[name]
+            or not modules.LeaderboardController.LeaderboardSerials[name].Players
+            or #modules.LeaderboardController.LeaderboardSerials[name].Players <= 0 do
+            task.wait(0.5)
+        end
+
+        local user_id = LocalPlayer.UserId
+        local serial = modules.LeaderboardController.LeaderboardSerials[name]
+        if serial and serial.Players then
+            InsertPlayerByValue(serial.Players, user_id, value)
+            if modules.LeaderboardController.Refreshed then
+                modules.LeaderboardController.Refreshed:Fire(name)
+            end
+        end
+
+        local UpdateRemote = ReplicatedStorage:FindFirstChild("Remotes")
+            and ReplicatedStorage.Remotes:FindFirstChild("Misc")
+            and ReplicatedStorage.Remotes.Misc:FindFirstChild("UpdateLeaderboard")
+        if not (UpdateRemote and UpdateRemote:IsA("RemoteEvent")) then return end
+
+        Bind(config_idx, UpdateRemote.OnClientEvent, function(data)
+            local lb_name = data and data.Name
+            if not lb_name or lb_name ~= name then return end
+            if not states.spoofer_state.leaderboard[config_idx] then return end
+            task.defer(function()
+                local serial = modules.LeaderboardController.LeaderboardSerials[name]
+                if serial and serial.Players then
+                    InsertPlayerByValue(serial.Players, user_id, value)
+                    if modules.LeaderboardController.Refreshed then
+                        modules.LeaderboardController.Refreshed:Fire(name)
+                    end
+                end
+            end)
+        end)
+    end)
+end
+
+local function UpdateLeaderboardOptions()
+    local lb = states.spoofer_state.leaderboard
+
+    if lb.ELO then
+        Unbind("ELO")
+        ModifyLeaderboard("ELO", "Highest ELO", lb.elo_value)
+    end
+
+    if lb.Streak then
+        Unbind("Streak")
+        ModifyLeaderboard("Streak", "Current Highest Win Streak", lb.streak_value)
+        lb.old_streak_value = LocalPlayer:GetAttribute("StatisticDuelsWinStreak")
+        LocalPlayer:SetAttribute("StatisticDuelsWinStreak", lb.streak_value)
+    end
+
+    if lb.Kills then
+        Unbind("Kills")
+        ModifyLeaderboard("Kills", "Most Eliminations", lb.kills_value)
+    end
+
+    if lb.Wins then
+        Unbind("Wins")
+        ModifyLeaderboard("Wins", "Most Wins", lb.wins_value)
+    end
+
+    if lb.Level then
+        Unbind("Level")
+        ModifyLeaderboard("Level", "Highest Level", lb.level_value)
+        lb.old_level_value = LocalPlayer:GetAttribute("Level")
+        LocalPlayer:SetAttribute("Level", lb.level_value)
+    end
+
+    if not lb.ELO then ResetLeaderboard("Highest ELO", "ELO") end
+
+    if not lb.Streak then
+        ResetLeaderboard("Current Highest Win Streak", "Streak")
+        if lb.old_streak_value ~= nil then
+            LocalPlayer:SetAttribute("StatisticDuelsWinStreak", lb.old_streak_value)
+        end
+    end
+
+    if not lb.Kills then ResetLeaderboard("Most Eliminations", "Kills") end
+
+    if not lb.Wins then ResetLeaderboard("Most Wins", "Wins") end
+
+    if not lb.Level then
+        ResetLeaderboard("Highest Level", "Level")
+        if lb.old_level_value ~= nil then
+            LocalPlayer:SetAttribute("Level", lb.old_level_value)
+        end
+    end
+end
+
+pcall(function()
+    if not modules.SeasonLibrary then return end
+    local original = modules.SeasonLibrary.FormatSeasonRankCharm
+    modules.SeasonLibrary.FormatSeasonRankCharm = function(self, p2, p3, p4, p5)
+        local season_num = kSeasonNameMap[p3]
+        local elo = kCharmEloMap[states.spoofer_state.charm.charm_rank]
+            or states.spoofer_state.leaderboard.elo_value
+        if season_num and kSeasonToggleMap[season_num]
+            and states.spoofer_state.charm[kSeasonToggleMap[season_num]] then
+            p4 = elo or p4
+            p5 = states.spoofer_state.charm.arch_rank
+        end
+        return original(self, p2, p3, p4, p5)
+    end
+end)
+
+local function UpdateCharmOptions()
+    task.spawn(function()
+        task.wait(2)
+        for _, d in ipairs(workspace:GetDescendants()) do
+            if not d:IsA("Model") or not d:FindFirstChild("Extra") then continue end
+            local name = d.Name
+            if string.sub(name, 1, 7) ~= "Season " then continue end
+            local season_num = tonumber(string.sub(name, 8))
+            if not season_num or not kSeasonToggleMap[season_num] then continue end
+            if not states.spoofer_state.charm[kSeasonToggleMap[season_num]] then continue end
+            local season_name = kSeasonNameMap[season_num]
+            if not season_name or not modules.SeasonLibrary then continue end
+            local elo = kCharmEloMap[states.spoofer_state.charm.charm_rank]
+                or states.spoofer_state.leaderboard.elo_value
+            pcall(function()
+                modules.SeasonLibrary:FormatSeasonRankCharm(d, season_name, elo, states.spoofer_state.charm.arch_rank)
+            end)
+        end
+    end)
+end
+
+local function UpdateCurrencyOptions()
+    pcall(function()
+        local cd = modules.PlayerDataController and modules.PlayerDataController.CurrentData
+        if not cd then return end
+        cd:Replicate("WeaponKeys")
+        cd:Replicate("UnlockTokens")
+        cd:Replicate("EventCurrency")
+        cd:Replicate("Glory")
+        cd:Replicate("SkinTickets")
+    end)
+end
+
+local function UpdateDuelHistory()
+    local dh = states.spoofer_state.duel_history
+    local list = dh.duel_history_value
+    if type(list) ~= "table" then return end
+    local match = list[dh.match_index]
+    if not match then return end
+
+    match.QueueName = dh.mode == "Ranked" and "Ranked" or "Casual"
+    match.Map = dh.map
+    match.Scores = {dh.team1score, dh.team2score}
+    match.WinningTeamIndex = dh.result == "Victory" and 1 or 2
+
+    if match.Duelers and match.Duelers[dh.dueler_index] then
+        local me = match.Duelers[dh.dueler_index]
+        me.Username = dh.username
+        me.DisplayName = dh.display_name
+        me.Eliminations = dh.kills
+        me.Deaths = dh.deaths
+        me.Assists = dh.assists
+        me.Damage = dh.damage
+        if dh.mode == "Ranked" then
+            me.DisplayELO = dh.elo
+            if type(dh.logged_elo_events) == "table" and dh.logged_elo_events[dh.match_index] then
+                dh.logged_elo_events[dh.match_index].CurrentELO = dh.elo
+                dh.logged_elo_events[dh.match_index].ELOIncrement = dh.elo_change or 0
+            end
+        end
+    end
+
+    pcall(function()
+        local cd = modules.PlayerDataController and modules.PlayerDataController.CurrentData
+        if cd then
+            cd:Replicate("DuelHistory")
+            cd:Replicate("LoggedELOEvents")
+        end
+    end)
+end
+
+local NamecallDispatcher = {
+    Hooks = {},
+    Original = nil,
+}
+
+function NamecallDispatcher:Register(callback)
+    self.Hooks[#self.Hooks + 1] = callback
+    return #self.Hooks
+end
+
+function NamecallDispatcher:Unregister(index)
+    table.remove(self.Hooks, index)
+end
+
+function NamecallDispatcher:Clear()
+    table.clear(self.Hooks)
+end
+
+function NamecallDispatcher:CallOriginal(object, ...)
+    if self.Original then return self.Original(object, ...) end
+    return nil
+end
+
+pcall(function()
+    NamecallDispatcher.Original = hookmetamethod(game, "__namecall", newcclosure(function(object, ...)
+        local hooks = NamecallDispatcher.Hooks
+        local count = #hooks
+        if count == 0 then return NamecallDispatcher.Original(object, ...) end
+        local method = getnamecallmethod()
+        for i = 1, count do
+            local result = hooks[i](object, method, ...)
+            if result ~= nil and result ~= false then
+                if result == true then return nil end
+                return result
+            end
+        end
+        return NamecallDispatcher.Original(object, ...)
+    end))
+end)
+
+local function CloneCosmetic(name, cosmetic_type, options)
+    if not modules.CosmeticLibrary or not modules.CosmeticLibrary.Cosmetics then return nil end
+    local base = modules.CosmeticLibrary.Cosmetics[name]
+    if not base then return nil end
+    local data = table.clone(base)
+    data.Name = name
+    data.Type = data.Type or cosmetic_type
+    data.Seed = math.random(1, 1000000)
+    if options then
+        if options.inverted then data.Inverted = true end
+        if options.favorites_only then data.OnlyUseFavorites = true end
+    end
+    return data
+end
+
+local function HandleSkinchangerEquip(args)
+    local weapon_name = args[1]
+    local cosmetic_type = args[2]
+    local cosmetic_name = args[3]
+    local options = args[4] or {}
+
+    states.skinchanger_state.equipped[weapon_name] = states.skinchanger_state.equipped[weapon_name] or {}
+
+    if not cosmetic_name or cosmetic_name == "" or cosmetic_name == "None" or cosmetic_name == "NONE_COSMETIC" then
+        states.skinchanger_state.equipped[weapon_name][cosmetic_type] = { Name = "NONE_COSMETIC" }
+    elseif cosmetic_name == "Random" or cosmetic_name == "RANDOM_COSMETIC" then
+        states.skinchanger_state.equipped[weapon_name][cosmetic_type] = {
+            Name = cosmetic_name,
+            Type = cosmetic_type,
+            Inverted = options.IsInverted,
+            OnlyUseFavorites = options.OnlyUseFavorites,
+            Seed = math.random(1, 1000000),
+        }
+    else
+        local cloned = CloneCosmetic(cosmetic_name, cosmetic_type, {
+            inverted = options.IsInverted,
+            favorites_only = options.OnlyUseFavorites,
+        })
+        if cloned then
+            states.skinchanger_state.equipped[weapon_name][cosmetic_type] = cloned
+        end
+    end
+
+    task.spawn(function()
+        task.wait(0.1)
+        pcall(function()
+            if modules.PlayerDataController and modules.PlayerDataController.CurrentData then
+                modules.PlayerDataController.CurrentData:Replicate("WeaponInventory")
+            end
+        end)
+    end)
+end
+
+local function HandleSkinchangerFavorite(args)
+    local weapon_name = args[1]
+    local cosmetic_name = args[2]
+    local state = args[3]
+    states.skinchanger_state.favorites = states.skinchanger_state.favorites or {}
+    states.skinchanger_state.favorites[weapon_name] = states.skinchanger_state.favorites[weapon_name] or {}
+    states.skinchanger_state.favorites[weapon_name][cosmetic_name] = state or nil
+end
+
+pcall(function()
+    NamecallDispatcher:Register(function(self, method, ...)
+        if method ~= "FireServer" then return false end
+        local args = {...}
+        if self.Name == "EquipCosmetic" then
+            HandleSkinchangerEquip(args)
+            return true
+        end
+        if self.Name == "FavoriteCosmetic" then
+            HandleSkinchangerFavorite(args)
+            return true
+        end
+        return false
+    end)
+end)
+
+local function ResolveCosmetic(weaponName, cosmeticType)
+    local equipped = states.skinchanger_state.equipped[weaponName]
+        and states.skinchanger_state.equipped[weaponName][cosmeticType]
+    if not equipped then return nil end
+    if equipped.Name == "None" or equipped.Name == "NONE_COSMETIC" then return nil end
+    return equipped
+end
+
+pcall(function()
+    if not modules.ItemLibrary then return end
+    local orig = modules.ItemLibrary.GetViewModelImageFromWeaponData
+    modules.ItemLibrary.GetViewModelImageFromWeaponData = function(p1, p2, p3)
+        if not p2 then return orig(p1, p2, p3) end
+        local weapon_name = p2.Name
+        local skin = ResolveCosmetic(weapon_name, "Skin")
+        local should_show = skin and (
+            (p2.Skin and states.skinchanger_state.equipped[weapon_name])
+            or (states.skinchanger_state.viewing_profile == LocalPlayer and states.skinchanger_state.equipped[weapon_name])
+        )
+        if should_show and skin then
+            local skin_info = p1.ViewModels[skin.Name]
+            if skin_info then
+                return skin_info[p3 and "ImageHighResolution" or "Image"] or skin_info.Image
+            end
+        end
+        return orig(p1, p2, p3)
+    end
+end)
+
+pcall(function()
+    local ok, clientItemPath = pcall(function()
+        return LocalPlayer.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.ClientItem
+    end)
+    if not ok or not clientItemPath then return end
+    local ClientItem = require(clientItemPath)
+
+    if ClientItem._CreateViewModel then
+        local orig = ClientItem._CreateViewModel
+        ClientItem._CreateViewModel = function(self, viewmodelRef)
+            local weaponName = self.Name
+            local weaponPlayer = self.ClientFighter and self.ClientFighter.Player
+            states.skinchanger_state.constructing_weapon = (weaponPlayer == LocalPlayer) and weaponName or nil
+
+            if weaponPlayer == LocalPlayer and states.skinchanger_state.equipped[weaponName] and ResolveCosmetic(weaponName, "Skin") and viewmodelRef then
+                pcall(function()
+                    local ReplicatedClass = require(ReplicatedStorage.Modules.ReplicatedClass)
+                    local dataKey = ReplicatedClass:ToEnum("Data")
+                    local skinKey = ReplicatedClass:ToEnum("Skin")
+                    local nameKey = ReplicatedClass:ToEnum("Name")
+
+                    if viewmodelRef[dataKey] then
+                        viewmodelRef[dataKey][skinKey] = ResolveCosmetic(weaponName, "Skin")
+                        viewmodelRef[dataKey][nameKey] = ResolveCosmetic(weaponName, "Skin").Name
+                    elseif viewmodelRef.Data then
+                        viewmodelRef.Data.Skin = ResolveCosmetic(weaponName, "Skin")
+                        viewmodelRef.Data.Name = ResolveCosmetic(weaponName, "Skin").Name
+                    end
+                end)
+            end
+
+            local result = orig(self, viewmodelRef)
+            states.skinchanger_state.constructing_weapon = nil
+            return result
+        end
+    end
+
+    pcall(function()
+        local viewModelModule = LocalPlayer.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.ClientItem:FindFirstChild("ClientViewModel")
+        if not viewModelModule then return end
+        local ClientViewModel = require(viewModelModule)
+
+        if ClientViewModel.GetWrap then
+            local origGetWrap = ClientViewModel.GetWrap
+            ClientViewModel.GetWrap = function(self)
+                local weaponName = self.ClientItem and self.ClientItem.Name
+                local weaponPlayer = self.ClientItem and self.ClientItem.ClientFighter and self.ClientItem.ClientFighter.Player
+                if weaponName and weaponPlayer == LocalPlayer and states.skinchanger_state.equipped[weaponName] and ResolveCosmetic(weaponName, "Wrap") then
+                    return ResolveCosmetic(weaponName, "Wrap")
+                end
+                return origGetWrap(self)
+            end
+        end
+
+        local origNew = ClientViewModel.new
+        ClientViewModel.new = function(replicatedData, clientItem)
+            local weaponPlayer = clientItem.ClientFighter and clientItem.ClientFighter.Player
+            local weaponName = states.skinchanger_state.constructing_weapon or clientItem.Name
+
+            if weaponPlayer == LocalPlayer and states.skinchanger_state.equipped[weaponName] then
+                pcall(function()
+                    local ReplicatedClass = require(ReplicatedStorage.Modules.ReplicatedClass)
+                    local dataKey = ReplicatedClass:ToEnum("Data")
+                    replicatedData[dataKey] = replicatedData[dataKey] or {}
+
+                    if ResolveCosmetic(weaponName, "Skin") then
+                        replicatedData[dataKey][ReplicatedClass:ToEnum("Skin")] = ResolveCosmetic(weaponName, "Skin")
+                    end
+                    if ResolveCosmetic(weaponName, "Wrap") then
+                        replicatedData[dataKey][ReplicatedClass:ToEnum("Wrap")] = ResolveCosmetic(weaponName, "Wrap")
+                    end
+                    if ResolveCosmetic(weaponName, "Charm") then
+                        replicatedData[dataKey][ReplicatedClass:ToEnum("Charm")] = ResolveCosmetic(weaponName, "Charm")
+                    end
+                end)
+            end
+
+            local result = origNew(replicatedData, clientItem)
+
+            pcall(function()
+                local objectID = nil
+                pcall(function()
+                    local ReplicatedClass = require(ReplicatedStorage.Modules.ReplicatedClass)
+                    local dataKey = ReplicatedClass:ToEnum("Data")
+                    local objKey = ReplicatedClass:ToEnum("ObjectID")
+                    if replicatedData[dataKey] then
+                        objectID = replicatedData[dataKey][objKey]
+                    end
+                end)
+                if objectID == nil then
+                    pcall(function() objectID = result:Get("ObjectID") or result.ObjectID end)
+                end
+                if objectID and weaponPlayer == LocalPlayer and states.skinchanger_state.equipped[weaponName] then
+                    states.skinchanger_state.placed_object_map[objectID] = weaponName
+                end
+            end)
+
+            if weaponPlayer == LocalPlayer and states.skinchanger_state.equipped[weaponName] and ResolveCosmetic(weaponName, "Wrap") and result._UpdateWrap then
+                task.spawn(function()
+                    result:_UpdateWrap()
+                    task.wait(0.1)
+                    if not result._destroyed then result:_UpdateWrap() end
+                end)
+            end
+
+            return result
+        end
+    end)
+end)
+
+local function FindContainerWithRobuxPrice()
+    for _, child in ipairs(CoreGui:GetChildren()) do
+        local found = child:FindFirstChild("RobuxPrice", true)
+        if found then return child end
+    end
+    return nil
+end
+
+local function AddGamepass(gamepass_id)
+    states.spoofer_state.marketplace.fake_bundles_owned[modules.MonetizationLibrary:GetGamepassName(gamepass_id)] = true
+    pcall(function()
+        if modules.PlayerDataController and modules.PlayerDataController.CurrentData then
+            modules.PlayerDataController.CurrentData:Replicate("GamepassBundlesClaimed")
+        end
+    end)
+end
+
+local function AddReward(reward_name, reward_amount, reward_weapon)
+    if reward_name == "Key" then
+        states.spoofer_state.currency.weapon_keys_value += reward_amount
+        pcall(function()
+            if modules.PlayerDataController and modules.PlayerDataController.CurrentData then
+                modules.PlayerDataController.CurrentData:Replicate("WeaponKeys")
+            end
+        end)
+    elseif modules.CosmeticLibrary and modules.CosmeticLibrary.Cosmetics and modules.CosmeticLibrary.Cosmetics[reward_name] then
+        local reward_info = modules.CosmeticLibrary.Cosmetics[reward_name]
+        if reward_info.Type == "Skin" or reward_info.Type == "Wrap" or reward_info.Type == "Charm" or reward_info.Type == "Finisher" then
+            states.skinchanger_state.fake_owned[reward_name] = true
+        end
+    elseif modules.ShopLibrary and modules.ShopLibrary.Weapons and modules.ShopLibrary.Weapons[reward_name] then
+        local owned = {}
+        for _, weapon_data in pairs(states.skinchanger_state.fake_weapon_owned) do
+            if type(weapon_data) == "table" and weapon_data.Name then
+                owned[weapon_data.Name] = true
+            end
+        end
+        if not owned[reward_name] then
+            table.insert(states.skinchanger_state.fake_weapon_owned, {
+                Name = reward_name,
+                Level = 1,
+                XP = 0,
+                IsFavorited = false,
+                Skin = nil,
+            })
+        end
+        pcall(function()
+            if modules.PlayerDataController and modules.PlayerDataController.CurrentData then
+                modules.PlayerDataController.CurrentData:Replicate("WeaponInventory")
+            end
+        end)
+    elseif modules.CosmeticLibrary and modules.CosmeticLibrary.Rewards and modules.CosmeticLibrary.Rewards[reward_name] then
+        local reward_info = modules.CosmeticLibrary.Rewards[reward_name]
+        local reward_entry
+        if reward_info.Type == "Skin" then
+            if not reward_weapon or reward_weapon == "" then return end
+            reward_entry = { Name = reward_name, Quantity = reward_amount, Weapon = reward_weapon }
+        else
+            reward_entry = { Name = reward_name, Quantity = reward_amount }
+        end
+        local found = false
+        for _, entry in ipairs(states.inventory_state.fake_owned) do
+            if entry.Name == reward_entry.Name and entry.Weapon == reward_entry.Weapon and entry.Quantity < 99 then
+                entry.Quantity = (entry.Quantity or 1) + (reward_entry.Quantity or 1)
+                found = true
+                break
+            end
+        end
+        if not found then
+            table.insert(states.inventory_state.fake_owned, reward_entry)
+        end
+        pcall(function()
+            if modules.PlayerDataController and modules.PlayerDataController.CurrentData then
+                modules.PlayerDataController.CurrentData:Replicate("UnclaimedRewards")
+            end
+        end)
+    end
+end
+
+local product_type = "product"
+local marketplace_asset_id = 0
+local function UpdateMarketplace()
+    if not states.spoofer_state.marketplace.fake_robux then return end
+
+    local foundation_overlay = FindContainerWithRobuxPrice()
+    if not foundation_overlay or not foundation_overlay:FindFirstChild("SafeAreaFrame") then
+        return
+    end
+
+    if not marketplace_asset_id or marketplace_asset_id == 0 then
+        return
+    end
+
+    local robux_text = string.format(
+        '<font family="rbxasset://LuaPackages/Packages/_Index/BuilderIcons/BuilderIcons/BuilderIcons.json" weight="400">robux</font> %s',
+        FormatNumber(states.spoofer_state.marketplace.robux_amount)
+    )
+
+    local info_type = product_type == "gamepass" and Enum.InfoType.GamePass or product_type == "product" and Enum.InfoType.Product or Enum.InfoType.Asset
+    local product_info = MarketplaceService:GetProductInfo(marketplace_asset_id, info_type)
+    local has_enough = product_info.PriceInRobux <= states.spoofer_state.marketplace.robux_amount
+
+    local BuyButton
+    local PromptTitle
+    local RobuxBalance
+    local SheetContentContainer
+
+    for _, descendant in ipairs(foundation_overlay:GetDescendants()) do
+        local parent = descendant.Parent
+        local grandparent = parent and parent.Parent
+
+        if descendant.Name == "RobuxPrice" and descendant:IsA("TextLabel") and grandparent and grandparent.Name == "ModalHeader" then
+            descendant.RichText = true
+            descendant.Text = robux_text
+            RobuxBalance = descendant
+        elseif descendant.Name == "RobuxAmount" and descendant:IsA("TextLabel") and grandparent and grandparent.Name == "ModalHeader" then
+            descendant.Text = has_enough and "Buy item" or "Buy Robux and item"
+            PromptTitle = descendant
+        elseif descendant:IsA("ImageButton") and parent and parent.Name == "1" then
+            BuyButton = descendant
+        elseif descendant.Name == "SheetContentContainer" and descendant:IsA("Frame") and parent and parent.Name == "ScrollingFrame" then
+            SheetContentContainer = descendant
+        elseif descendant.Name == "UpsellSuggestions" and descendant:IsA("Frame") and parent and parent.Name == "SheetContentContainer" and has_enough then
+            descendant:Destroy()
+        elseif descendant.Name == "DisclosureTerms" and descendant:IsA("Frame") and parent and parent.Name == "1" and has_enough then
+            descendant:Destroy()
+        end
+    end
+
+    if BuyButton then
+        local OverlayButton = foundation_overlay:FindFirstChild("nigga")
+
+        if OverlayButton then
+            return
+        end
+
+        OverlayButton = Instance.new("TextButton")
+        OverlayButton.Name = "nigga"
+        OverlayButton.BackgroundTransparency = 1
+        OverlayButton.Text = ""
+        OverlayButton.AutoButtonColor = false
+        OverlayButton.ZIndex = BuyButton.ZIndex + 100
+        OverlayButton.Size = UDim2.fromOffset(BuyButton.AbsoluteSize.X, BuyButton.AbsoluteSize.Y)
+        OverlayButton.Position = UDim2.fromOffset(BuyButton.AbsolutePosition.X, BuyButton.AbsolutePosition.Y + BuyButton.AbsoluteSize.Y + (BuyButton.AbsoluteSize.Y / 2))
+        OverlayButton.AnchorPoint = BuyButton.AnchorPoint
+        OverlayButton.Parent = foundation_overlay
+
+        BuyButton.Destroying:Connect(function()
+            OverlayButton:Destroy()
+            product_type = "product"
+            marketplace_asset_id = 0
+        end)
+
+        RunService.Heartbeat:Connect(function()
+            OverlayButton.Position = UDim2.fromOffset(BuyButton.AbsolutePosition.X, BuyButton.AbsolutePosition.Y + BuyButton.AbsoluteSize.Y + (BuyButton.AbsoluteSize.Y / 2))
+        end)
+
+        task.wait(3)
+
+        local purchased = false
+        OverlayButton.MouseButton1Click:Connect(function()
+            local current_id = getthreadidentity()
+            setthreadidentity(2)
+
+            if purchased then
+                GuiService:InspectPlayerFromUserId(LocalPlayer.UserId)
+                GuiService:CloseInspectMenu()
+                return
+            end
+
+            local currency_rewards = {}
+
+            for _, bundle in pairs(modules.MonetizationLibrary.Bundles) do
+                if bundle.ProductID == marketplace_asset_id or bundle.GamepassName == modules.MonetizationLibrary:GetGamepassName(marketplace_asset_id) then
+                    currency_rewards = bundle.Rewards
+                    break
+                end
+            end
+
+            setthreadidentity(current_id)
+
+            local original_bgcolor = BuyButton.BackgroundColor3
+            BuyButton.BackgroundColor3 = Color3.fromRGB(38, 61, 143)
+
+            local bgcolor_conn = BuyButton:GetPropertyChangedSignal("BackgroundColor3"):Connect(function()
+                BuyButton.BackgroundColor3 = Color3.fromRGB(38, 61, 143)
+            end)
+
+            task.wait(2)
+
+            bgcolor_conn:Disconnect()
+            BuyButton.BackgroundColor3 = original_bgcolor
+
+            if product_type == "gamepass" then
+                MarketplaceService:SignalPromptGamePassPurchaseFinished(LocalPlayer, marketplace_asset_id, has_enough)
+            elseif product_type == "product" then
+                MarketplaceService:SignalPromptProductPurchaseFinished(LocalPlayer.UserId, marketplace_asset_id, has_enough)
+            elseif product_type == "asset" then
+                MarketplaceService:SignalPromptPurchaseFinished(LocalPlayer, marketplace_asset_id, has_enough)
+            end
+
+            PromptTitle.Text = "Purchase completed"
+            PromptTitle.Name = "Title"
+            RobuxBalance:Destroy()
+
+            local BodyContainer = Instance.new("Frame")
+            BodyContainer.Name = "Body"
+            BodyContainer.Parent = SheetContentContainer.Parent
+            BodyContainer.AutomaticSize = Enum.AutomaticSize.Y
+            BodyContainer.BackgroundTransparency = 1
+            BodyContainer.BorderSizePixel = 0
+            BodyContainer.LayoutOrder = 1
+            BodyContainer.Size = UDim2.fromScale(1, 0)
+            BodyContainer.AutoLocalize = false
+            SheetContentContainer:Destroy()
+
+            local UIListLayout = Instance.new("UIListLayout")
+            UIListLayout.Parent = BodyContainer
+            UIListLayout.Padding = UDim.new(0, 16)
+            UIListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+            UIListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+            UIListLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+
+            local UIPadding = Instance.new("UIPadding")
+            UIPadding.Parent = BodyContainer
+            UIPadding.PaddingTop = UDim.new(0, 8)
+
+            local Icon = Instance.new("TextLabel")
+            Icon.Name = "Icon"
+            Icon.Parent = BodyContainer
+            Icon.BackgroundTransparency = 1
+            Icon.BorderSizePixel = 0
+            Icon.LayoutOrder = 0
+            Icon.Size = UDim2.fromOffset(48, 48)
+            Icon.AutoLocalize = false
+            Icon.FontFace = Font.new("rbxasset://LuaPackages/Packages/_Index/BuilderIcons/BuilderIcons/BuilderIcons.json", Enum.FontWeight.Regular)
+            Icon.Text = "circle-check"
+            Icon.TextColor3 = Color3.fromRGB(213, 215, 221)
+            Icon.TextSize = 48
+
+            local Message = Instance.new("TextLabel")
+            Message.Name = "Message"
+            Message.Parent = BodyContainer
+            Message.AutomaticSize = Enum.AutomaticSize.XY
+            Message.BackgroundTransparency = 1
+            Message.BorderSizePixel = 0
+            Message.Size = UDim2.new(0, 0, 0, 0)
+            Message.AutoLocalize = false
+            Message.FontFace = Font.new("rbxasset://fonts/families/LegacyArimo.json", Enum.FontWeight.Regular)
+            Message.Text = "You have successfully bought " .. product_info.Name .. "."
+            Message.TextColor3 = Color3.fromRGB(213, 215, 221)
+            Message.TextSize = 15
+            Message.TextWrapped = true
+            Message.TextXAlignment = Enum.TextXAlignment.Left
+
+            local label = BuyButton:FindFirstChildOfClass("TextLabel")
+            if label then
+                local clone = label:Clone()
+                clone.Text = "OK"
+                clone.Parent = label.Parent
+                label:Destroy()
+            end
+
+            setthreadidentity(2)
+
+            task.wait()
+            modules.MonetizationController:_FinishPrompt(has_enough)
+
+            if has_enough and product_type == "gamepass" then
+                AddGamepass(marketplace_asset_id)
+            end
+
+            for _, reward in ipairs(currency_rewards) do
+                AddReward(reward.Type or reward.Name, reward.Quantity or 1, reward.Weapon)
+            end
+
+            if has_enough and modules.MonetizationLibrary.Gifts[tostring(marketplace_asset_id)] and states.spoofer_state.marketplace.fake_gifting then
+                local marketplace = states.spoofer_state.marketplace
+
+                marketplace.fake_gift_robux_spent += product_info.PriceInRobux
+
+                while true do
+                    local required = modules.MonetizationLibrary:GetGiftRewardRobuxSpentRequirement(
+                        marketplace.fake_gift_rewards_claimed
+                    )
+                    if marketplace.fake_gift_robux_spent < required then
+                        break
+                    end
+                    marketplace.fake_gift_robux_spent -= required
+                    marketplace.fake_gift_rewards_claimed += 1
+                end
+
+                modules.PlayerDataController.CurrentData:Replicate("GiftRobuxSpentProgress")
+                modules.PlayerDataController.CurrentData:Replicate("GiftRobuxSpentRewardsClaimed")
+            end
+
+            purchased = true
+        end)
+    end
+end
+
+CoreGui.DescendantAdded:Connect(UpdateMarketplace)
+
+task.spawn(function()
+    pcall(function()
+        local original = modules.MonetizationController.PromptProductPurchase
+
+        modules.MonetizationController.PromptProductPurchase = function(self, product_id, ...)
+            if product_id and product_id ~= 0 then
+                marketplace_asset_id = product_id
+                product_type = "product"
+            end
+
+            local results = {original(self, product_id, ...)}
+            return table.unpack(results)
+        end
+    end)
+
+    pcall(function()
+        local original = modules.MonetizationController.PromptGamePassPurchase
+
+        modules.MonetizationController.PromptGamePassPurchase = function(self, gamepass_id, ...)
+            if gamepass_id and gamepass_id ~= 0 then
+                marketplace_asset_id = gamepass_id
+                product_type = "gamepass"
+            end
+
+            local results = {original(self, gamepass_id, ...)}
+            return table.unpack(results)
+        end
+    end)
+
+    pcall(function()
+        local original = modules.MonetizationController.PromptPurchase
+
+        modules.MonetizationController.PromptPurchase = function(self, asset_id)
+            if asset_id and asset_id ~= 0 then
+                marketplace_asset_id = asset_id
+                product_type = "asset"
+            end
+
+            local results = {original(self, asset_id)}
+            return table.unpack(results)
+        end
+    end)
+
+    pcall(function()
+        local remote = ReplicatedStorage.Remotes.Misc.PromptGiftProductPurchase
+
+        NamecallDispatcher:Register(function(self, method, ...)
+            if method ~= "InvokeServer" or self ~= remote then
+                return false
+            end
+
+            local args = { ... }
+
+            if args[1] and args[1] ~= 0 then
+                marketplace_asset_id = args[1]
+                product_type = "product"
+            end
+
+            return NamecallDispatcher:CallOriginal(self, ...)
+        end)
+    end)
+end)
+
+local kCosmeticTypes = {"Skin", "Wrap", "Charm", "Finisher"}
+local kCosmeticRarities = {"Common", "Rare", "Legendary", "Mythical", "Unique", "Unobtainable"}
+
+local function GetCosmeticsByRarity(rarity)
+    local results = {}
+    if not modules.CosmeticLibrary or not modules.CosmeticLibrary.Cosmetics then return results end
+    for name, cosmetic in pairs(modules.CosmeticLibrary.Cosmetics) do
+        if cosmetic.Rarity == rarity then table.insert(results, name) end
+    end
+    return results
+end
+
+local function GetCosmeticsByType(type_name)
+    local results = {}
+    if not modules.CosmeticLibrary or not modules.CosmeticLibrary.Cosmetics then return results end
+    for name, cosmetic in pairs(modules.CosmeticLibrary.Cosmetics) do
+        if cosmetic.Type == type_name then table.insert(results, name) end
+    end
+    return results
+end
+
+local function GetSpecificCosmetic(type_name, cos_name, weapon_name)
+    local result
+    if not modules.CosmeticLibrary or not modules.CosmeticLibrary.Cosmetics then return result end
+    for name, cosmetic in pairs(modules.CosmeticLibrary.Cosmetics) do
+        if type_name == "Skin" then
+            if name == cos_name and cosmetic.Type == type_name and cosmetic.ItemName == weapon_name then
+                result = name
+            end
+        else
+            if name == cos_name and cosmetic.Type == type_name then
+                result = name
+            end
+        end
+    end
+    return result
+end
+
+local function GetAllCosmeticsOfWeapon(weapon_name)
+    local results = {}
+    if not modules.CosmeticLibrary or not modules.CosmeticLibrary.Cosmetics then return results end
+    for name, cosmetic in pairs(modules.CosmeticLibrary.Cosmetics) do
+        if cosmetic.Type == "Skin" then
+            if cosmetic.ItemName == weapon_name then table.insert(results, name) end
+        else
+            table.insert(results, name)
+        end
+    end
+    return results
+end
+
+local function GetAllCosmetics()
+    local results = {}
+    if not modules.CosmeticLibrary or not modules.CosmeticLibrary.Cosmetics then return results end
+    for name, _ in pairs(modules.CosmeticLibrary.Cosmetics) do
+        table.insert(results, name)
+    end
+    return results
+end
+
+local function UnlockSelectedRarity()
+    local list = GetCosmeticsByRarity(states.skinchanger_state.general_unlocker.unlock_rarity)
+    for _, cosmetic in ipairs(list) do
+        if cosmetic:find("MISSING_") then continue end
+        states.skinchanger_state.fake_owned[cosmetic] = true
+    end
+end
+
+local function LockSelectedRarity()
+    local list = GetCosmeticsByRarity(states.skinchanger_state.general_unlocker.unlock_rarity)
+    for _, cosmetic in ipairs(list) do
+        if cosmetic:find("MISSING_") then continue end
+        states.skinchanger_state.fake_owned[cosmetic] = nil
+    end
+end
+
+local function UnlockAllOfType()
+    local list = GetCosmeticsByType(states.skinchanger_state.general_unlocker.unlock_type)
+    for _, cosmetic in ipairs(list) do
+        if cosmetic:find("MISSING_") then continue end
+        states.skinchanger_state.fake_owned[cosmetic] = true
+    end
+end
+
+local function LockAllOfType()
+    local list = GetCosmeticsByType(states.skinchanger_state.general_unlocker.unlock_type)
+    for _, cosmetic in ipairs(list) do
+        if cosmetic:find("MISSING_") then continue end
+        states.skinchanger_state.fake_owned[cosmetic] = nil
+    end
+end
+
+local function UnlockSpecific()
+    local unlocker = states.skinchanger_state.specific_unlocker
+    local cosmetic = GetSpecificCosmetic(unlocker.unlock_type, unlocker.cosmetic_name, unlocker.weapon_name)
+    if cosmetic and not cosmetic:find("MISSING_") then
+        states.skinchanger_state.fake_owned[cosmetic] = true
+    end
+end
+
+local function LockSpecific()
+    local unlocker = states.skinchanger_state.specific_unlocker
+    local cosmetic = GetSpecificCosmetic(unlocker.unlock_type, unlocker.cosmetic_name, unlocker.weapon_name)
+    if cosmetic and not cosmetic:find("MISSING_") then
+        states.skinchanger_state.fake_owned[cosmetic] = nil
+    end
+end
+
+local function UnlockSpecificWeapon()
+    local weapon_name = states.skinchanger_state.specific_unlocker.weapon_name
+    local current_data = modules.PlayerDataController and modules.PlayerDataController.CurrentData
+    if not current_data then return end
+    if weapon_name == nil or weapon_name == "" then return end
+
+    local inventory = current_data:Get("WeaponInventory")
+    local owned = {}
+    if type(inventory) == "table" then
+        for _, weapon_data in pairs(inventory) do
+            if type(weapon_data) == "table" and weapon_data.Name then
+                owned[weapon_data.Name] = true
+            end
+        end
+    end
+
+    if not owned[weapon_name] then
+        table.insert(states.skinchanger_state.fake_weapon_owned, {
+            Name = weapon_name,
+            Level = 1,
+            XP = 0,
+            IsFavorited = false,
+            Skin = nil,
+        })
+        states.skinchanger_state.fake_weapon_names[weapon_name] = true
+    end
+end
+
+local function LockSpecificWeapon()
+    local weapon_name = states.skinchanger_state.specific_unlocker.weapon_name
+    if not states.skinchanger_state.fake_weapon_names[weapon_name] then return end
+    local fake = states.skinchanger_state.fake_weapon_owned
+    for i = #fake, 1, -1 do
+        if fake[i].Name == weapon_name then
+            table.remove(fake, i)
+            states.skinchanger_state.fake_weapon_names[weapon_name] = nil
+            break
+        end
+    end
+end
+
+local function UnlockAllWeapons()
+    local current_data = modules.PlayerDataController and modules.PlayerDataController.CurrentData
+    if not current_data then return end
+
+    local inventory = current_data:Get("WeaponInventory")
+    local owned = {}
+    if type(inventory) == "table" then
+        for _, weapon_data in pairs(inventory) do
+            if type(weapon_data) == "table" and weapon_data.Name then
+                owned[weapon_data.Name] = true
+            end
+        end
+    end
+
+    if not modules.ShopLibrary or not modules.ShopLibrary.GetReleasedOwnableWeapons then return end
+    local ownables = modules.ShopLibrary:GetReleasedOwnableWeapons()
+    for _, weapon_name in pairs(ownables) do
+        if not owned[weapon_name] and not states.skinchanger_state.fake_weapon_names[weapon_name] then
+            table.insert(states.skinchanger_state.fake_weapon_owned, {
+                Name = weapon_name,
+                Level = 1,
+                XP = 0,
+                IsFavorited = false,
+                Skin = nil,
+            })
+            states.skinchanger_state.fake_weapon_names[weapon_name] = true
+        end
+    end
+end
+
+local function LockAllWeapons()
+    local fake = states.skinchanger_state.fake_weapon_owned
+    local names = states.skinchanger_state.fake_weapon_names
+    for i = #fake, 1, -1 do
+        if names[fake[i].Name] then
+            table.remove(fake, i)
+        end
+    end
+    table.clear(names)
+end
+
+local function UnlockAllForWeapon()
+    local weapon_name = states.skinchanger_state.specific_unlocker.weapon_name
+    local list = GetAllCosmeticsOfWeapon(weapon_name)
+    for _, cosmetic in ipairs(list) do
+        if cosmetic:find("MISSING_") then continue end
+        states.skinchanger_state.fake_owned[cosmetic] = true
+    end
+end
+
+local function LockAllForWeapon()
+    local weapon_name = states.skinchanger_state.specific_unlocker.weapon_name
+    local list = GetAllCosmeticsOfWeapon(weapon_name)
+    for _, cosmetic in ipairs(list) do
+        if cosmetic:find("MISSING_") then continue end
+        states.skinchanger_state.fake_owned[cosmetic] = nil
+    end
+end
+
+local function UnlockAll()
+    local list = GetAllCosmetics()
+    for _, cosmetic in ipairs(list) do
+        if cosmetic:find("MISSING_") then continue end
+        states.skinchanger_state.fake_owned[cosmetic] = true
+    end
+end
+
+local function LockAll()
+    local list = GetAllCosmetics()
+    for _, cosmetic in ipairs(list) do
+        if cosmetic:find("MISSING_") then continue end
+        states.skinchanger_state.fake_owned[cosmetic] = nil
+    end
+end
+
+local function EquipApply()
+    local EquipCosmeticRemote = ReplicatedStorage.Remotes.Data.EquipCosmetic
+    local unlocker = states.skinchanger_state.equip_unlocker
+    local unlock_type = unlocker.unlock_type
+    local cosmetic_name = unlocker.cosmetic_name
+    local weapon_name = unlocker.weapon_name
+    local is_inverted = unlocker.inverted
+
+    if typeof(weapon_name) ~= "string" or weapon_name == "" then return end
+
+    local name_to_send = if cosmetic_name ~= nil and cosmetic_name ~= "" then cosmetic_name else nil
+
+    local options = {}
+    if unlock_type == "Wrap" then
+        options.IsInverted = if is_inverted then true else nil
+    end
+
+    EquipCosmeticRemote:FireServer(weapon_name, unlock_type, name_to_send, options)
+end
+
+local function EquipApplyAll()
+    local EquipCosmeticRemote = ReplicatedStorage.Remotes.Data.EquipCosmetic
+    local unlocker = states.skinchanger_state.equip_unlocker
+    local unlock_type = unlocker.unlock_type
+    local cosmetic_name = unlocker.cosmetic_name
+    local is_inverted = unlocker.inverted
+
+    if unlock_type == "Skin" then return end
+    if not modules.ItemLibrary or not modules.ItemLibrary.Items then return end
+
+    for weapon_name, weapon_data in pairs(modules.ItemLibrary.Items) do
+        if unlock_type == "Finisher" and not weapon_data.CanEliminate then
+            continue
+        end
+        if typeof(weapon_name) ~= "string" or weapon_name == "" then
+            continue
+        end
+
+        local name_to_send = if cosmetic_name ~= nil and cosmetic_name ~= "" then cosmetic_name else nil
+
+        local options = {}
+        if unlock_type == "Wrap" then
+            options.IsInverted = if is_inverted then true else nil
+        end
+
+        EquipCosmeticRemote:FireServer(weapon_name, unlock_type, name_to_send, options)
+    end
+end
+
+local Library = loadstring(readfile("rival/library.txt"))()
+
+local LucideIcons = {}
+pcall(function()
+    LucideIcons = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/Icons/refs/heads/main/lucide/dist/Icons.lua"))() or {}
+end)
+local function Icon(n)
+    local f = LucideIcons[string.lower(n)]
+    if type(f) == "string" then
+        local id = f:match("rbxassetid://(%d+)") or f:match("(%d+)")
+        if id then return id end
+    end
+    return "131145598162617"
+end
+
+local Window = Library:Window({
+    Name = "Aetherea",
+    SubTitle = "RIVALS Spoofer",
+    TimeRemaining = "Lifetime",
+    Style = "Sidebar",
+})
+
+local SpooferPage = Window:Page({Name = "Spoofer", Icon = Icon("user"), Columns = 2})
+local UnlockerPage = Window:Page({Name = "Unlocker", Icon = Icon("sparkles"), Columns = 2})
+local ViewPage = Window:Page({Name = "Visuals", Icon = Icon("eye"), Columns = 2})
+Window:Page({Name = "Misc", Icon = Icon("box"), Columns = 2})
+Library:CreateSettingsPage(Window)
+
+local Platform = SpooferPage:Section({Name = "Platform", Icon = Icon("smartphone"), Side = 1})
+Platform:Dropdown({
+    Name = "Device", Flag = "device",
+    Items = {"Desktop","Mobile","Console","VR"}, Default = "Desktop",
+    Callback = function(v)
+        states.spoofer_state.device = v
+        if states.spoofer_state.spoof_device then SetDevice(false) end
+    end
+})
+Platform:Toggle({
+    Name = "Spoof Device", Flag = "spoof_device", Default = false,
+    Callback = function(v) states.spoofer_state.spoof_device = v; SpoofDevice() end
+})
+Platform:Toggle({
+    Name = "Device Spam", Flag = "device_spam", Default = false,
+    Callback = function(v) states.spoofer_state.device_spam = v; DeviceSpam() end
+})
+Platform:Slider({
+    Name = "Spam Rate", Flag = "spam_rate", Min = 0.1, Max = 5, Default = 1,
+    Decimals = 0.1, Suffix = "s",
+    Callback = function(v) states.spoofer_state.spam_rate = v end
+})
+
+local Player = SpooferPage:Section({Name = "Player", Icon = Icon("user"), Side = 1})
+Player:Textbox({
+    Name = "Display Name", Flag = "display_name_value",
+    Placeholder = "Enter display name...", Default = LocalPlayer.DisplayName,
+    Numeric = false, Finished = true,
+    Callback = function(v)
+        states.spoofer_state.display_name_value = v
+        if states.spoofer_state.display_name then RefreshAllNameSpoofs() end
+    end
+})
+Player:Textbox({
+    Name = "Username", Flag = "username_value",
+    Placeholder = "Enter username...", Default = LocalPlayer.Name,
+    Numeric = false, Finished = true,
+    Callback = function(v)
+        states.spoofer_state.username_value = v
+        if states.spoofer_state.username then RefreshAllNameSpoofs() end
+    end
+})
+Player:Toggle({
+    Name = "Spoof Display Name", Flag = "spoof_display_name", Default = false,
+    Callback = function(v) states.spoofer_state.display_name = v; RefreshAllNameSpoofs() end
+})
+Player:Toggle({
+    Name = "Spoof Username", Flag = "spoof_username", Default = false,
+    Callback = function(v) states.spoofer_state.username = v; RefreshAllNameSpoofs() end
+})
+Player:Textbox({
+    Name = "Victim User Id", Flag = "victim_user_id",
+    Placeholder = "Enter UserId to spoof avatar...", Default = "",
+    Numeric = true, Finished = true,
+    Callback = function(v)
+        states.spoofer_state.avatar_userid = tonumber(v) or LocalPlayer.UserId
+        SpoofAvatar(); RefreshAllThumbnailSpoofs()
+    end
+})
+Player:Toggle({
+    Name = "Spoof Avatar", Flag = "spoof_avatar", Default = false,
+    Callback = function(v)
+        states.spoofer_state.spoof_avatar = v
+        SpoofAvatar(); RefreshAllThumbnailSpoofs()
+    end
+})
+Player:Toggle({
+    Name = "Anonymous Mode", Flag = "anonymous_mode", Default = false,
+    Callback = function(v) states.spoofer_state.anonymous_mode = v; AnonymousMode() end
+})
+for _, b in ipairs({"Premium","Verified","Influencer","Admin"}) do
+    Player:Toggle({
+        Name = "Badge: " .. b, Flag = "badge_" .. b:lower(), Default = false,
+        Callback = function(v)
+            states.spoofer_state.badges[b] = v
+            UpdateBadgesOptions()
+        end
+    })
+end
+
+local LB = SpooferPage:Section({Name = "Leaderboard", Icon = Icon("list"), Side = 2})
+for _, x in ipairs({
+    {"ELO","elo_value","Enter ELO value..."},
+    {"Streak","streak_value","Enter win streak..."},
+    {"Kills","kills_value","Enter kills..."},
+    {"Wins","wins_value","Enter wins..."},
+    {"Level","level_value","Enter level..."},
+}) do
+    LB:Textbox({
+        Name = x[1], Flag = x[2], Placeholder = x[3], Default = "",
+        Numeric = true, Finished = true,
+        Callback = function(v)
+            states.spoofer_state.leaderboard[x[2]] = tonumber(v) or 0
+            UpdateLeaderboardOptions()
+        end
+    })
+end
+for _, k in ipairs({"ELO","Streak","Kills","Wins","Level"}) do
+    LB:Toggle({
+        Name = "Spoof " .. k, Flag = "spoof_" .. k:lower(), Default = false,
+        Callback = function(v)
+            states.spoofer_state.leaderboard[k] = v
+            UpdateLeaderboardOptions()
+            RefreshAllNameSpoofs()
+        end
+    })
+end
+
+local Charm = SpooferPage:Section({Name = "Charm", Icon = Icon("star"), Side = 2})
+Charm:Dropdown({
+    Name = "Charm Rank", Flag = "charm_rank",
+    Items = {
+        "Use Spoofed ELO","Unranked",
+        "Bronze 1","Bronze 2","Bronze 3",
+        "Silver 1","Silver 2","Silver 3",
+        "Gold 1","Gold 2","Gold 3",
+        "Platinum 1","Platinum 2","Platinum 3",
+        "Diamond 1","Diamond 2","Diamond 3",
+        "Onyx 1","Onyx 2","Onyx 3",
+        "Nemesis","Archnemesis",
+    },
+    Default = "Use Spoofed ELO",
+    Callback = function(v) states.spoofer_state.charm.charm_rank = v; UpdateCharmOptions() end
+})
+Charm:Slider({
+    Name = "Arch Rank", Flag = "arch_rank", Min = 1, Max = 100, Default = 1, Decimals = 1,
+    Callback = function(v) states.spoofer_state.charm.arch_rank = v; UpdateCharmOptions() end
+})
+for i = 0, 3 do
+    Charm:Toggle({
+        Name = "Season " .. i .. " Charm", Flag = "s" .. i .. "_charm", Default = false,
+        Callback = function(v)
+            states.spoofer_state.charm["s" .. i .. "_charm"] = v
+            UpdateCharmOptions()
+        end
+    })
+end
+
+local Cur = SpooferPage:Section({Name = "Currency", Icon = Icon("circle-dollar-sign"), Side = 1})
+for _, x in ipairs({
+    {"Keys","weapon_keys_value","weapon_keys","Enter weapon keys..."},
+    {"Tokens","unlock_tokens_value","unlock_tokens","Enter unlock tokens..."},
+    {"Event Currency","event_currency_value","event_currency","Enter event currency..."},
+    {"Glory","glory_value","glory","Enter glory amount..."},
+    {"Tickets","skin_tickets_value","skin_tickets","Enter skin tickets..."},
+}) do
+    Cur:Textbox({
+        Name = x[1], Flag = x[2], Placeholder = x[4], Default = "",
+        Numeric = true, Finished = true,
+        Callback = function(v)
+            states.spoofer_state.currency[x[2]] = tonumber(v) or 0
+            UpdateCurrencyOptions()
+        end
+    })
+end
+for _, x in ipairs({
+    {"Keys","weapon_keys"},{"Tokens","unlock_tokens"},{"Event Currency","event_currency"},
+    {"Glory","glory"},{"Tickets","skin_tickets"},
+}) do
+    Cur:Toggle({
+        Name = "Spoof " .. x[1], Flag = "spoof_" .. x[2], Default = false,
+        Callback = function(v)
+            states.spoofer_state.currency[x[2]] = v
+            UpdateCurrencyOptions()
+        end
+    })
+end
+
+local DH = SpooferPage:Section({Name = "Duel History", Icon = Icon("list"), Side = 2})
+DH:Textbox({
+    Name = "Match Index", Flag = "duel_match_index",
+    Placeholder = "Match number (e.g. 1)", Default = "1",
+    Numeric = true, Finished = true,
+    Callback = function(v)
+        states.spoofer_state.duel_history.match_index = tonumber(v) or 1
+        UpdateDuelHistory()
+    end
+})
+DH:Dropdown({
+    Name = "Mode", Flag = "duel_mode", Items = {"Ranked","Casual"}, Default = "Ranked",
+    Callback = function(v) states.spoofer_state.duel_history.mode = v; UpdateDuelHistory() end
+})
+DH:Dropdown({
+    Name = "Result", Flag = "duel_result", Items = {"Victory","Defeat"}, Default = "Victory",
+    Callback = function(v) states.spoofer_state.duel_history.result = v; UpdateDuelHistory() end
+})
+DH:Dropdown({
+    Name = "Map", Flag = "duel_map",
+    Items = {
+        "Village","Iceberg","Backrooms","Arena","Dimension","Bridge","Museum","Graveyard",
+        "Studio","Playground","Splash","Chess","Construction","Station","Onyx","Crossroads",
+        "Docks","Westown","Big Arena","Big Onyx","Big Splash","Big Backrooms","Big Crossroads",
+        "Big Graveyard","Big Station","Shooting Range","Battleground","Legacy Backrooms",
+        "Legacy Big Splash","Legacy Splash","Legacy Docks","Legacy Onyx","Legacy Crossroads",
+        "Legacy Battleground","Baseplate","Boss Arena","Obby","Zombie Tower","Spleef","Sandbox","Factory",
+    },
+    Default = "Factory",
+    Callback = function(v) states.spoofer_state.duel_history.map = v; UpdateDuelHistory() end
+})
+for _, x in ipairs({
+    {"Team 1 Score","team1score","Team 1 score (e.g. 5)","5",true},
+    {"Team 2 Score","team2score","Team 2 score (e.g. 0)","0",true},
+    {"Dueler Index","dueler_index","Dueler slot (e.g. 1)","1",true},
+    {"Display Name","display_name","Dueler display name...","",false},
+    {"Username","username","Dueler username...","",false},
+    {"Kills","kills","Kills (e.g. 15)","15",true},
+    {"Deaths","deaths","Deaths (e.g. 2)","2",true},
+    {"Assists","assists","Assists (e.g. 6)","6",true},
+    {"Damage","damage","Damage dealt (e.g. 5000)","5000",true},
+    {"ELO","elo","ELO rating (e.g. 2000)","2000",true},
+    {"ELO Change","elo_change","ELO change (e.g. 35)","35",true},
+}) do
+    DH:Textbox({
+        Name = x[1], Flag = "duel_" .. x[2], Placeholder = x[3], Default = x[4],
+        Numeric = x[5], Finished = true,
+        Callback = function(v)
+            if x[5] then
+                states.spoofer_state.duel_history[x[2]] = tonumber(v) or tonumber(x[4]) or 0
+            else
+                states.spoofer_state.duel_history[x[2]] = v
+            end
+            UpdateDuelHistory()
+        end
+    })
+end
+
+local MP = SpooferPage:Section({Name = "Marketplace", Icon = Icon("circle-dollar-sign"), Side = 1})
+MP:Toggle({
+    Name = "Fake Robux", Flag = "fake_robux", Default = false,
+    Callback = function(v) states.spoofer_state.marketplace.fake_robux = v; UpdateMarketplace() end
+})
+MP:Textbox({
+    Name = "Robux Amount", Flag = "robux_amount",
+    Placeholder = "Enter robux amount (e.g. 999999)", Default = "",
+    Numeric = true, Finished = true,
+    Callback = function(v)
+        states.spoofer_state.marketplace.robux_amount = tonumber(v) or 0
+        UpdateMarketplace()
+    end
+})
+MP:Toggle({
+    Name = "Fake Gifting", Flag = "fake_gifting", Default = false,
+    Callback = function(v) states.spoofer_state.marketplace.fake_gifting = v; UpdateMarketplace() end
+})
+
+local Unlocker = UnlockerPage:Section({Name = "Unlocker", Icon = Icon("unlock"), Side = 1})
+Unlocker:Dropdown({
+    Name = "Type", Flag = "unlocker_type",
+    Items = kCosmeticTypes, Default = "Skin",
+    Callback = function(v) states.skinchanger_state.general_unlocker.unlock_type = v end
+})
+Unlocker:Dropdown({
+    Name = "Rarity", Flag = "unlocker_rarity",
+    Items = kCosmeticRarities, Default = "Common",
+    Callback = function(v) states.skinchanger_state.general_unlocker.unlock_rarity = v end
+})
+Unlocker:Button({
+    Name = "Unlock Selected Rarity",
+    Callback = function() UnlockSelectedRarity() end
+})
+Unlocker:Button({
+    Name = "Lock Selected Rarity",
+    Callback = function() LockSelectedRarity() end
+})
+Unlocker:Button({
+    Name = "Unlock All of Type",
+    Callback = function() UnlockAllOfType() end
+})
+Unlocker:Button({
+    Name = "Lock All of Type",
+    Callback = function() LockAllOfType() end
+})
+
+local Specific = UnlockerPage:Section({Name = "Specific", Icon = Icon("search"), Side = 2})
+Specific:Dropdown({
+    Name = "Type", Flag = "specific_type",
+    Items = kCosmeticTypes, Default = "Skin",
+    Callback = function(v) states.skinchanger_state.specific_unlocker.unlock_type = v end
+})
+Specific:Textbox({
+    Name = "Cosmetic", Flag = "cosmetic_name",
+    Placeholder = "e.g. 10B Visits", Default = "",
+    Numeric = false, Finished = true,
+    Callback = function(v) states.skinchanger_state.specific_unlocker.cosmetic_name = v end
+})
+Specific:Textbox({
+    Name = "Weapon", Flag = "weapon_name",
+    Placeholder = "e.g. Assault Rifle", Default = "",
+    Numeric = false, Finished = true,
+    Callback = function(v) states.skinchanger_state.specific_unlocker.weapon_name = v end
+})
+Specific:Button({
+    Name = "Unlock Specific",
+    Callback = function() UnlockSpecific() end
+})
+Specific:Button({
+    Name = "Lock Specific",
+    Callback = function() LockSpecific() end
+})
+Specific:Button({
+    Name = "Unlock Specific Weapon",
+    Callback = function() UnlockSpecificWeapon() end
+})
+Specific:Button({
+    Name = "Lock Specific Weapon",
+    Callback = function() LockSpecificWeapon() end
+})
+
+local Equip = UnlockerPage:Section({Name = "Equip", Icon = Icon("box"), Side = 1})
+Equip:Dropdown({
+    Name = "Type", Flag = "equip_type",
+    Items = kCosmeticTypes, Default = "Skin",
+    Callback = function(v) states.skinchanger_state.equip_unlocker.unlock_type = v end
+})
+Equip:Textbox({
+    Name = "Cosmetic", Flag = "equip_cosmetic",
+    Placeholder = "e.g. 10B Visits", Default = "",
+    Numeric = false, Finished = true,
+    Callback = function(v) states.skinchanger_state.equip_unlocker.cosmetic_name = v end
+})
+Equip:Textbox({
+    Name = "Weapon", Flag = "equip_weapon",
+    Placeholder = "e.g. Assault Rifle", Default = "",
+    Numeric = false, Finished = true,
+    Callback = function(v) states.skinchanger_state.equip_unlocker.weapon_name = v end
+})
+Equip:Toggle({
+    Name = "Inverted", Flag = "equip_inverted", Default = false,
+    Callback = function(v) states.skinchanger_state.equip_unlocker.inverted = v end
+})
+Equip:Button({
+    Name = "Apply",
+    Callback = function() EquipApply() end
+})
+Equip:Button({
+    Name = "Apply to all weapons",
+    Callback = function() EquipApplyAll() end
+})
+
+local Bulk = UnlockerPage:Section({Name = "Bulk", Icon = Icon("box"), Side = 2})
+Bulk:Button({
+    Name = "Unlock All Weapons",
+    Callback = function() UnlockAllWeapons() end
+})
+Bulk:Button({
+    Name = "Lock All Weapons",
+    Callback = function() LockAllWeapons() end
+})
+Bulk:Button({
+    Name = "Unlock All for Weapon",
+    Callback = function() UnlockAllForWeapon() end
+})
+Bulk:Button({
+    Name = "Lock All for Weapon",
+    Callback = function() LockAllForWeapon() end
+})
+Bulk:Button({
+    Name = "Unlock All",
+    Callback = function() UnlockAll() end
+})
+Bulk:Button({
+    Name = "Lock All",
+    Callback = function() LockAll() end
+})
+
+local HandicapSection = ViewPage:Section({Name = "Handicap", Icon = Icon("alert-triangle"), Side = 1})
+HandicapSection:Toggle({
+    Name = "Enable Handicaps", Flag = "handicap_enabled", Default = false,
+    Callback = function(v)
+        states.handicap_state = states.handicap_state or {}
+        states.handicap_state.enabled = v
+        pcall(function()
+            local ps = LocalPlayer:FindFirstChild("PlayerScripts")
+            local controllers = ps and ps:FindFirstChild("Controllers")
+            local debugMod = controllers and controllers:FindFirstChild("DebugController")
+            if not debugMod then return end
+            local DebugController = require(debugMod)
+            DebugController:SetHandicapsEnabled(v)
+        end)
+    end
+})
+states.handicap_state = {enabled = false}
+
+local RatioSection = ViewPage:Section({Name = "Screen Ratio", Icon = Icon("monitor"), Side = 1})
+RatioSection:Toggle({
+    Name = "Enabled", Flag = "ratio_enabled", Default = false,
+    Callback = function(v) states.ratio_state = states.ratio_state or {}; states.ratio_state.enabled = v end
+})
+RatioSection:Slider({
+    Name = "Width", Flag = "ratio_width",
+    Min = 0, Max = 150, Default = 100, Suffix = "%",
+    Callback = function(v) states.ratio_state = states.ratio_state or {}; states.ratio_state.width = v end
+})
+RatioSection:Slider({
+    Name = "Height", Flag = "ratio_height",
+    Min = 0, Max = 150, Default = 100, Suffix = "%",
+    Callback = function(v) states.ratio_state = states.ratio_state or {}; states.ratio_state.height = v end
+})
+
+local SkyboxSection = ViewPage:Section({Name = "Skybox", Icon = Icon("cloud"), Side = 2})
+
+local SkyboxPresets = {
+    ["None"] = {SkyboxBk="rbxassetid://14147881792",SkyboxDn="rbxassetid://14147882149",SkyboxFt="rbxassetid://14147882761",SkyboxLf="rbxassetid://14147883091",SkyboxRt="rbxassetid://14147882405",SkyboxUp="rbxassetid://14147881297"},
+    Aurora = {SkyboxBk="rbxassetid://116533337330584",SkyboxDn="rbxassetid://80054106187171",SkyboxFt="rbxassetid://94459139270943",SkyboxLf="rbxassetid://116368999680791",SkyboxRt="rbxassetid://125758104196312",SkyboxUp="rbxassetid://107060226443967"},
+    Battlerock = {SkyboxBk="rbxassetid://131136284306917",SkyboxDn="rbxassetid://89505977207531",SkyboxFt="rbxassetid://140099243548102",SkyboxLf="rbxassetid://121676169821100",SkyboxRt="rbxassetid://97183886241447",SkyboxUp="rbxassetid://107128620201556"},
+    ["Beach Bowl"] = {SkyboxBk="rbxassetid://81804134601271",SkyboxDn="rbxassetid://92395364196932",SkyboxFt="rbxassetid://81804134601271",SkyboxLf="rbxassetid://81804134601271",SkyboxRt="rbxassetid://81804134601271",SkyboxUp="rbxassetid://119089964803065"},
+    ["Buoy Base"] = {SkyboxBk="rbxassetid://135017685421888",SkyboxDn="rbxassetid://76610044495625",SkyboxFt="rbxassetid://89675413438577",SkyboxLf="rbxassetid://138307087837279",SkyboxRt="rbxassetid://136723547010707",SkyboxUp="rbxassetid://83404878914838"},
+    Clockwork = {SkyboxBk="rbxassetid://86284761193226",SkyboxDn="rbxassetid://111425663631622",SkyboxFt="rbxassetid://115606366886873",SkyboxLf="rbxassetid://127287488325060",SkyboxRt="rbxassetid://126844150113423",SkyboxUp="rbxassetid://74510789204352"},
+    ["Dark Matter"] = {SkyboxBk="rbxassetid://97629693450922",SkyboxDn="rbxassetid://97898396690232",SkyboxFt="rbxassetid://134755033418084",SkyboxLf="rbxassetid://118219143707956",SkyboxRt="rbxassetid://114940065588775",SkyboxUp="rbxassetid://95430908943263"},
+    ["Flash Black"] = {SkyboxBk="rbxassetid://78426835654353",SkyboxDn="rbxassetid://6213218651",SkyboxFt="rbxassetid://71970982976722",SkyboxLf="rbxassetid://78426835654353",SkyboxRt="rbxassetid://78426835654353",SkyboxUp="rbxassetid://138004866371717"},
+    Ghostly = {SkyboxBk="rbxassetid://111506743048183",SkyboxDn="rbxassetid://86198196348228",SkyboxFt="rbxassetid://86265514167302",SkyboxLf="rbxassetid://100257959405445",SkyboxRt="rbxassetid://71935101953120",SkyboxUp="rbxassetid://132011089223498"},
+    ["Good Egg"] = {SkyboxBk="rbxassetid://94681381933012",SkyboxDn="rbxassetid://75843838469806",SkyboxFt="rbxassetid://97891957473259",SkyboxLf="rbxassetid://102971518965494",SkyboxRt="rbxassetid://94588890960775",SkyboxUp="rbxassetid://127368871569815"},
+    ["Melty Molten"] = {SkyboxBk="rbxassetid://131463907527649",SkyboxDn="rbxassetid://116154164311420",SkyboxFt="rbxassetid://113077689016278",SkyboxLf="rbxassetid://79984367513909",SkyboxRt="rbxassetid://82395195737484",SkyboxUp="rbxassetid://117530106700350"},
+    Shiverburn = {SkyboxBk="rbxassetid://113636030839991",SkyboxDn="rbxassetid://118027268179499",SkyboxFt="rbxassetid://76405010847029",SkyboxLf="rbxassetid://112044353352688",SkyboxRt="rbxassetid://121078604572355",SkyboxUp="rbxassetid://132486295432727"},
+    ["Spin Dig"] = {SkyboxBk="rbxassetid://124211111366754",SkyboxDn="rbxassetid://120491795220431",SkyboxFt="rbxassetid://130119279111055",SkyboxLf="rbxassetid://70742671331562",SkyboxRt="rbxassetid://76516826791940",SkyboxUp="rbxassetid://100229310567751"},
+    ["Sweet Mystery"] = {SkyboxBk="rbxassetid://107264897520277",SkyboxDn="rbxassetid://135637946277638",SkyboxFt="rbxassetid://135705252786048",SkyboxLf="rbxassetid://119667604517747",SkyboxRt="rbxassetid://75904303027092",SkyboxUp="rbxassetid://97011146822716"},
+    ["Terrace Dome"] = {SkyboxBk="rbxassetid://98684100016510",SkyboxDn="rbxassetid://108354040356521",SkyboxFt="rbxassetid://95723629635852",SkyboxLf="rbxassetid://106269064939837",SkyboxRt="rbxassetid://136234415079744",SkyboxUp="rbxassetid://75385962780878"},
+}
+local SkyboxNames = {}
+for name in pairs(SkyboxPresets) do SkyboxNames[#SkyboxNames+1] = name end
+table.sort(SkyboxNames)
+
+local skyboxData = {enabled=false, selected="None", sky_obj=nil, auto_rotate=false, rotate_speed=10, star_count=3000, sun_size=20, moon_size=11}
+local skyboxConn = nil
+
+local function EnsureSky()
+    if skyboxData.sky_obj and skyboxData.sky_obj.Parent then return skyboxData.sky_obj end
+    local original = Lighting:FindFirstChildOfClass("Sky")
+    if original then
+        skyboxData.sky_obj = original:Clone()
+        skyboxData.sky_obj.Parent = original.Parent
+        original:Destroy()
+    else
+        skyboxData.sky_obj = Instance.new("Sky")
+        skyboxData.sky_obj.Parent = Lighting
+    end
+    return skyboxData.sky_obj
+end
+
+local function ApplySkybox()
+    if not skyboxData.enabled then return end
+    local sky = EnsureSky()
+    if not sky then return end
+    local tex = SkyboxPresets[skyboxData.selected] or SkyboxPresets["None"]
+    sky.SkyboxBk = tex.SkyboxBk
+    sky.SkyboxDn = tex.SkyboxDn
+    sky.SkyboxFt = tex.SkyboxFt
+    sky.SkyboxLf = tex.SkyboxLf
+    sky.SkyboxRt = tex.SkyboxRt
+    sky.SkyboxUp = tex.SkyboxUp
+    sky.SunAngularSize = skyboxData.sun_size
+    sky.MoonAngularSize = skyboxData.moon_size
+    sky.StarCount = skyboxData.star_count
+end
+
+SkyboxSection:Toggle({
+    Name = "Enabled", Flag = "skybox_enabled", Default = false,
+    Callback = function(v) skyboxData.enabled = v
+        if v then ApplySkybox()
+        else if skyboxConn then skyboxConn:Disconnect(); skyboxConn = nil end end
+    end
+})
+SkyboxSection:Dropdown({
+    Name = "Skybox", Flag = "skybox_selected",
+    Items = SkyboxNames, Default = "None",
+    Callback = function(v) skyboxData.selected = v; ApplySkybox() end
+})
+SkyboxSection:Slider({
+    Name = "Stars", Flag = "skybox_stars",
+    Min = 0, Max = 5000, Default = 3000,
+    Callback = function(v) skyboxData.star_count = v; ApplySkybox() end
+})
+SkyboxSection:Slider({
+    Name = "Sun Size", Flag = "skybox_sun",
+    Min = 0, Max = 50, Default = 20,
+    Callback = function(v) skyboxData.sun_size = v; ApplySkybox() end
+})
+SkyboxSection:Slider({
+    Name = "Moon Size", Flag = "skybox_moon",
+    Min = 0, Max = 30, Default = 11,
+    Callback = function(v) skyboxData.moon_size = v; ApplySkybox() end
+})
+SkyboxSection:Toggle({
+    Name = "Auto Rotate", Flag = "skybox_rotate", Default = false,
+    Callback = function(v)
+        skyboxData.auto_rotate = v
+        if v then
+            if skyboxConn then skyboxConn:Disconnect() end
+            skyboxConn = RunService.RenderStepped:Connect(function(dt)
+                if not skyboxData.enabled or not skyboxData.auto_rotate then return end
+                local sky = EnsureSky()
+                if sky then
+                    sky.SkyboxOrientation = Vector3.new(0, (sky.SkyboxOrientation.Y + skyboxData.rotate_speed * dt) % 360, 0)
+                end
+            end)
+        else
+            if skyboxConn then skyboxConn:Disconnect(); skyboxConn = nil end
+        end
+    end
+})
+SkyboxSection:Slider({
+    Name = "Rotate Speed", Flag = "skybox_rot_speed",
+    Min = 1, Max = 100, Default = 10,
+    Callback = function(v) skyboxData.rotate_speed = v end
+})
+
+local HitSoundSection = ViewPage:Section({Name = "Hit Sounds", Icon = Icon("volume-2"), Side = 2})
+HitSoundSection:Toggle({
+    Name = "Enabled", Flag = "hitsound_enabled", Default = false,
+    Callback = function(v) states.hitsound_state = states.hitsound_state or {}; states.hitsound_state.enabled = v end
+})
+HitSoundSection:Dropdown({
+    Name = "Sound", Flag = "hitsound_sound",
+    Items = {"None","Bameware","Bell","Bubble","Click","Pop","Rust","Fart","Big","Vine","Bruh","Skeet","Neverlose","Fatality","Bonk","Minecraft"},
+    Default = "None",
+    Callback = function(v) states.hitsound_state = states.hitsound_state or {}; states.hitsound_state.sound_value = v end
+})
+HitSoundSection:Textbox({
+    Name = "Asset ID", Flag = "hitsound_asset_id",
+    Placeholder = "Enter asset ID...", Default = "",
+    Numeric = true, Finished = true,
+    Callback = function(v) states.hitsound_state = states.hitsound_state or {}; states.hitsound_state.sound_asset_id = v end
+})
+HitSoundSection:Slider({
+    Name = "Volume", Flag = "hitsound_volume",
+    Min = 1, Max = 100, Default = 50, Suffix = "%",
+    Callback = function(v) states.hitsound_state = states.hitsound_state or {}; states.hitsound_state.sound_volume = v end
+})
+HitSoundSection:Slider({
+    Name = "Pitch", Flag = "hitsound_pitch",
+    Min = 1, Max = 100, Default = 10, Suffix = "x",
+    Callback = function(v) states.hitsound_state = states.hitsound_state or {}; states.hitsound_state.sound_pitch = v end
+})
+HitSoundSection:Button({
+    Name = "Preview Sound",
+    Callback = function()
+        local s = states.hitsound_state
+        if not s or not s.sound_value or s.sound_value == "None" then return end
+        local id = nil
+        if s.sound_value == "Use Asset Id" and s.sound_asset_id then
+            id = "rbxassetid://" .. tostring(s.sound_asset_id)
+        elseif s.sound_value ~= "Use URL" then
+            local soundMap = {
+                Bameware = "rbxassetid://130791763",
+                Bell = "rbxassetid://146680539",
+                Bubble = "rbxassetid://146665237",
+                Click = "rbxassetid://146633140",
+                Pop = "rbxassetid://146681941",
+                Rust = "rbxassetid://146692956",
+                Fart = "rbxassetid://130791763",
+                Big = "rbxassetid://130792279",
+                Vine = "rbxassetid://146606035",
+                Bruh = "rbxassetid://146657737",
+                Skeet = "rbxassetid://130791733",
+                Neverlose = "rbxassetid://146633485",
+                Fatality = "rbxassetid://146665147",
+                Bonk = "rbxassetid://146661497",
+                Minecraft = "rbxassetid://146649495",
+            }
+            id = soundMap[s.sound_value]
+        end
+        if id then
+            local snd = Instance.new("Sound")
+            snd.SoundId = id
+            snd.Volume = (s.sound_volume or 50) / 100
+            snd.PlaybackSpeed = (s.sound_pitch or 10) / 10
+            snd.Parent = SoundService
+            snd:Play()
+            snd.Ended:Connect(function() snd:Destroy() end)
+        end
+    end
+})
+
+states.ratio_state = {enabled = false, width = 100, height = 100}
+states.hitsound_state = {enabled = false, sound_value = "None", sound_asset_id = nil, sound_url = "", sound_volume = 50, sound_pitch = 10}
+
+local ratioConn = nil
+local function updateRatio()
+    local s = states.ratio_state
+    if not s or not s.enabled then return end
+    local cam = workspace.CurrentCamera
+    if not cam then return end
+    local w = math.clamp(s.width or 100, 0, 150) / 100
+    local h = math.clamp(s.height or 100, 0, 150) / 100
+    local cf = cam.CFrame
+    cam.CFrame = CFrame.fromMatrix(cf.Position, cf.RightVector, cf.UpVector * h, -cf.LookVector * (w / math.max(h, 0.01)))
+end
+
+pcall(function()
+    local hit_sound_map = {
+        Bameware = "rbxassetid://130791763",
+        Bell = "rbxassetid://146680539",
+        Bubble = "rbxassetid://146665237",
+        Click = "rbxassetid://146633140",
+        Pop = "rbxassetid://146681941",
+        Rust = "rbxassetid://146692956",
+        Fart = "rbxassetid://130791763",
+        Big = "rbxassetid://130792279",
+        Vine = "rbxassetid://146606035",
+        Bruh = "rbxassetid://146657737",
+        Skeet = "rbxassetid://130791733",
+        Neverlose = "rbxassetid://146633485",
+        Fatality = "rbxassetid://146665147",
+        Bonk = "rbxassetid://146661497",
+        Minecraft = "rbxassetid://146649495",
+    }
+
+    local function ResolveSoundId(sound_value, asset_id)
+        if not sound_value or sound_value == "None" or sound_value == "" then return nil end
+        if sound_value == "Use Asset Id" and asset_id and asset_id ~= "" then
+            return "rbxassetid://" .. tostring(asset_id)
+        end
+        return hit_sound_map[sound_value]
+    end
+
+    task.spawn(function()
+        task.wait(3)
+        pcall(function()
+            local vm_path = LocalPlayer.PlayerScripts.Modules.ClientReplicatedClasses.ClientFighter.ClientItem
+            local vm_module = vm_path:WaitForChild("ClientViewModel", 5)
+            if not vm_module then return end
+            local ClientViewModel = require(vm_module)
+
+            local orig_playhitmarker = ClientViewModel.PlayHitmarkerSound
+            ClientViewModel.PlayHitmarkerSound = function(self, is_crit, distance)
+                local ctx_player = self.ClientItem and self.ClientItem.ClientFighter and self.ClientItem.ClientFighter.Player
+                if ctx_player == LocalPlayer then
+                    local s = states.hitsound_state
+                    if s and s.enabled then
+                        local id = ResolveSoundId(s.sound_value, s.sound_asset_id)
+                        if id then
+                            local vol = (s.sound_volume or 50) / 100
+                            local pitch = (s.sound_pitch or 10) / 10
+                            while #self._last_hitmarker_sounds > 10 do
+                                table.remove(self._last_hitmarker_sounds, 1):Destroy()
+                            end
+                            if is_crit then
+                                self:_CreateHitmarkerSound(id, (3 / distance), pitch, vm_module, true, 1)
+                                self:_CreateHitmarkerSound(id, (2 / distance), pitch, vm_module, true, 1)
+                            else
+                                self:_CreateHitmarkerSound(id, (1.5 / distance), pitch, vm_module, true, 1)
+                            end
+                            return
+                        end
+                    end
+                end
+                return orig_playhitmarker(self, is_crit, distance)
+            end
+        end)
+    end)
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(0.05)
+        pcall(updateRatio)
+    end
+end)
