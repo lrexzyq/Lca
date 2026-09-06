@@ -1,4 +1,4 @@
-local repo = "https://raw.githubusercontent.com/lrexzyq/Crefy/main/"
+local repo = "https://raw.githubusercontent.com/lrexzyq/CreU/main/"
 local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
 local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
 local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
@@ -10,13 +10,12 @@ Library.ForceCheckbox = false
 Library.ShowToggleFrameInKeybinds = true
 
 local Window = Library:CreateWindow({
-    Title = "crefy",
-    Icon = 95816097006870,
+    Title = "CreU",
     NotifySide = "Right",
     ShowCustomCursor = true,
     Footer = {
-        "crefy | ",
-        { Text = "join discord for more updates!", Copyable = true, CopyText = "https://discord.gg/NdpYnJuuN4" },
+        "CreU | ",
+        { Text = "CreU UI", Copyable = true },
     },
     CopyableFooter = true,
     FuzzySearch = true,
@@ -46,16 +45,10 @@ local Tabs = {
 }
 
 local Watermark = Library:AddWatermark({
-    { Icon = "flame", Text = "crefy", Accent = true },
-    { Icon = "message-circle", Text = "join discord for more updates!", Copyable = true, CopyText = "https://discord.gg/NdpYnJuuN4" },
+    { Icon = "flame", Text = "CreU", Accent = true },
 })
 Watermark.RefreshRate = 1
 
--- Misc sub-tabs: preserve the old Misc tab in Weapons and the old Combat tab in Mods.
-local MiscSubTabs = Tabs.Misc
-MiscSubTabs:SetSubTabAlignment("Center")
-local WeaponsSubTab = MiscSubTabs:AddSubTab({ Name = "Weapons", Icon = "sword" })
-local ModsSubTab = MiscSubTabs:AddSubTab({ Name = "Mods", Icon = "wrench" })
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -3785,7 +3778,7 @@ CharacterGroupBox:AddInput("UndergroundCustomDepth", {
     end
 })
 
-local WeaponGroup = WeaponsSubTab:AddLeftGroupbox("Weapon Mods", "sword")
+local WeaponGroup = Tabs.Misc:AddLeftGroupbox("Weapon Mods", "sword")
 WeaponGroup:AddToggle("WeaponNoMeleeAnimation", {
     Text = "No Melee Animation", Default = false,
     Callback = function(v) ModSettings.NoMeleeAnimation = v; if v then applyMeleeAnimation() else restoreWeaponOriginals("NoMeleeAnimation") end end,
@@ -3831,7 +3824,7 @@ WeaponGroup:AddToggle("WeaponNoFlash", {
     Callback = function(v) ModSettings.NoFlash = v; if v then applyNoFlash() else restoreWeaponOriginals("NoFlash") end end,
 })
 
-local DeviceGroup = WeaponsSubTab:AddRightGroupbox("Device Spoof", "smartphone")
+local DeviceGroup = Tabs.Misc:AddRightGroupbox("Device Spoof", "smartphone")
 DeviceGroup:AddToggle("DeviceSpoof", {
     Text = "Enable Device Spoof",
     Default = false,
@@ -4185,37 +4178,6 @@ local Exploits = (function()
             return self.clientItem
         end
 
-        local function fullAuto()
-            local toggle = Toggles.exploits_full_auto
-            if not toggle or not toggle.Value then return end
-
-            local item = getCurrentItem()
-            if not item then return end
-            local info = item:FindFirstChild("Info") or item.Info
-            if not info then return end
-
-            local itemType
-            pcall(function() itemType = info.Type end)
-            if itemType ~= "Gun" then return end
-
-            local delayMs = Options.exploits_full_auto_delay and Options.exploits_full_auto_delay.Value or 1
-            delayMs = math.clamp(tonumber(delayMs) or 1, 1, 100)
-            local now = os.clock()
-            if now - self.lastShot < delayMs / 1000 then return end
-            self.lastShot = now
-
-            pcall(function()
-                local camera = workspace.CurrentCamera
-                if not camera then return end
-                local direction = camera.CFrame.Position + camera.CFrame.LookVector * 100
-                if self.clientItem and type(self.clientItem.StartShooting) == "function" then
-                    self.clientItem:StartShooting(direction)
-                elseif type(item.StartShooting) == "function" then
-                    item:StartShooting(direction)
-                end
-            end)
-        end
-
         local function forceBackstab(character)
             local toggle = Toggles.exploits_always_backstab
             if not toggle or not toggle.Value then return false end
@@ -4335,35 +4297,9 @@ local Exploits = (function()
             end
         end
 
-        function self:grenadeSettings(character)
-            local settings = Options.exploits_grenade_settings and Options.exploits_grenade_settings.Value or {}
-            local item = getEquippedItem(character)
-            if not item then return end
-            local info = item:FindFirstChild("Info") or item.Info
-            if not info then return end
-            local itemType
-            pcall(function() itemType = info.Type end)
-            if itemType ~= "Grenade" then return end
-
-            if settings["throw"] or settings["Throw"] then
-                pcall(function()
-                    if type(item.StartCooking) == "function" then item:StartCooking() end
-                end)
-            end
-            if settings["impact"] or settings["Impact"] then
-                pcall(function()
-                    if type(item.ThrowBackstab) == "function" then item:ThrowBackstab() end
-                end)
-            end
-        end
-
         self.connections = {
-            RunService.Heartbeat:Connect(fullAuto),
             RunService.Heartbeat:Connect(autoBackstab),
             RunService.Heartbeat:Connect(autoRespawn),
-            RunService.Heartbeat:Connect(function()
-                self:grenadeSettings(LocalPlayer.Character)
-            end),
             RunService.RenderStepped:Connect(autoCollect),
         }
 
@@ -4393,32 +4329,18 @@ end)
 
 local CombatExploits = Exploits.new(_exploitsFighter, _exploitsItem)
 
-local ExploitsGroupBox = ModsSubTab:AddRightGroupbox("Exploits", "zap")
-ExploitsGroupBox:AddToggle("exploits_full_auto", {
-    Text = "Full Auto", Default = false,
-})
-ExploitsGroupBox:AddSlider("exploits_full_auto_delay", {
-    Text = "Full Auto Delay", Default = 1, Min = 1, Max = 100, Rounding = 0, Suffix = " ms",
-})
+local ExploitsGroupBox = Tabs.Misc:AddRightGroupbox("Exploits", "zap")
 ExploitsGroupBox:AddToggle("exploits_always_backstab", {
     Text = "Always Backstab",
     Default = false,
 })
 
-local ArcadeGroupBox = ModsSubTab:AddRightGroupbox("Arcade", "refresh-cw")
+local ArcadeGroupBox = Tabs.Misc:AddRightGroupbox("Arcade", "refresh-cw")
 ArcadeGroupBox:AddToggle("arcade_auto_health", { Text = "Auto Health", Default = false })
 ArcadeGroupBox:AddToggle("arcade_auto_ammo", { Text = "Auto Ammo", Default = false })
 ArcadeGroupBox:AddToggle("arcade_auto_respawn", { Text = "Auto Respawn", Default = false })
 
-local GrenadeGroupBox = ModsSubTab:AddLeftGroupbox("Grenades", "bomb")
-GrenadeGroupBox:AddDropdown("exploits_grenade_settings", {
-    Text = "Grenade Settings",
-    Values = { "Throw", "Impact" },
-    Multi = true,
-    Default = {},
-})
-
-local MiscGroupBox = ModsSubTab:AddLeftGroupbox("Misc Combat", "settings")
+local MiscGroupBox = Tabs.Misc:AddLeftGroupbox("Misc Combat", "settings")
 MiscGroupBox:AddToggle("AntiKatana", {
     Text = "Anti Katana",
     Default = false,
@@ -4482,8 +4404,8 @@ ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
 SaveManager:IgnoreThemeSettings()
 SaveManager:SetIgnoreIndexes({"MenuKeybind"})
-ThemeManager:SetFolder("RivalsScript")
-SaveManager:SetFolder("RivalsScript/configs")
+ThemeManager:SetFolder("CreU")
+SaveManager:SetFolder("CreU/configs")
 SaveManager:BuildConfigSection(Tabs["UI Settings"])
 ThemeManager:ApplyToTab(Tabs["UI Settings"])
 SaveManager:LoadAutoloadConfig()
