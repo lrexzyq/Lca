@@ -1,4 +1,4 @@
-local repo = "https://raw.githubusercontent.com/lrexzyq/CreU/main/"
+local repo = "https://raw.githubusercontent.com/lrexzyq/Crefy/main/"
 local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
 local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
 local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
@@ -50,7 +50,6 @@ local Watermark = Library:AddWatermark({
     { Icon = "message-circle", Text = "join discord for more updates!", Copyable = true, CopyText = "https://discord.gg/NdpYnJuuN4" },
 })
 Watermark.RefreshRate = 1
-
 
 -- Misc sub-tabs: preserve the old Misc tab in Weapons and the old Combat tab in Mods.
 local MiscSubTabs = Tabs.Misc
@@ -1249,6 +1248,71 @@ local modules = {
     utility = safeRequire(replicatedstorage.Modules.Utility)
 }
 
+-- Ragebot caches: avoid repeated module lookups / Stats queries / player scans.
+local rageCache = {
+    fighter = modules.fighter,
+    localFighter = modules.fighter and modules.fighter.LocalFighter or nil,
+    pingSeconds = 0,
+    pingAt = 0,
+    characters = {},
+    characterConnections = {},
+}
+
+local function refreshLocalFighter()
+    local fc = rageCache.fighter
+    if fc then
+        rageCache.localFighter = fc.LocalFighter
+    end
+    return rageCache.localFighter
+end
+
+local function getCachedPingSeconds()
+    local now = os.clock()
+    if now - rageCache.pingAt < 0.25 then
+        return rageCache.pingSeconds
+    end
+    rageCache.pingAt = now
+    pcall(function()
+        rageCache.pingSeconds = math.max(0, (game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() or 0) / 1000)
+    end)
+    return rageCache.pingSeconds
+end
+
+local function addCharacterCache(plr)
+    if plr ~= player and plr.Character then
+        rageCache.characters[plr] = plr.Character
+    end
+end
+
+local function removeCharacterCache(plr)
+    rageCache.characters[plr] = nil
+end
+
+for _, plr in ipairs(players:GetPlayers()) do
+    addCharacterCache(plr)
+end
+for _, plr in ipairs(players:GetPlayers()) do
+    if plr ~= player then
+        table.insert(rageCache.characterConnections, plr.CharacterAdded:Connect(function(char)
+            rageCache.characters[plr] = char
+        end))
+        table.insert(rageCache.characterConnections, plr.CharacterRemoving:Connect(function()
+            rageCache.characters[plr] = nil
+        end))
+    end
+end
+table.insert(rageCache.characterConnections, players.PlayerAdded:Connect(function(plr)
+    if plr == player then return end
+    addCharacterCache(plr)
+    table.insert(rageCache.characterConnections, plr.CharacterAdded:Connect(function(char)
+        rageCache.characters[plr] = char
+    end))
+    table.insert(rageCache.characterConnections, plr.CharacterRemoving:Connect(function()
+        rageCache.characters[plr] = nil
+    end))
+end))
+table.insert(rageCache.characterConnections, players.PlayerRemoving:Connect(removeCharacterCache))
+
 local MATCH_ID_ATTRS = {"MatchId", "DuelId", "RoundId", "GameId", "MatchUUID", "ArenaId", "InstanceId"}
 local DUEL_STATE_ATTRS = {"InDuel", "InMatch", "InRound", "InGame", "InFight", "IsInMatch", "IsInDuel", "MatchActive", "Fighting"}
 local SPAWN_SAFE_ATTRS = {"InSpawn", "InLobby", "IsSpectating", "InSafeZone", "InIntermission", "IsRespawning"}
@@ -1640,11 +1704,10 @@ end
 
 local function getammo()
     if isInfiniteWeapon() then return nil, nil, false end
-    local success, controller = pcall(function()
-        return safeRequire(player.PlayerScripts.Controllers.FighterController)
-    end)
-    if success and controller and controller.LocalFighter and controller.LocalFighter.EquippedItem then
-        local item = controller.LocalFighter.EquippedItem
+    local controller = rageCache.fighter or safeRequire(player.PlayerScripts.Controllers.FighterController)
+    local cachedFighter = refreshLocalFighter()
+    if controller and cachedFighter and cachedFighter.EquippedItem then
+        local item = cachedFighter.EquippedItem
         local itemName, current, maxAmmo = "", 0, 0
         local isMelee = false
         local ok = pcall(function()
@@ -1677,6 +1740,21 @@ local function itemMelee(item)
     if meleeNm(nm) then return true end
     local t = item:Get("ItemType") or item:Get("Type") or item:Get("Category")
     return type(t) == "string" and t:lower():find("melee", 1, true) ~= nil
+end
+
+local function getWeaponInfo(item)
+    if not item then return nil end
+    local name = item:Get("Name") or item.Name or ""
+    local kind = item:Get("ItemType") or item:Get("Type") or item:Get("Category")
+    local melee = itemMelee(item)
+    if not kind or kind == "" then kind = melee and "Melee" or "Gun" end
+    return {
+        item = item,
+        name = tostring(name),
+        type = tostring(kind),
+        melee = melee,
+        infinite = INFINITE_AMMO_WEAPONS[tostring(name)] == true,
+    }
 end
 
 local function isSling(weapon)
@@ -1763,7 +1841,7 @@ end
 local function eqSlot()
     if not rageOn() then return end
     local want = wantSlot()
-    local lf = modules.fighter and modules.fighter.LocalFighter
+    local lf = refreshLocalFighter()
     if not lf then return end
     local eq = lf.EquippedItem
     if eq and whichSlot(eq) == want then return end
@@ -1923,9 +2001,8 @@ local function nearest()
     local cursorpos = userinput:GetMouseLocation()
     local besttarget = nil
     local bestdistance = math.huge
-    for _, targetplayer in players:GetPlayers() do
-        if targetplayer ~= player and targetplayer.Character then
-            local char = targetplayer.Character
+    for targetplayer, char in pairs(rageCache.characters) do
+        if targetplayer ~= player and char then
             if valid(char) then
                 local root = char:FindFirstChild("HumanoidRootPart")
                 if root then
@@ -1995,10 +2072,7 @@ local function predict(targetpart, origin)
     end
     local basepos = targetpart.Position
     local distance = (basepos - origin).Magnitude
-    local ping = 0
-    pcall(function()
-        ping = game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
-    end)
+    local ping = getCachedPingSeconds()
     local traveltime = distance / 3000
     local totaltime = (traveltime + ping) * config.prediction.multiplier
     return basepos + (config.prediction.velocity * totaltime)
@@ -3148,6 +3222,38 @@ runsvc.Heartbeat:Connect(function()
     end
 end)
 
+
+local function getCurrentLocalFighter()
+    if refreshLocalFighter then
+        pcall(refreshLocalFighter)
+    end
+
+    local fighter = localfighter
+    if fighter and fighter.Entity and fighter.Entity.RootPart then
+        return fighter
+    end
+
+    return nil
+end
+
+function Ragebot:GetWeaponInfo(item)
+    return getWeaponInfo(item)
+end
+
+function Ragebot:Destroy()
+    pcall(function() self.enabled = false end)
+    pcall(function() if stopsync then stopsync() end end)
+    pcall(function() if stopTranslocateSync then stopTranslocateSync() end end)
+    pcall(function() if self.stopvoid then self.stopvoid() end end)
+    pcall(function()
+        for _, connection in ipairs(rageCache.characterConnections) do
+            connection:Disconnect()
+        end
+    end)
+    rageCache.characterConnections = {}
+    rageCache.characters = {}
+end
+
 Ragebot.config = config
 Ragebot.nearest = nearest
 Ragebot.settarget = settarget
@@ -3422,31 +3528,26 @@ local function togglekey()
     end
 end
 end
+end
 
-local AimbotGroupBox = Tabs.Main:AddRightGroupbox("Aimbot", "crosshair")
+local LeftGroupBox = Tabs.Main:AddLeftGroupbox("Aimbot", "crosshair")
 
-AimbotGroupBox:AddToggle("AimbotEnabled", {
+LeftGroupBox:AddToggle("AimbotEnabled", {
     Text = "Enable Aimbot",
     Default = false,
     Callback = function(v) Aimbot:setEnabled(v) end
-}):AddKeyPicker("AimbotKey", {
-    Text = "Aimbot",
-    Default = "None",
-    Mode = "Toggle",
-    NoUI = true,
-    SyncToggleState = true,
 })
-AimbotGroupBox:AddToggle("AimbotVisCheck", {
+LeftGroupBox:AddToggle("AimbotVisCheck", {
     Text = "Visible Check",
     Default = true,
     Callback = function(v) Aimbot:setVisibleCheck(v) end
 })
-AimbotGroupBox:AddToggle("AimbotTeamCheck", {
+LeftGroupBox:AddToggle("AimbotTeamCheck", {
     Text = "Team Check",
     Default = true,
     Callback = function(v) Aimbot:setTeamCheck(v) end
 })
-AimbotGroupBox:AddSlider("AimbotFOV", {
+LeftGroupBox:AddSlider("AimbotFOV", {
     Text = "FOV",
     Default = 360,
     Min = 1,
@@ -3454,7 +3555,7 @@ AimbotGroupBox:AddSlider("AimbotFOV", {
     Rounding = 0,
     Callback = function(v) Aimbot:setFOV(v) end
 })
-AimbotGroupBox:AddSlider("AimbotMaxDist", {
+LeftGroupBox:AddSlider("AimbotMaxDist", {
     Text = "Max Distance",
     Default = 9999,
     Min = 10,
@@ -3462,7 +3563,7 @@ AimbotGroupBox:AddSlider("AimbotMaxDist", {
     Rounding = 0,
     Callback = function(v) Aimbot:setMaxDist(v) end
 })
-AimbotGroupBox:AddSlider("AimbotPrediction", {
+LeftGroupBox:AddSlider("AimbotPrediction", {
     Text = "Prediction",
     Default = 0,
     Min = 0,
@@ -3470,7 +3571,7 @@ AimbotGroupBox:AddSlider("AimbotPrediction", {
     Rounding = 1,
     Callback = function(v) Aimbot:setPrediction(v) end
 })
-AimbotGroupBox:AddSlider("AimbotSmoothing", {
+LeftGroupBox:AddSlider("AimbotSmoothing", {
     Text = "Smoothing",
     Default = 0,
     Min = 0,
@@ -3478,20 +3579,20 @@ AimbotGroupBox:AddSlider("AimbotSmoothing", {
     Rounding = 1,
     Callback = function(v) Aimbot:setSmoothing(v) end
 })
-AimbotGroupBox:AddDropdown("AimbotHitPart", {
+LeftGroupBox:AddDropdown("AimbotHitPart", {
     Text = "Hit Part",
     Values = {"Head", "UpperTorso", "LowerTorso", "HumanoidRootPart"},
     Default = "Head",
     Callback = function(v) Aimbot:setHitPart(v) end
 })
-AimbotGroupBox:AddDropdown("AimbotRunService", {
+LeftGroupBox:AddDropdown("AimbotRunService", {
     Text = "Update Mode",
     Values = {"Heartbeat", "RenderStepped", "PreSimulation"},
     Default = "Heartbeat",
     Callback = function(v) setRunService(v) end
 })
 
-local FlickGroupBox = Tabs.Main:AddLeftGroupbox("Flick Bot", "crosshair")
+local FlickGroupBox = Tabs.Main:AddRightGroupbox("Flick Bot", "crosshair")
 FlickGroupBox:AddToggle("FlickEnabled", {
     Text = "Enable Flick",
     Default = false,
@@ -3504,16 +3605,12 @@ FlickGroupBox:AddToggle("FlickEnabled", {
             Aimbot._elapsed = 0
         end
     end
-}):AddKeyPicker("FlickKey", {
-    Text = "Flick Bot",
-    Default = "None",
-    Mode = "Toggle",
-    NoUI = true,
-    SyncToggleState = true,
 })
 
-local FlickDependency = FlickGroupBox:AddDependencyBox()
-FlickDependency:AddSlider("FlickDuration", {
+local FlickControlsDep = FlickGroupBox:AddDependencyBox()
+-- All Flick controls stay hidden until FlickEnabled is true.
+
+FlickControlsDep:AddSlider("FlickDuration", {
     Text = "Duration",
     Default = 0.3,
     Min = 0.05,
@@ -3522,7 +3619,7 @@ FlickDependency:AddSlider("FlickDuration", {
     Suffix = " s",
     Callback = function(v) Aimbot.flickDuration = v end
 })
-FlickDependency:AddSlider("FlickCurvature", {
+FlickControlsDep:AddSlider("FlickCurvature", {
     Text = "Curvature",
     Default = 0.5,
     Min = 0,
@@ -3530,7 +3627,7 @@ FlickDependency:AddSlider("FlickCurvature", {
     Rounding = 2,
     Callback = function(v) Aimbot.flickCurvature = v end
 })
-FlickDependency:AddSlider("FlickHumanness", {
+FlickControlsDep:AddSlider("FlickHumanness", {
     Text = "Humanness",
     Default = 0.3,
     Min = 0,
@@ -3538,12 +3635,12 @@ FlickDependency:AddSlider("FlickHumanness", {
     Rounding = 2,
     Callback = function(v) Aimbot.flickHumanness = v end
 })
-FlickDependency:AddToggle("FlickShootAfter", {
+FlickControlsDep:AddToggle("FlickShootAfter", {
     Text = "Shoot After Flick",
     Default = false,
     Callback = function(v) Aimbot.shootAfterFlick = v end
 })
-FlickDependency:AddSlider("FlickShotDelay", {
+FlickControlsDep:AddSlider("FlickShotDelay", {
     Text = "Shot Delay",
     Default = 0.05,
     Min = 0,
@@ -3552,7 +3649,7 @@ FlickDependency:AddSlider("FlickShotDelay", {
     Suffix = " s",
     Callback = function(v) Aimbot.shotDelay = v end
 })
-FlickDependency:AddSlider("FlickCooldown", {
+FlickControlsDep:AddSlider("FlickCooldown", {
     Text = "Cooldown",
     Default = 0.2,
     Min = 0.05,
@@ -3561,7 +3658,7 @@ FlickDependency:AddSlider("FlickCooldown", {
     Suffix = " s",
     Callback = function(v) Aimbot.cooldown = v end
 })
-FlickDependency:AddDropdown("FlickFireMode", {
+FlickControlsDep:AddDropdown("FlickFireMode", {
     Text = "Fire Mode",
     Values = {"FireServer", "MouseClick"},
     Default = "FireServer",
@@ -3570,16 +3667,12 @@ FlickDependency:AddDropdown("FlickFireMode", {
     end
 })
 
-FlickDependency:SetupDependencies({
-    {
-        Toggles.FlickEnabled,
-        true,
-    },
+FlickControlsDep:SetupDependencies({
+    { Toggles.FlickEnabled, true }
 })
-FlickDependency:Update()
+FlickControlsDep:Update()
 
-
-local SilentGroupBox = Tabs.Main:AddRightGroupbox("Silent Aim", "target")
+local SilentGroupBox = Tabs.Main:AddLeftGroupbox("Silent Aim", "target")
 SilentGroupBox:AddToggle("SilentAimEnabled", {
     Text = "Enable Silent Aim",
     Default = false,
@@ -3592,7 +3685,11 @@ SilentGroupBox:AddToggle("SilentAimEnabled", {
     Default = "None",
     Mode = "Toggle",
     NoUI = true,
-    SyncToggleState = true,
+    SyncToggleState = false,
+    Callback = function(state)
+        silentAim.enabled = state
+        if not state then curtarget = nil end
+    end
 })
 SilentGroupBox:AddToggle("SilentAutoShoot", {
     Text = "Auto Shoot",
@@ -3652,12 +3749,6 @@ CharacterGroupBox:AddToggle("UndergroundEnabled", {
             stopUnderground()
         end
     end
-}):AddKeyPicker("UndergroundKey", {
-    Text = "Underground",
-    Default = "None",
-    Mode = "Toggle",
-    NoUI = true,
-    SyncToggleState = true,
 })
 CharacterGroupBox:AddSlider("UndergroundDepth", {
     Text = "Depth",
@@ -3759,7 +3850,7 @@ DeviceGroup:AddDropdown("DeviceType", {
     end
 })
 
-local RageGroupBox = Tabs.Main:AddLeftGroupbox("Ragebot", "sword")
+local RageGroupBox = Tabs.Main:AddRightGroupbox("Ragebot", "sword")
 
 RageGroupBox:AddToggle("RagebotEnabled", {
     Text = "Enable",
@@ -3767,8 +3858,8 @@ RageGroupBox:AddToggle("RagebotEnabled", {
     Callback = function(v)
         Ragebot.enabled = v
         Ragebot.config.target.rageMasterOn = v
-        Ragebot.config.target.auto = v
         Ragebot.config.target.autoshoot = v
+        Ragebot.config.target.manualkey = false
         if not v then
             Ragebot.config.target.evasion.mode = "Normal"
             if stopsync then stopsync() end
@@ -3784,8 +3875,25 @@ RageGroupBox:AddToggle("RagebotEnabled", {
     Default = "None",
     Mode = "Toggle",
     NoUI = true,
-    SyncToggleState = true,
+    SyncToggleState = false,
+    Callback = function()
+        if Ragebot.config.target.auto then
+            return
+        end
+        if Ragebot.config.target.enabled and Ragebot.config.target.character then
+            Ragebot.cleartarget()
+        else
+            local target = Ragebot.nearest()
+            if target then
+                Ragebot.config.target.manualkey = true
+                Ragebot.settarget(target)
+            end
+        end
+    end
 })
+
+local RageControlsDep = RageGroupBox:AddDependencyBox()
+-- All Ragebot controls stay hidden until RagebotEnabled is true.
 
 local RageNormalGate = { Type = "Toggle", Value = true }
 local RageTranslocateGate = { Type = "Toggle", Value = false }
@@ -3793,7 +3901,7 @@ local RageTranslocateGate = { Type = "Toggle", Value = false }
 local RageNormalDep
 local RageTranslocateDep
 
-RageGroupBox:AddDropdown("RagebotMode", {
+RageControlsDep:AddDropdown("RagebotMode", {
     Text = "Mode",
     Default = Ragebot.config.target.evasion.mode == "Translocate" and "Translocate" or "Normal",
     Values = { "Normal", "Translocate" },
@@ -3838,9 +3946,9 @@ RageGroupBox:AddDropdown("RagebotMode", {
     end
 })
 
-RageNormalDep = RageGroupBox:AddDependencyBox()
+RageNormalDep = RageControlsDep:AddDependencyBox()
 
-RageTranslocateDep = RageGroupBox:AddDependencyBox()
+RageTranslocateDep = RageControlsDep:AddDependencyBox()
 
 RageTranslocateDep:AddSlider("RagebotTranslocateOffset", {
     Text = "Translocate Offset",
@@ -4045,7 +4153,9 @@ RageNormalDep:SetupDependencies({
 })
 RageNormalDep:Update()
 
-
+RageControlsDep:SetupDependencies({
+    { Toggles.RagebotEnabled, true }
+})
 
 -- Combat exploits
 local Exploits = (function()
@@ -4326,8 +4436,6 @@ MiscGroupBox:AddToggle("BackshootToggle", {
     SyncToggleState = false,
     Callback = function(state) end
 })
-
-end
 
 local MenuGroup = Tabs["UI Settings"]:AddLeftGroupbox("Menu", "wrench")
 MenuGroup:AddToggle("KeybindMenuOpen", {
