@@ -1568,6 +1568,10 @@ local config = {
         reloadStartedAt = 0,
         reloadReadyAt = 0,
         reloadDelay = 0.5,
+        -- Kicia melee timing state
+        meleeAttackStart = nil,       -- os.clock() khi lần đầu đứng trên server TP
+        meleeHitboxWindowUntil = -1,  -- Knife: window re-fire sau backstab (0.625s)
+        meleeAttackCooldown = -1,     -- Knife: cooldown cứng sau backstab (1.25s)
     },
     voidhide = {
         enabled = true,
@@ -2314,6 +2318,11 @@ local function stopsync()
     config.voidspam.phase = nil
     config.voidspam.shotIssued = false
 
+    -- Reset melee timing state khi stop sync
+    config.state.meleeAttackStart      = nil
+    config.state.meleeHitboxWindowUntil = -1
+    config.state.meleeAttackCooldown    = -1
+
     local transState = config.target.evasion.translocate
     transState.active = false
     transState.hasTarget = false
@@ -2904,19 +2913,30 @@ startsync = function()
             return
         end
 
-        -- Tính serverpos theo đúng kicia: SetServerCFrame(CFrame.new(rootPart.Position))
+        -- Tính serverpos theo kiểu Kicia:
+        -- Knife planner (f3617): hitboxHead + Vector3(0, 0, 0) normal / (0,-3,0) below
+        -- Melee planner  (f1051): hitboxHead + Vector3(0, 0.5, 0) normal / (0,-3,0) below
+        -- Reset meleeAttackStart mỗi khi cập nhật server pos (vừa "đến nơi")
         local serverPos
         do
             local char = config.target.character
+            local hitboxHead = char and (char:FindFirstChild("HitboxHead") or char:FindFirstChild("Head"))
             local isBelow = (config.target.attackPosition == "under")
+            local _syncWeapon = getweapon()
+            local _syncIsKnife = (_syncWeapon == "Knife")
 
-            if isBelow then
-                -- Mode under: dùng HitboxHead - underOffset (kéo xuống dưới)
-                local hitboxHead = char and (char:FindFirstChild("HitboxHead") or char:FindFirstChild("Head"))
-                local yOffset = tonumber(config.target.underOffset) or 4
-                serverPos = (hitboxHead and hitboxHead.Position or root.Position) - Vector3.new(0, yOffset, 0)
+            if hitboxHead then
+                local headPos = hitboxHead.Position
+                -- Knife: 0 offset; other melee: +0.5; under: -3 (kicia chính xác)
+                local yOffset = isBelow and -3 or (_syncIsKnife and 0 or 0.5)
+                local newServerPos = headPos + Vector3.new(0, yOffset, 0)
+                -- Nếu server pos thay đổi đáng kể → reset attackStart warmup
+                if not serverPos or (newServerPos - (serverPos or newServerPos)).Magnitude > 0.01 then
+                    config.state.meleeAttackStart = nil
+                end
+                serverPos = newServerPos
             else
-                -- Mode default: TP chính xác rootPart.Position của target (đúng kicia)
+                -- Fallback: dùng rootPart nếu không có HitboxHead
                 serverPos = root.Position
             end
 
@@ -2968,6 +2988,44 @@ local function autoshoot()
     if not valid(targetChar) then return end
     local hitPart = hitpartfromname(targetChar, config.target.hitpart)
     if not hitPart then return end
+
+    -- ── Phát hiện melee / knife ─────────────────────────────────────────────
+    local equipped = lf.EquippedItem
+    if not equipped or not equipped:Get("ObjectID") then return end
+
+    local isCurrentlyMelee = itemMelee(equipped)
+    local isKnife = false
+    if isCurrentlyMelee then
+        local nm = tostring(equipped:Get("Name") or equipped.Name or "")
+        isKnife = (nm == "Knife")
+    end
+
+    -- ── Kicia melee timing: _attackStart warmup 0.0666s + backstab state ────
+    local nowClock = os.clock()
+    if isCurrentlyMelee then
+        local hitboxWindow = config.state.meleeHitboxWindowUntil or -1
+        local atkCooldown  = config.state.meleeAttackCooldown or -1
+
+        if nowClock < atkCooldown then
+            -- Trong cooldown cứng — chỉ knife + còn trong hitbox window mới được bắn lại
+            if isKnife and nowClock < hitboxWindow then
+                -- fall-through: re-fire HeavyAttack trong window
+            else
+                return
+            end
+        end
+
+        -- Warmup: phải "đứng trên" server TP ít nhất 0.0666s trước khi fire
+        -- (kicia: local v195 = 0.06666666666666667)
+        if not config.state.meleeAttackStart then
+            config.state.meleeAttackStart = nowClock
+        end
+        if nowClock - config.state.meleeAttackStart < 0.06666666666666667 then
+            return
+        end
+    end
+
+    -- ── Tính shootPos / targetPos ────────────────────────────────────────────
     local shootPos
     local targetPos
     if vhState and vhState.active and checksling then
@@ -2986,27 +3044,70 @@ local function autoshoot()
         end
         targetPos = predict(hitPart, shootPos)
     end
-    local data = {
-        [utf8.char(1)] = {
-            [utf8.char(0)] = modules.utility:EncodeCFrame(CFrame.new(shootPos, targetPos)),
-            [utf8.char(1)] = modules.utility:EncodeCFrame(CFrame.new(shootPos, targetPos)),
-            [utf8.char(2)] = hitPart,
-            [utf8.char(3)] = modules.utility:EncodeCFrame(CFrame.new(0.43, 0.25, 0.42)),
-        },
+
+    -- ── Build data packet ────────────────────────────────────────────────────
+    local fromCF = CFrame.new(shootPos, targetPos)
+    local toCF   = CFrame.new(shootPos, targetPos)
+    local innerData = {
+        [utf8.char(0)] = modules.utility:EncodeCFrame(fromCF),
+        [utf8.char(1)] = modules.utility:EncodeCFrame(toCF),
+        [utf8.char(2)] = hitPart,
+        [utf8.char(3)] = modules.utility:EncodeCFrame(CFrame.new(0.43, 0.25, 0.42)),
     }
-    local equipped = lf.EquippedItem
-    if equipped and equipped:Get("ObjectID") then
+
+    -- Chọn enum + animation key theo loại vũ khí (kicia AttackEncoded / HeavyAttackEncoded)
+    --   Gun       → StartShooting  (không có animation key trong outer data)
+    --   Melee     → StartShooting  + AttackAnimation1
+    --   Knife     → StartAiming    + HeavyAttackAnimation1   (= backstab HeavyAttack)
+    local remoteEnum, animKey
+    if isKnife then
+        remoteEnum = modules.enums:ToEnum("StartAiming")
+        animKey    = modules.enums:ToEnum("HeavyAttackAnimation1")
+    elseif isCurrentlyMelee then
+        remoteEnum = modules.enums:ToEnum("StartShooting")
+        animKey    = modules.enums:ToEnum("AttackAnimation1")
+    else
+        remoteEnum = modules.enums:ToEnum("StartShooting")
+        animKey    = nil
+    end
+
+    local data
+    if animKey then
+        -- Kicia AttackEncoded / HeavyAttackEncoded dùng outer key "\2" cho animation
+        data = {
+            [utf8.char(1)] = innerData,
+            [utf8.char(2)] = animKey,
+        }
+    else
+        data = {
+            [utf8.char(1)] = innerData,
+        }
+    end
+
+    -- ── Fire ─────────────────────────────────────────────────────────────────
+    if equipped:Get("ObjectID") then
         ragePerf.lastAttackTick = tick()
         local attempts = math.clamp(math.floor(tonumber(config.target.shootAttempts) or 1), 1, 3)
         for _ = 1, attempts do
             pcall(function()
                 replicatedstorage.Remotes.Replication.Fighter.UseItem:FireServer(
                     equipped:Get("ObjectID"),
-                    modules.enums:ToEnum("StartShooting"),
+                    remoteEnum,
                     data,
                     nil
                 )
             end)
+        end
+
+        -- Sau khi bắn: ghi backstab timing cho knife (kicia _RecordBackstab)
+        -- window = 0.625s, cooldown = 1.25s
+        if isKnife then
+            local t = os.clock()
+            config.state.meleeHitboxWindowUntil = t + 0.625
+            config.state.meleeAttackCooldown    = t + 1.25
+            config.state.meleeAttackStart       = nil  -- reset warmup cho lần tới
+        elseif isCurrentlyMelee then
+            config.state.meleeAttackStart = nil
         end
 
         if config.voidspam.enabled and not isSling(getweapon())
@@ -3098,6 +3199,10 @@ local function cleartarget()
     config.target.lastplayer = nil
     config.target.manualkey = false
     config.target.immune = false
+    -- Reset melee state khi mất target
+    config.state.meleeAttackStart       = nil
+    config.state.meleeHitboxWindowUntil = -1
+    config.state.meleeAttackCooldown    = -1
     indicator.Color = Color3.fromRGB(255, 50, 50)
 end
 
@@ -3109,6 +3214,10 @@ local function settarget(char)
     config.target.lastchar = char
     config.target.lastplayer = targetplr
     config.target.immune = false
+    -- Reset melee warmup khi đổi target mới
+    config.state.meleeAttackStart       = nil
+    config.state.meleeHitboxWindowUntil = -1
+    config.state.meleeAttackCooldown    = -1
     indicator.Color = Color3.fromRGB(255, 50, 50)
     local root = char:FindFirstChild("HumanoidRootPart")
     if root and root:FindFirstChild("Attachment") then
