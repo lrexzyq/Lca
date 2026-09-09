@@ -1293,7 +1293,7 @@ RunService.Heartbeat:Connect(function()
 end)
 
 local function buildCore()
-Ragebot = { enabled = false }
+Ragebot = { enabled = false, _shootFrames = 1, _stability = 0 }
 do
 local replicatedstorage = cloneref(game:GetService("ReplicatedStorage"))
 local players = cloneref(game:GetService("Players"))
@@ -2968,6 +2968,10 @@ startsync = function()
     end)
 end
 
+-- ShootLock: giới hạn số frame trước khi bắn (kicia ShootFrames)
+local _shootLockFrame = 0
+local _shootLockLastFire = 0
+
 local function autoshoot()
     -- Translocate is movement-only; never enter the Normal auto-shoot path.
     if config.target.evasion.mode == "Translocate" then return end
@@ -2988,6 +2992,21 @@ local function autoshoot()
     if not valid(targetChar) then return end
     local hitPart = hitpartfromname(targetChar, config.target.hitpart)
     if not hitPart then return end
+
+    -- Stability check (kicia: expectedDuration - Stability <= elapsed)
+    -- Ta đợi ít nhất _stability giây sau khi đến vị trí server trước khi bắn
+    local stability = Ragebot._stability or 0
+    if stability > 0 and config.state.meleeAttackStart then
+        local elapsed = os.clock() - config.state.meleeAttackStart
+        if elapsed < stability then return end
+    end
+
+    -- ShootFrames: chỉ bắn sau N heartbeat frames kể từ lần bắn cuối
+    local shootFrames = Ragebot._shootFrames or 1
+    _shootLockFrame = _shootLockFrame + 1
+    local now = tick()
+    local framesSinceLast = math.floor((now - _shootLockLastFire) * 60 + 0.5)
+    if framesSinceLast < shootFrames then return end
 
     -- ── Phát hiện melee / knife ─────────────────────────────────────────────
     local equipped = lf.EquippedItem
@@ -3087,6 +3106,7 @@ local function autoshoot()
     -- ── Fire ─────────────────────────────────────────────────────────────────
     if equipped:Get("ObjectID") then
         ragePerf.lastAttackTick = tick()
+        _shootLockLastFire = ragePerf.lastAttackTick
         local attempts = math.clamp(math.floor(tonumber(config.target.shootAttempts) or 1), 1, 3)
         for _ = 1, attempts do
             pcall(function()
@@ -3388,6 +3408,15 @@ runsvc.Heartbeat:Connect(function()
     fflag()
     updatesling()
     tickAmmo()
+
+    -- FIX: khi ragebot master tắt, dừng hết và không làm gì thêm
+    if not rageOn() then
+        if config.target.enabled or config.state.csyncactive then
+            cleartarget()
+        end
+        return
+    end
+
     if config.target.auto and not config.target.manualkey then
         local current, _, melee = getammo()
         local hasammo = current == nil or current > 0 or melee
@@ -3729,6 +3758,13 @@ LeftGroupBox:AddToggle("AimbotEnabled", {
     Text = "Enable Aimbot",
     Default = false,
     Callback = function(v) Aimbot:setEnabled(v) end
+}):AddKeyPicker("AimbotKey", {
+    Text = "Aimbot",
+    Default = "None",
+    Mode = "Hold",
+    NoUI = false,
+    SyncToggleState = true,
+    Callback = function(state) Aimbot:setEnabled(state) end
 })
 LeftGroupBox:AddToggle("AimbotVisCheck", {
     Text = "Visible Check",
@@ -3792,6 +3828,21 @@ FlickGroupBox:AddToggle("FlickEnabled", {
     Callback = function(v)
         Aimbot.flickEnabled = v
         if not v then
+            Aimbot._trajectory = nil
+            Aimbot._selected = nil
+            Aimbot._state = "Idle"
+            Aimbot._elapsed = 0
+        end
+    end
+}):AddKeyPicker("FlickKey", {
+    Text = "Flick Bot",
+    Default = "None",
+    Mode = "Toggle",
+    NoUI = false,
+    SyncToggleState = true,
+    Callback = function(state)
+        Aimbot.flickEnabled = state
+        if not state then
             Aimbot._trajectory = nil
             Aimbot._selected = nil
             Aimbot._state = "Idle"
@@ -3877,8 +3928,8 @@ SilentGroupBox:AddToggle("SilentAimEnabled", {
     Text = "Silent Aim",
     Default = "None",
     Mode = "Toggle",
-    NoUI = true,
-    SyncToggleState = false,
+    NoUI = false,
+    SyncToggleState = true,
     Callback = function(state)
         silentAim.enabled = state
         if not state then curtarget = nil end
@@ -3937,6 +3988,20 @@ CharacterGroupBox:AddToggle("UndergroundEnabled", {
     Callback = function(v)
         undergroundEnabled = v
         if v then
+            startUnderground()
+        else
+            stopUnderground()
+        end
+    end
+}):AddKeyPicker("UndergroundKey", {
+    Text = "Underground",
+    Default = "None",
+    Mode = "Toggle",
+    NoUI = false,
+    SyncToggleState = true,
+    Callback = function(state)
+        undergroundEnabled = state
+        if state then
             startUnderground()
         else
             stopUnderground()
@@ -4054,9 +4119,18 @@ RageGroupBox:AddToggle("RagebotEnabled", {
         Ragebot.config.target.autoshoot = v
         Ragebot.config.target.manualkey = false
         if not v then
+            -- Tắt hoàn toàn: dừng sync, xóa target, reset auto
+            Ragebot.config.target.auto = false
+            Ragebot.config.target.enabled = false
+            Ragebot.config.target.character = nil
             Ragebot.config.target.evasion.mode = "Normal"
             if stopsync then stopsync() end
+            if stopTranslocateSync then stopTranslocateSync() end
             if Ragebot.stopvoid then Ragebot.stopvoid() end
+            -- Reset voidspam
+            Ragebot.config.voidspam.phase = nil
+            Ragebot.config.voidspam.shotIssued = false
+            if Ragebot.clrVoidSnap then Ragebot.clrVoidSnap() end
         elseif Ragebot.config.target.evasion.mode == "Translocate" then
             if Ragebot.startTranslocateSync then
                 Ragebot.startTranslocateSync()
@@ -4067,7 +4141,7 @@ RageGroupBox:AddToggle("RagebotEnabled", {
     Text = "Ragebot",
     Default = "None",
     Mode = "Toggle",
-    NoUI = true,
+    NoUI = false,
     SyncToggleState = false,
     Callback = function()
         if Ragebot.config.target.auto then
@@ -4085,34 +4159,28 @@ RageGroupBox:AddToggle("RagebotEnabled", {
     end
 })
 
-local RageControlsDep = RageGroupBox:AddDependencyBox()
--- All Ragebot controls stay hidden until RagebotEnabled is true.
+-- ── Ragebot controls (phẳng, không dependency box lồng nhau) ─────────────────
 
-local RageNormalGate = { Type = "Toggle", Value = true }
-local RageTranslocateGate = { Type = "Toggle", Value = false }
+RageGroupBox:AddToggle("RagebotAutoTarget", {
+    Text = "Auto Target",
+    Default = false,
+    Callback = function(v)
+        if not rageOn() then v = false end
+        Ragebot.config.target.auto = v
+    end
+})
 
-local RageNormalDep
-local RageTranslocateDep
-
-RageControlsDep:AddDropdown("RagebotMode", {
-    Text = "Mode",
-    Default = Ragebot.config.target.evasion.mode == "Translocate" and "Translocate" or "Normal",
+RageGroupBox:AddDropdown("RagebotMode", {
+    Text = "Ragebot Mode",
+    Default = "Normal",
     Values = { "Normal", "Translocate" },
     Callback = function(v)
         v = tostring(v or "Normal")
-
         if v == "Translocate" then
-            -- Always stop the previous Normal/Translocate loop before
-            -- starting the new mode. This prevents two Heartbeat handlers
-            -- from writing RootPart.CFrame at the same time.
             if stopsync then stopsync() end
             Ragebot.config.target.evasion.mode = "Translocate"
-            RageNormalGate.Value = false
-            RageTranslocateGate.Value = true
         else
             Ragebot.config.target.evasion.mode = "Normal"
-            RageNormalGate.Value = true
-            RageTranslocateGate.Value = false
             if stopsync then stopsync() end
             if Ragebot.config.target.evasion.translocate then
                 Ragebot.config.target.evasion.translocate.active = false
@@ -4120,188 +4188,52 @@ RageControlsDep:AddDropdown("RagebotMode", {
                 Ragebot.config.target.evasion.translocate.serverCFrame = nil
             end
         end
-
-        RageNormalDep:Update()
-        RageTranslocateDep:Update()
-
-        -- Do not leave the old orbit/void state running when changing evasion mode.
-        if Ragebot.stopvoid then
-            Ragebot.stopvoid()
-        end
-
+        if Ragebot.stopvoid then Ragebot.stopvoid() end
         if Ragebot.config.target.evasion.mode == "Translocate" then
-            if Ragebot.startTranslocateSync then
-                Ragebot.startTranslocateSync()
-            end
+            if Ragebot.startTranslocateSync then Ragebot.startTranslocateSync() end
         elseif Ragebot.refreshAtk then
             Ragebot.refreshAtk()
         end
     end
 })
 
-RageNormalDep = RageControlsDep:AddDependencyBox()
-
-RageTranslocateDep = RageControlsDep:AddDependencyBox()
-
-RageTranslocateDep:AddSlider("RagebotTranslocateOffset", {
-    Text = "Translocate Offset",
-    Default = Ragebot.config.target.evasion.translocate.offset or -5,
-    Min = -5,
+RageGroupBox:AddSlider("RagebotShootFrames", {
+    Text = "Ragebot Shoot Frames",
+    Default = 1,
+    Min = 1,
     Max = 5,
-    Rounding = 1,
-    Compact = true,
+    Rounding = 0,
     Callback = function(v)
-        Ragebot.config.target.evasion.translocate.offset = tonumber(v) or -5
-        if Ragebot.config.target.evasion.mode == "Translocate"
-            and Ragebot.startTranslocateSync then
-            Ragebot.startTranslocateSync()
-        end
+        Ragebot._shootFrames = math.floor(tonumber(v) or 1)
     end
 })
 
-RageTranslocateGate.Value = Ragebot.config.target.evasion.mode == "Translocate"
-RageTranslocateDep:SetupDependencies({
-    { RageTranslocateGate, true }
+RageGroupBox:AddSlider("RagebotStability", {
+    Text = "Stability",
+    Default = 0,
+    Min = 0,
+    Max = 1.5,
+    Rounding = 3,
+    Callback = function(v)
+        Ragebot._stability = tonumber(v) or 0
+    end
 })
-RageTranslocateDep:Update()
 
-RageNormalDep:AddToggle("RagebotAutoTarget", {
-    Text = "Auto Target",
+RageGroupBox:AddToggle("RagebotVoidSpam", {
+    Text = "Void",
     Default = false,
-    Callback = function(v)
-        Ragebot.config.target.auto = v
-    end
-})
-
-local RageUnderGate = { Type = "Toggle", Value = false }
-local RageUnderDep = RageNormalDep:AddDependencyBox()
-
-RageNormalDep:AddDropdown("RagebotAttackPosition", {
-    Text = "Attack Position",
-    Default = "default",
-    Values = {"default", "under"},
-    Callback = function(v)
-        Ragebot.config.target.attackPosition = v
-        RageUnderGate.Value = (v == "under")
-        RageUnderDep:Update()
-        if Ragebot.config.state.csyncactive and Ragebot.refreshAtk then
-            Ragebot.refreshAtk()
-        end
-    end
-})
-
-RageUnderDep:AddSlider("RagebotUnderOffset", {
-    Text = "Under Offset",
-    Default = Ragebot.config.target.underOffset or 4,
-    Min = 1,
-    Max = 25,
-    Rounding = 1,
-    Compact = true,
-    Callback = function(v)
-        Ragebot.config.target.underOffset = v
-        if Ragebot.config.target.attackPosition == "under"
-            and Ragebot.config.state.csyncactive
-            and Ragebot.refreshAtk then
-            Ragebot.refreshAtk()
-        end
-    end
-})
-
-RageUnderDep:SetupDependencies({
-    { RageUnderGate, true }
-})
-
-RageUnderGate.Value = Ragebot.config.target.attackPosition == "under"
-RageUnderDep:Update()
-
-RageNormalDep:AddSlider("RagebotAttackOffset", {
-    Text = "Attack Offset",
-    Default = 4,
-    Min = 1,
-    Max = 25,
-    Rounding = 0,
-    Compact = true,
-    Callback = function(v)
-        Ragebot.config.target.attackOffset = math.clamp(tonumber(v) or 4, 1, 25)
-        if Ragebot.refreshAtk then
-            Ragebot.refreshAtk()
-        end
-    end
-})
-
-RageNormalDep:AddDropdown("RagebotWeapon", {
-    Text = "Weapon",
-    Values = {"primary", "secondary", "melee"},
-    Default = Ragebot.config.target.weaponPick or "primary",
-    Callback = function(v)
-        Ragebot.config.target.weaponPick = v
-        if Ragebot.config.state.csyncactive and Ragebot.refreshAtk then
-            Ragebot.refreshAtk()
-        end
-        if Ragebot.config.target.evasion.mode ~= "Translocate" and Ragebot.eqSlot then
-            Ragebot.eqSlot()
-        end
-    end
-})
-
-RageNormalDep:AddSlider("RagebotShootAttempts", {
-    Text = "Shoot Attempts",
-    Default = Ragebot.config.target.shootAttempts or 1,
-    Min = 1,
-    Max = 3,
-    Rounding = 0,
-    Suffix = "x",
-    Callback = function(v)
-        Ragebot.config.target.shootAttempts =
-            math.clamp(math.floor(tonumber(v) or 1), 1, 3)
-    end
-})
-
-RageNormalDep:AddDropdown("RagebotHitPart", {
-    Text = "Hit Part",
-    Default = Ragebot.config.target.hitpart or "Head",
-    Values = {"Head", "HumanoidRootPart", "Torso", "UpperTorso", "Closest", "Random"},
-    Callback = function(v)
-        Ragebot.config.target.hitpart = v
-    end
-})
-
-RageNormalDep:AddToggle("RagebotPrediction", {
-    Text = "Prediction",
-    Default = Ragebot.config.prediction.enabled or false,
-    Callback = function(v)
-        Ragebot.config.prediction.enabled = v
-    end
-})
-
-RageNormalDep:AddSlider("RagebotPredictionMult", {
-    Text = "Prediction Mult",
-    Default = Ragebot.config.prediction.multiplier or 1.2,
-    Min = 0.1,
-    Max = 3,
-    Rounding = 1,
-    Callback = function(v)
-        Ragebot.config.prediction.multiplier = v
-    end
-})
-
-RageNormalDep:AddToggle("RagebotVoidSpam", {
-    Text = "Voidspam",
-    Default = Ragebot.config.voidspam.enabled or false,
     Callback = function(v)
         Ragebot.config.voidspam.enabled = v
         if not v then
             Ragebot.config.voidspam.phase = nil
-            if Ragebot.clrVoidSnap then
-                Ragebot.clrVoidSnap()
-            end
+            if Ragebot.clrVoidSnap then Ragebot.clrVoidSnap() end
         end
     end
 })
 
-RageNormalDep:AddSlider("RagebotAttack", {
+RageGroupBox:AddSlider("RagebotAttack", {
     Text = "Attack",
-    Default = Ragebot.config.voidspam.shoot_min or 1,
+    Default = 1,
     Min = 0,
     Max = 2,
     Rounding = 1,
@@ -4313,9 +4245,9 @@ RageNormalDep:AddSlider("RagebotAttack", {
     end
 })
 
-RageNormalDep:AddSlider("RagebotHide", {
+RageGroupBox:AddSlider("RagebotHide", {
     Text = "Hide",
-    Default = Ragebot.config.voidspam.hide_min or 1,
+    Default = 1,
     Min = 0,
     Max = 2,
     Rounding = 1,
@@ -4327,27 +4259,177 @@ RageNormalDep:AddSlider("RagebotHide", {
     end
 })
 
-RageNormalDep:AddSlider("RagebotReloadDelay", {
-    Text = "Reload -> Attack Delay",
-    Default = Ragebot.config.state.reloadDelay or 0.5,
-    Min = 0.01,
-    Max = 1,
-    Rounding = 2,
-    Suffix = " s",
-    Compact = true,
+RageGroupBox:AddDropdown("RagebotAttackPosition", {
+    Text = "Attack Position",
+    Default = "default",
+    Values = {"default", "under"},
     Callback = function(v)
-        Ragebot.config.state.reloadDelay = math.clamp(tonumber(v) or 0.5, 0.01, 1)
+        Ragebot.config.target.attackPosition = v
+        if Ragebot.config.state.csyncactive and Ragebot.refreshAtk then
+            Ragebot.refreshAtk()
+        end
     end
 })
 
-RageNormalGate.Value = Ragebot.config.target.evasion.mode ~= "Translocate"
-RageNormalDep:SetupDependencies({
-    { RageNormalGate, true }
+RageGroupBox:AddSlider("RagebotUnderOffset", {
+    Text = "Under Offset",
+    Default = 4,
+    Min = 0,
+    Max = 15,
+    Rounding = 1,
+    Compact = true,
+    Callback = function(v)
+        Ragebot.config.target.underOffset = tonumber(v) or 4
+        if Ragebot.config.state.csyncactive and Ragebot.refreshAtk then
+            Ragebot.refreshAtk()
+        end
+    end
 })
-RageNormalDep:Update()
 
-RageControlsDep:SetupDependencies({
-    { Toggles.RagebotEnabled, true }
+RageGroupBox:AddDropdown("RagebotWeapon", {
+    Text = "Weapons",
+    Values = {"primary", "secondary", "melee"},
+    Default = "primary",
+    Callback = function(v)
+        Ragebot.config.target.weaponPick = v
+        if Ragebot.config.state.csyncactive and Ragebot.refreshAtk then
+            Ragebot.refreshAtk()
+        end
+        if Ragebot.config.target.evasion.mode ~= "Translocate" and Ragebot.eqSlot then
+            Ragebot.eqSlot()
+        end
+    end
+})
+
+RageGroupBox:AddSlider("RagebotShootAttempts", {
+    Text = "Reload & Swap",
+    Default = 1,
+    Min = 1,
+    Max = 3,
+    Rounding = 0,
+    Suffix = "x",
+    Callback = function(v)
+        Ragebot.config.target.shootAttempts = math.clamp(math.floor(tonumber(v) or 1), 1, 3)
+    end
+})
+
+RageGroupBox:AddSlider("RagebotTranslocateOffset", {
+    Text = "Translocate Offset",
+    Default = -5,
+    Min = -5,
+    Max = 5,
+    Rounding = 1,
+    Compact = true,
+    Callback = function(v)
+        Ragebot.config.target.evasion.translocate.offset = tonumber(v) or -5
+    end
+})
+
+-- Desync (kicia-style: hook viewAngle / camera rotation remote để server thấy
+-- góc khác client, bypass hitbox stabilization)
+do
+    local _desyncEnabled = false
+    local _desyncConn = nil
+    local _desyncOriginalEncode = nil
+    local _desyncPitch = 89   -- pitch server thấy (độ)
+    local _desyncYaw   = 0    -- yaw server thấy (offset độ)
+
+    local function encodeSingleByte(radVal)
+        -- Kicia dùng single-precision float encode → 4 bytes
+        -- Ở đây ta dùng raw string pack để pack float32
+        local ok, r = pcall(string.pack, "<f", radVal)
+        return ok and r or ""
+    end
+
+    local function applyDesyncHook(on)
+        -- Hook vào UpdateCameraRotation remote để inject fake angles
+        -- khi desync bật, server thấy pitch/yaw giả
+        pcall(function()
+            local rs = cloneref(game:GetService("ReplicatedStorage"))
+            local remote = rs.Remotes and rs.Remotes.Replication
+                and rs.Remotes.Replication.Fighter
+                and rs.Remotes.Replication.Fighter.UpdateCameraRotation
+
+            if not remote then
+                -- Tìm bằng tên
+                for _, obj in ipairs(rs:GetDescendants()) do
+                    if obj:IsA("RemoteEvent") and obj.Name:lower():find("camera") then
+                        remote = obj
+                        break
+                    end
+                end
+            end
+
+            if not remote then return end
+
+            if on then
+                if _desyncOriginalEncode then return end -- đã hook
+                local oldFireServer
+                oldFireServer = hookmetamethod(remote, "__namecall", function(self, ...)
+                    local method = getnamecallmethod()
+                    if method == "FireServer" and self == remote and _desyncEnabled then
+                        -- Inject fake CameraRotation: pitch = _desyncPitch, yaw unchanged
+                        local fakeData = encodeSingleByte(math.rad(_desyncPitch))
+                                       .. encodeSingleByte(math.rad(_desyncYaw))
+                        return oldFireServer(self, fakeData)
+                    end
+                    return oldFireServer(self, ...)
+                end)
+                _desyncOriginalEncode = oldFireServer
+            else
+                -- Unhook: không thể unhook hookmetamethod dinamis, set flag false
+                _desyncEnabled = false
+            end
+        end)
+    end
+
+    -- Expose để UI có thể toggle
+    Ragebot._desyncState = {
+        setEnabled = function(v)
+            _desyncEnabled = v
+            if v then applyDesyncHook(true) end
+        end,
+        setPitch = function(v) _desyncPitch = tonumber(v) or 89 end,
+        setYaw   = function(v) _desyncYaw   = tonumber(v) or 0  end,
+    }
+end
+
+local RageDesyncGroup = Tabs.Main:AddRightGroupbox("Desync", "shield")
+
+RageDesyncGroup:AddToggle("DesyncEnabled", {
+    Text = "Enable Desync",
+    Default = false,
+    Callback = function(v)
+        if Ragebot._desyncState then
+            Ragebot._desyncState.setEnabled(v)
+        end
+    end
+})
+
+RageDesyncGroup:AddSlider("DesyncPitch", {
+    Text = "Fake Pitch",
+    Default = 89,
+    Min = -89,
+    Max = 89,
+    Rounding = 0,
+    Suffix = "°",
+    Compact = true,
+    Callback = function(v)
+        if Ragebot._desyncState then Ragebot._desyncState.setPitch(v) end
+    end
+})
+
+RageDesyncGroup:AddSlider("DesyncYaw", {
+    Text = "Fake Yaw Offset",
+    Default = 0,
+    Min = -180,
+    Max = 180,
+    Rounding = 0,
+    Suffix = "°",
+    Compact = true,
+    Callback = function(v)
+        if Ragebot._desyncState then Ragebot._desyncState.setYaw(v) end
+    end
 })
 
 -- Combat exploits
