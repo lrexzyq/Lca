@@ -7639,7 +7639,6 @@ SaveManager:BuildConfigSection(Tabs["UI Settings"])
 SaveManager:LoadAutoloadConfig()
 
 Library:Notify("CreU loaded successfully", 3)
-end
 
 buildCore()
 
