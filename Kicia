@@ -26992,7 +26992,8 @@ local P10 = Tabs.Misc
             BuildRivalsUi()
             RivalsRuntime.Initialize(Window)
             end
-    else
+            end
+   else
         if Library and type(Library.Notify) == 'function' then
             Library:Notify({ Title = 'KiciaHook', Description = 'This script only supports RIVALS.', Time = 5 })
         end
