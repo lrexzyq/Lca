@@ -12,13 +12,13 @@ Library.ForceCheckbox = false
 Library.ShowToggleFrameInKeybinds = true
 Library.NotifyOnError = true
 local Window = Library:CreateWindow({
-    Title = "son",
+    Title = "mspaint",
     Icon = 95816097006870,
     ShowCustomCursor = true,
     NotifySide = "Right",
     Footer = {
-        "version: son |",
-        { Text = "discord.gg/Kicia", Copyable = true },
+        "version: example |",
+        { Text = "discord.gg/mspaint", Copyable = true },
         "|",
         { Text = "user id", Copyable = true, CopyText = tostring(LocalPlayer.UserId) },
     },
@@ -26956,6 +26956,7 @@ local P10 = Tabs.Misc
                 RivalsRuntimeBridge.QueueAutoLoadoutSubmission()
                 SharedUI:notify_loaded(5)
             end
+            BuildRivalsUi()
             if GuardRivalsCallback('EnumLibrary_StartupBarrier', function()
                 local enumLibrary = ResolveEnumLibrary()
                 if not enumLibrary then
@@ -26989,11 +26990,10 @@ local P10 = Tabs.Misc
             end)() ~= true then
                 return
             end
-            BuildRivalsUi()
             RivalsRuntime.Initialize(Window)
             end
             end
-   else
+    else
         if Library and type(Library.Notify) == 'function' then
             Library:Notify({ Title = 'KiciaHook', Description = 'This script only supports RIVALS.', Time = 5 })
         end
