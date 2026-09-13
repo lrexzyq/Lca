@@ -1,5 +1,5 @@
 --ngl i am gay                     
-local repo = "https://raw.githubusercontent.com/lrexzyq/Crefy/main/"
+local repo = "https://raw.githubusercontent.com/lrexzyq/Lca/main/"
 
 local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
 local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
