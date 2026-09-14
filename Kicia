@@ -26340,6 +26340,7 @@ local RivalsRuntime = {}
                 return true
             end)()
             end
+            end
     else
         if Library and type(Library.Notify) == 'function' then
             Library:Notify({ Title = 'KiciaHook', Description = 'This script only supports RIVALS.', Time = 5 })
