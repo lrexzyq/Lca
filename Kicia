@@ -15316,7 +15316,6 @@ ErrorReporter.set_game(GameName)
                     if ok and active then return end
                 end
                 if RivalsRuntimeBridge.MovementRecorder.IsCameraClaimed()
-                    or RivalsRuntimeBridge.IsFlickbotCameraClaimed()
                     or not AimbotBridge.IsCameraAimEnabled()
                     or not IsAimbotGameReady()
                     or not IsAimbotCameraReady()
@@ -15329,8 +15328,8 @@ ErrorReporter.set_game(GameName)
                 CameraAimbot:setTeamCheck(not (Toggles.P2S1T15 and Toggles.P2S1T15.Value == false))
                 CameraAimbot:setFOV(Options.P2S1S2 and Options.P2S1S2.Value or 360)
                 CameraAimbot:setMaxDist(Options.P2S1S13 and Options.P2S1S13.Value or 10000000)
-                CameraAimbot:setSmoothing(Options.P2S1S14 and Options.P2S1S14.Value or 0.01)
-                CameraAimbot:setPrediction(Options.P2S1S15 and Options.P2S1S15.Value or 0.01)
+                CameraAimbot:setSmoothing(Options.P2S2S1 and Options.P2S2S1.Value or 0.01)
+                CameraAimbot:setPrediction(Options.P2S1S14 and Options.P2S1S14.Value or 0.01)
                 CameraAimbot:setHitPart(Options.P2S1D5 and Options.P2S1D5.Value or 'Head')
                 CameraAimbot:update(deltaTime)
             end
@@ -24826,12 +24825,16 @@ ErrorReporter.set_game(GameName)
                         Default = "Camera",
                         Multi = false,
                         Text = "Mode",
+                        Callback = function()
+                            AimbotBridge.ResetCameraAimRandomState()
+                            AimbotBridge.ResetAimbotRuntimeState()
+                        end,
                     })
                     Combat:AddSlider("P2S1S2", { Text = "FOV", Default = 360, Min = 1, Max = 360, Rounding = 0, Compact = true })
                     local CameraSettings = Combat:AddDependencyBox()
                     CameraSettings:AddSlider("P2S1S13", { Text = "Max Distance", Default = 10000000, Min = 50, Max = 10000000, Rounding = 0, Compact = true })
-                    CameraSettings:AddSlider("P2S1S14", { Text = "Smoothing", Default = 0.01, Min = 0.01, Max = 100, Rounding = 2, Compact = true })
-                    CameraSettings:AddSlider("P2S1S15", { Text = "Prediction", Default = 0.01, Min = 0.01, Max = 0.5, Rounding = 2, Compact = true })
+                    CameraSettings:AddSlider("P2S2S1", { Text = "Smoothing", Default = 0.01, Min = 0.01, Max = 100, Rounding = 2, Compact = true })
+                    CameraSettings:AddSlider("P2S1S14", { Text = "Prediction", Default = 0.01, Min = 0.01, Max = 0.5, Rounding = 2, Compact = true })
                     CameraSettings:AddToggle("P2S1T14", { Text = "Visible Check", Default = true })
                     CameraSettings:AddToggle("P2S1T15", { Text = "Team Check", Default = true })
                     CameraSettings:AddDropdown("P2S1D5", {
@@ -24917,12 +24920,6 @@ ErrorReporter.set_game(GameName)
                         Default = 1,
                         Min = 1,
                         Max = 5,
-                        Rounding = 0,
-                        Compact = true,
-                    })
-                        Default = 2,
-                        Min = 1,
-                        Max = 3,
                         Rounding = 0,
                         Compact = true,
                     })
@@ -27263,20 +27260,12 @@ local RivalsRuntime = {}
                     { idx = 'P2S1T5', type = 'Toggle', value = true },
                     { idx = 'P2S1D2', type = 'Dropdown', value = 'Auto' },
                     { idx = 'P2S1S13', type = 'Slider', value = 10000000 },
+                    { idx = 'P2S2S1', type = 'Slider', value = 0.01 },
                     { idx = 'P2S1S14', type = 'Slider', value = 0.01 },
-                    { idx = 'P2S1S15', type = 'Slider', value = 0.01 },
                     { idx = 'P2S1T14', type = 'Toggle', value = true },
                     { idx = 'P2S1T15', type = 'Toggle', value = true },
                     { idx = 'P2S1D5', type = 'Dropdown', value = 'Head' },
-                    { idx = 'P2S1T12', type = 'Toggle', value = false },
-                    { idx = 'P2S1T12K', type = 'KeyPicker', mode = 'Hold', key = 'Unknown', modifiers = {} },
-                    { idx = 'P2S1T13', type = 'Toggle', value = false },
-                    { idx = 'P2S1S8', type = 'Slider', value = 0 },
-                    { idx = 'P2S1S9', type = 'Slider', value = 250 },
-                    { idx = 'P2S1S10', type = 'Slider', value = 110 },
-                    { idx = 'P2S1S11', type = 'Slider', value = 12 },
-                    { idx = 'P2S1S12', type = 'Slider', value = 30 },
-                    { idx = 'P2S1S2', type = 'Slider', value = 282 },
+                    { idx = 'P2S1S2', type = 'Slider', value = 360 },
                     { idx = 'P2S1T6', type = 'Toggle', value = false },
                     { idx = 'P2S1T7K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
                     { idx = 'P2S1S7', type = 'Slider', value = 0 },
@@ -27288,7 +27277,6 @@ local RivalsRuntime = {}
                         ['Grenade Launcher'] = true,
                         RPG = true,
                     } },
-                    { idx = 'P2S2S1', type = 'Slider', value = 35 },
                     { idx = 'P4S1T1', type = 'Toggle', value = true },
                     { idx = 'P4S1S4', type = 'Slider', value = 85 },
                     { idx = 'P4S1T2', type = 'Toggle', value = true },
