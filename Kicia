@@ -876,7 +876,7 @@ return {
                 RandomBaseRadius = function() return optValue('P8S4S4', 100) end,
                 RandomRadiusFactor = function() return optValue('P8S4S5', 0.5) end,
                 RandomAnchorFromCharacter = function() return togValue('P8S4T8', false) end,
-                RepositionInterval = function() return 0.3 end,
+                RepositionInterval = function() return optValue('P8S4PB7', 0.3) end,
             }
             local PB_DEPTH_FORWARD = { Min = 0, Max = 4 }
             local PB_DEPTH_FORWARD_FREQ = 5
@@ -885,6 +885,27 @@ return {
             local PB_FALLBACK_BASE_RADIUS = 100
             local PB_FALLBACK_RADIUS_FACTOR = 0.5
             local PB_FALLBACK_ANCHOR_FROM_CHARACTER = false
+            local function GetPBDepthForward()
+                return {
+                    Min = math.max(0, tonumber(optValue('P8S4PB1', PB_DEPTH_FORWARD.Min)) or PB_DEPTH_FORWARD.Min),
+                    Max = math.max(0, tonumber(optValue('P8S4PB2', PB_DEPTH_FORWARD.Max)) or PB_DEPTH_FORWARD.Max),
+                }
+            end
+            local function GetPBDepthUp()
+                return {
+                    Min = math.max(0, tonumber(optValue('P8S4PB3', PB_DEPTH_UP.Min)) or PB_DEPTH_UP.Min),
+                    Max = math.max(0, tonumber(optValue('P8S4PB4', PB_DEPTH_UP.Max)) or PB_DEPTH_UP.Max),
+                }
+            end
+            local function GetPBFallbackRadius()
+                return tonumber(optValue('P8S4PB8', PB_FALLBACK_BASE_RADIUS)) or PB_FALLBACK_BASE_RADIUS
+            end
+            local function GetPBFallbackFactor()
+                return tonumber(optValue('P8S4PB9', PB_FALLBACK_RADIUS_FACTOR)) or PB_FALLBACK_RADIUS_FACTOR
+            end
+            local function GetPBFallbackAnchor()
+                return togValue('P8S4PB10', PB_FALLBACK_ANCHOR_FROM_CHARACTER)
+            end
             local function findChild(root, ...)
                 local node = root
                 for _, name in ipairs({ ... }) do
@@ -1889,8 +1910,10 @@ return {
                 return false
             end
             function ProjectileBreaker:_ScanBatch(envId)
-                local depthForwardMax = PB_DEPTH_FORWARD.Min + PB_DEPTH_FORWARD.Max
-                local upMid = (PB_DEPTH_UP.Min + PB_DEPTH_UP.Max) * 0.5
+                local pbForward = GetPBDepthForward()
+                local depthForwardMax = pbForward.Min + pbForward.Max
+                local pbUp = GetPBDepthUp()
+                local upMid = (pbUp.Min + pbUp.Max) * 0.5
                 local forwardMid = depthForwardMax * 0.5
                 local scanned = 0
                 local function consider(part)
@@ -1940,19 +1963,19 @@ return {
                 if os.clock() < self._nextPositionCooldown then
                     local last = self._lastBreakSurface
                     if last ~= nil then
-                        return surfaceCFrame(last, depthOsc(PB_DEPTH_UP, PB_DEPTH_UP_FREQ), depthOsc(PB_DEPTH_FORWARD, PB_DEPTH_FORWARD_FREQ))
+                        return surfaceCFrame(last, depthOsc(GetPBDepthUp(), tonumber(optValue('P8S4PB5', PB_DEPTH_UP_FREQ)) or PB_DEPTH_UP_FREQ), depthOsc(GetPBDepthForward(), tonumber(optValue('P8S4PB6', PB_DEPTH_FORWARD_FREQ)) or PB_DEPTH_FORWARD_FREQ))
                     end
                 end
                 if not self:_HasProjectileThreat() then
                     self._lastBreakSurface = nil
-                    return scatterFar(clientCF.Position, PB_FALLBACK_ANCHOR_FROM_CHARACTER, PB_FALLBACK_BASE_RADIUS, PB_FALLBACK_RADIUS_FACTOR)
+                    return scatterFar(clientCF.Position, GetPBFallbackAnchor(), GetPBFallbackRadius(), GetPBFallbackFactor())
                 end
                 local breakLine = self:_BreakLine()
                 if breakLine == nil then
-                    return scatterFar(clientCF.Position, PB_FALLBACK_ANCHOR_FROM_CHARACTER, PB_FALLBACK_BASE_RADIUS, PB_FALLBACK_RADIUS_FACTOR)
+                    return scatterFar(clientCF.Position, GetPBFallbackAnchor(), GetPBFallbackRadius(), GetPBFallbackFactor())
                 end
                 self._lastBreakSurface = breakLine
-                return surfaceCFrame(breakLine, depthOsc(PB_DEPTH_UP, PB_DEPTH_UP_FREQ), depthOsc(PB_DEPTH_FORWARD, PB_DEPTH_FORWARD_FREQ))
+                return surfaceCFrame(breakLine, depthOsc(GetPBDepthUp(), tonumber(optValue('P8S4PB5', PB_DEPTH_UP_FREQ)) or PB_DEPTH_UP_FREQ), depthOsc(GetPBDepthForward(), tonumber(optValue('P8S4PB6', PB_DEPTH_FORWARD_FREQ)) or PB_DEPTH_FORWARD_FREQ))
             end
             function ProjectileBreaker:ResetState()
                 self._nextPositionCooldown = -1
@@ -2101,6 +2124,7 @@ return {
                     _stateHook = StateHook.new(),
                     _characterController = nil,
                     _boundRootPart = nil,
+                    _boundEnvironmentID = nil,
                     _lastTargetWorld = nil,
                     _lastDefensiveViewAngles = nil,
                 }, Controller)
@@ -2206,6 +2230,11 @@ return {
             function Controller:Update(dt)
                 local fighter = resolveLocalFighter()
                 local characterController = self:_EnsureCharacterController()
+                local environmentId = fighter and (rawget(fighter, 'EnvironmentID') or fighter.EnvironmentID) or nil
+                if environmentId ~= self._boundEnvironmentID then
+                    self._projectileBreaker:BindEnvironment(environmentId)
+                    self._boundEnvironmentID = environmentId
+                end
                 if fighter == nil or characterController == nil or not self._enabled then
                     self:_Reset()
                     return
@@ -13223,7 +13252,7 @@ ErrorReporter.set_game(GameName)
                 local cacheWindow = AimbotBridge.ResolveAimbotSilentHookTargetCacheWindow(item)
                 local cachedTarget = state.HookTarget
                 if cachedTarget and state.HookTargetCapturedAt > 0 and (now - state.HookTargetCapturedAt) <= cacheWindow then
-                    local aimPart = Options.P2S1D2 and Options.P2S1D2.Value or 'Auto'
+                    local aimPart = Options.P2S1D5 and Options.P2S1D5.Value or 'Head'
                     local mousePosition = AimbotBridge.GetAimbotPointerPosition()
                     local maxDistance = DEFAULT_ESP_MAX_DISTANCE
                     local refreshedTarget = RivalsRuntimeBridge.RefreshAimbotTargetInfo(cachedTarget, aimPart, mousePosition, maxDistance, AIMBOT_VISIBILITY_CACHE_PROFILE)
@@ -13459,7 +13488,18 @@ ErrorReporter.set_game(GameName)
                 end
                 if aimPart == 'Head' then
                     addNamed('HitboxHead')
+                    addNamed('Head')
                 elseif aimPart == 'HumanoidRootPart' then
+                    addNamed('HitboxBody')
+                    addNamed('HumanoidRootPart')
+                elseif aimPart == 'UpperTorso' then
+                    addNamed('UpperTorso')
+                    addNamed('Torso')
+                    addNamed('HitboxBody')
+                elseif aimPart == 'LowerTorso' then
+                    addNamed('LowerTorso')
+                    addNamed('Torso')
+                    addNamed('HumanoidRootPart')
                     addNamed('HitboxBody')
                 elseif aimPart == 'Closest' then
                     addNamed('HitboxBody')
@@ -13814,7 +13854,7 @@ ErrorReporter.set_game(GameName)
                 if not ignoreFov and type(fovRadius) ~= 'number' then
                     fovRadius = Options.P2S1S2 and Options.P2S1S2.Value or 170
                 end
-                allowHiddenTargets = allowHiddenTargets == true
+                allowHiddenTargets = allowHiddenTargets == true or (Toggles.P2S1T14 and Toggles.P2S1T14.Value == false)
                 requireVisible = requireVisible == true
                 local equippedItem = AimbotBridge.ResolveAimbotEquippedItem()
                 local equippedInfo = equippedItem and equippedItem.Info or nil
@@ -13825,6 +13865,11 @@ ErrorReporter.set_game(GameName)
                 if not part or not part:IsA('BasePart') or not worldPosition then
                     RivalsRuntimeBridge.RecordTargetValidityRejection('no_part_resolved', subject, player, targetType)
                     return nil
+                end
+                local prediction = math.clamp(tonumber(Options.P2S1S14 and Options.P2S1S14.Value) or 0.1, 0.01, 0.5)
+                local velocity = part.AssemblyLinearVelocity
+                if velocity and velocity.Magnitude < 5000 then
+                    worldPosition = worldPosition + velocity * prediction
                 end
                 if requireVisible and not isVisible then
                     RivalsRuntimeBridge.RecordTargetValidityRejection('not_visible', subject, player, targetType)
@@ -13972,7 +14017,7 @@ ErrorReporter.set_game(GameName)
                 if not hitInstance then
                     return nil
                 end
-                local aimPart = Options.P2S1D2 and Options.P2S1D2.Value or 'Auto'
+                local aimPart = Options.P2S1D5 and Options.P2S1D5.Value or 'Head'
                 local subject = hitInstance:FindFirstAncestorWhichIsA('Model')
                 if not subject then
                     return nil
@@ -14133,9 +14178,11 @@ ErrorReporter.set_game(GameName)
             end
             local CollectBestAimbotTarget = function(requireVisible, ignoreFovOverride)
                 EnsureAimbotTargetTracking()
-                local aimPart = Options.P2S1D2 and Options.P2S1D2.Value or 'Auto'
+                local aimPart = Options.P2S1D5 and Options.P2S1D5.Value or 'Head'
                 local fovRadius = Options.P2S1S2 and Options.P2S1S2.Value or 170
-                local maxDistance = DEFAULT_ESP_MAX_DISTANCE
+                local maxDistance = math.clamp(tonumber(Options.P2S1S13 and Options.P2S1S13.Value) or 10000, 50, 10000000)
+                local teamCheck = not (Toggles.P2S1T15 and Toggles.P2S1T15.Value == false)
+                local requireVisible = Toggles.P2S1T14 and Toggles.P2S1T14.Value == true
                 local ignoreFov = ignoreFovOverride
                 if ignoreFov == nil then
                     ignoreFov = AimbotBridge.IsAimbotIgnoreFovEnabled()
@@ -14151,7 +14198,7 @@ ErrorReporter.set_game(GameName)
                     if player and player ~= LP and player.Parent == Players then
                         local entity = fighter.Entity
                         local subject = entity and entity.Model
-                        if not ShouldShow(player, false) then
+                        if teamCheck and not ShouldShow(player, false) then
                             RivalsRuntimeBridge.RecordTargetValidityRejection('team_or_self', subject, player, 'Players')
                         elseif FighterDataCache.ReadEntity(entity) then
                             RivalsRuntimeBridge.RecordTargetValidityRejection('invincible', subject, player, 'Players')
@@ -14182,6 +14229,45 @@ ErrorReporter.set_game(GameName)
             end
             local GetBestAimbotTarget = CollectBestAimbotTarget
             RivalsRuntimeBridge.GetBestAimbotTarget = GetBestAimbotTarget
+            RivalsRuntimeBridge.UpdateCameraAim = function(deltaTime)
+                if not AimbotBridge.IsCameraAimEnabled()
+                    or not IsAimbotGameReady()
+                    or not IsAimbotCameraReady()
+                    or not RivalsRuntimeBridge.IsReadyToFight() then
+                    AimbotBridge.ResetCameraAimRandomState()
+                    return
+                end
+                local camera = Workspace.CurrentCamera
+                if not camera then
+                    return
+                end
+                local targetInfo = GetBestAimbotTarget(true, false)
+                if not targetInfo or not targetInfo.worldPosition then
+                    return
+                end
+                if targetInfo.player and IsRivalsSpawnShieldActive(targetInfo.player.Character) then
+                    return
+                end
+                local controller = RivalsModsState.ResolveCameraController()
+                if controller and type(controller.SetRotation) == 'function' then
+                    local currentRotation = rawget(controller, 'Rotation')
+                    if typeof(currentRotation) == 'Vector2' then
+                        local pitch, yaw = CFrame.lookAt(camera.CFrame.Position, targetInfo.worldPosition):ToOrientation()
+                        local smoothing = tonumber(Options.P2S2S1 and Options.P2S2S1.Value) or 35
+                        local frameDelta = math.clamp(type(deltaTime) == 'number' and deltaTime or (1 / 60), 0, 0.1)
+                        local blendAlpha = math.clamp(1 - math.exp(-frameDelta * (2 + (smoothing * 0.58))), 0, 1)
+                        controller:SetRotation(Vector2.new(
+                            currentRotation.X + (pitch - currentRotation.X) * blendAlpha,
+                            currentRotation.Y + ((yaw - currentRotation.Y + math.pi) % (2 * math.pi) - math.pi) * blendAlpha
+                        ))
+                        return
+                    end
+                end
+                local targetCF = CFrame.lookAt(camera.CFrame.Position, targetInfo.worldPosition)
+                local smoothing = tonumber(Options.P2S2S1 and Options.P2S2S1.Value) or 35
+                local alpha = math.clamp(deltaTime * (1 / (smoothing / 100 + 0.01)), 0, 1)
+                camera.CFrame = camera.CFrame:Lerp(targetCF, alpha)
+            end
             RivalsRuntimeBridge.BeginAimbotSilentShot = function(item)
                 if (AimbotSilentState.ShotPrimeDepth or 0) > 0 then
                     return false, nil, nil
@@ -23644,8 +23730,13 @@ ErrorReporter.set_game(GameName)
                         Default = "Camera",
                         Multi = false,
                         Text = "Mode",
+                        Callback = function()
+                            AimbotBridge.ResetCameraAimRandomState()
+                            AimbotBridge.ResetAimbotRuntimeState()
+                        end,
                     })
-                    Combat:AddSlider("P2S1S2", {
+                    local AimbotCameraSettings = Combat:AddDependencyBox()
+                    AimbotCameraSettings:AddSlider("P2S1S2", {
                         Text = "FOV",
                         Default = 180,
                         Min = 1,
@@ -23653,7 +23744,7 @@ ErrorReporter.set_game(GameName)
                         Rounding = 0,
                         Compact = true,
                     })
-                    Combat:AddSlider("P2S1S13", {
+                    AimbotCameraSettings:AddSlider("P2S1S13", {
                         Text = "Max Distance",
                         Default = 10000,
                         Min = 50,
@@ -23661,7 +23752,7 @@ ErrorReporter.set_game(GameName)
                         Rounding = 0,
                         Compact = true,
                     })
-                    Combat:AddSlider("P2S2S1", {
+                    AimbotCameraSettings:AddSlider("P2S2S1", {
                         Text = "Smoothing",
                         Default = 35,
                         Min = 0.01,
@@ -23669,7 +23760,7 @@ ErrorReporter.set_game(GameName)
                         Rounding = 2,
                         Compact = true,
                     })
-                    Combat:AddSlider("P2S1S14", {
+                    AimbotCameraSettings:AddSlider("P2S1S14", {
                         Text = "Prediction",
                         Default = 0.1,
                         Min = 0.01,
@@ -23677,20 +23768,21 @@ ErrorReporter.set_game(GameName)
                         Rounding = 2,
                         Compact = true,
                     })
-                    Combat:AddToggle("P2S1T14", {
+                    AimbotCameraSettings:AddToggle("P2S1T14", {
                         Text = "Visible Check",
                         Default = true,
                     })
-                    Combat:AddToggle("P2S1T15", {
+                    AimbotCameraSettings:AddToggle("P2S1T15", {
                         Text = "Team Check",
                         Default = true,
                     })
-                    Combat:AddDropdown("P2S1D5", {
+                    AimbotCameraSettings:AddDropdown("P2S1D5", {
                         Values = { "Head", "HumanoidRootPart", "UpperTorso", "LowerTorso" },
                         Default = "Head",
                         Multi = false,
                         Text = "Hit Part",
                     })
+                    AimbotCameraSettings:SetupDependencies({ { Options.P2S1D1, "Camera" } })
                     local Triggerbot = Combat:AddToggle("P2S1T7", {
                         Text = "Triggerbot",
                         Default = false,
@@ -23765,9 +23857,6 @@ ErrorReporter.set_game(GameName)
                         Rounding = 0,
                         Compact = true,
                     })
-                    Rage:AddToggle("P8S4T5", { Text = "Use Primary", Default = true })
-                    Rage:AddToggle("P8S4T6", { Text = "Use Secondary", Default = true })
-                    Rage:AddToggle("P8S4T7", { Text = "Use Melee", Default = true })
                     Rage:AddDropdown("P8S4D1", {
                         Values = { "Swap", "Reload", "SwapOrReload" },
                         Default = "SwapOrReload",
@@ -23780,6 +23869,18 @@ ErrorReporter.set_game(GameName)
                         Multi = false,
                         Text = "Evasion Mode",
                     })
+                    local ProjectileBreakerBox = Rage:AddDependencyBox()
+                    ProjectileBreakerBox:AddSlider("P8S4PB1", { Text = "Forward Min", Default = 0, Min = 0, Max = 20, Rounding = 2, Compact = true })
+                    ProjectileBreakerBox:AddSlider("P8S4PB2", { Text = "Forward Max", Default = 4, Min = 0, Max = 20, Rounding = 2, Compact = true })
+                    ProjectileBreakerBox:AddSlider("P8S4PB3", { Text = "Up Min", Default = 0, Min = 0, Max = 20, Rounding = 2, Compact = true })
+                    ProjectileBreakerBox:AddSlider("P8S4PB4", { Text = "Up Max", Default = 5.5, Min = 0, Max = 20, Rounding = 2, Compact = true })
+                    ProjectileBreakerBox:AddSlider("P8S4PB5", { Text = "Up Frequency", Default = 5, Min = 0.1, Max = 20, Rounding = 2, Compact = true })
+                    ProjectileBreakerBox:AddSlider("P8S4PB6", { Text = "Forward Frequency", Default = 5, Min = 0.1, Max = 20, Rounding = 2, Compact = true })
+                    ProjectileBreakerBox:AddSlider("P8S4PB7", { Text = "Reposition Interval", Default = 0.3, Min = 0.05, Max = 5, Rounding = 2, Compact = true, Suffix = " s" })
+                    ProjectileBreakerBox:AddToggle("P8S4PB10", { Text = "Fallback Character Origin", Default = false })
+                    ProjectileBreakerBox:AddSlider("P8S4PB8", { Text = "Fallback Base Radius", Default = 100, Min = 5, Max = 100000000, Rounding = 0, Compact = true })
+                    ProjectileBreakerBox:AddSlider("P8S4PB9", { Text = "Fallback Random Range", Default = 0.5, Min = 0, Max = 1, Rounding = 2, Compact = true })
+                    ProjectileBreakerBox:SetupDependencies({ { Options.P8S4D2, "ProjectileBreaker" } })
                     Rage:AddDropdown("P8S4D3", {
                         Values = { "Default", "Under" },
                         Default = "Default",
@@ -23864,6 +23965,21 @@ ErrorReporter.set_game(GameName)
                         Compact = true,
                     })
                     Translocate:SetupDependencies({ { Options.P8S4D2, "Translocate" } })
+                    local WeaponStrategies = Tabs.Ragebot:AddLeftGroupbox("Weapon Strategies", "crosshair")
+                    WeaponStrategies:AddLabel("Hitscan Strategy")
+                    WeaponStrategies:AddToggle("P8S4T5", {
+                        Text = "Use Primary",
+                        Default = true,
+                    })
+                    WeaponStrategies:AddToggle("P8S4T6", {
+                        Text = "Use Secondary",
+                        Default = true,
+                    })
+                    WeaponStrategies:AddLabel("Melee Strategy")
+                    WeaponStrategies:AddToggle("P8S4T7", {
+                        Text = "Use Melee",
+                        Default = true,
+                    })
 
                 do
                     local Mods = Tabs.Combat:AddRightGroupbox("Weapon Mods", "swords")
@@ -24517,6 +24633,53 @@ local P1 = Tabs.ESP
                         Compact = true,
                     })
                     LongJumpSettings:SetupDependencies({ { Toggles.P10S3T7, true } })
+                    local MovementUnderground = Tabs.Movement:AddLeftGroupbox("Underground", "arrowdown")
+                    MovementUnderground:AddToggle("P10S11T1", {
+                        Text = "Underground",
+                        Default = false,
+                        Callback = function(value)
+                            if value then
+                                if Options.P8S4I1 then
+                                    local v = undergroundOffset or Vector3.zero
+                                    Options.P8S4I1:SetValue(string.format("%.2f,%.2f,%.2f", v.X, v.Y, v.Z))
+                                end
+                                startUnderground()
+                            else
+                                stopUnderground()
+                            end
+                        end,
+                    })
+                    MovementUnderground:AddSlider("P10S11S1", {
+                        Text = "Depth Y",
+                        Default = 2.5,
+                        Min = 0,
+                        Max = 15,
+                        Rounding = 1,
+                        Compact = true,
+                        Callback = function(value)
+                            undergroundDepth = math.clamp(tonumber(value) or 2.5, 0, 15)
+                        end,
+                    })
+                    MovementUnderground:AddInput("P10S11I1", {
+                        Text = "XYZ Offset",
+                        Default = "0,0,0",
+                        Placeholder = "1, 10, 5",
+                        AllowEmpty = false,
+                        EmptyReset = "0,0,0",
+                        Finished = true,
+                        Callback = function(value)
+                            local x, y, z = tostring(value):match("^%s*([%-+]?%d*%.?%d+)%s*,%s*([%-+]?%d*%.?%d+)%s*,%s*([%-+]?%d*%.?%d+)%s*$")
+                            x, y, z = tonumber(x), tonumber(y), tonumber(z)
+                            if x and y and z then
+                                undergroundOffset = Vector3.new(x, y, z)
+                                undergroundDepth = math.clamp(y, 0, 15)
+                                if Options.P10S11S1 then
+                                    Options.P10S11S1:SetValue(undergroundDepth)
+                                end
+                            end
+                        end,
+                    })
+
                     local Animation = Tabs.Movement:AddRightGroupbox("Animation Player", "play")
                     Animation:AddToggle("P10S6T1", {
                         Text = "Animation Player",
@@ -25392,10 +25555,6 @@ RivalsCosmeticsState.CosmeticsUiLoaded = true
 
             end
 
-            local RageStrategyInfo = Tabs.Ragebot:AddLeftGroupbox("Strategies", "crosshair")
-            RageStrategyInfo:AddLabel("Hitscan Strategy")
-            RageStrategyInfo:AddLabel("Melee Strategy")
-            RageStrategyInfo:AddLabel("Evasion: Random / Translocate / ProjectileBreaker")
 
             local MenuGroup = Tabs.Settings:AddLeftGroupbox('Menu', 'wrench')
 MenuGroup:AddToggle('KeybindMenuOpen', {
@@ -25966,7 +26125,6 @@ local RivalsRuntime = {}
                     { idx = 'P2S1T14', type = 'Toggle', value = true },
                     { idx = 'P2S1T15', type = 'Toggle', value = true },
                     { idx = 'P2S1D5', type = 'Dropdown', value = 'Head' },
-                    { idx = 'P2S1S2', type = 'Slider', value = 282 },
                     { idx = 'P2S1T6', type = 'Toggle', value = false },
                     { idx = 'P2S1T7K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
                     { idx = 'P2S1S7', type = 'Slider', value = 0 },
@@ -26025,6 +26183,19 @@ local RivalsRuntime = {}
                     { idx = 'P8S4S4', type = 'Slider', value = 100 },
                     { idx = 'P8S4S5', type = 'Slider', value = 0.5 },
                     { idx = 'P8S4S3', type = 'Slider', value = -5 },
+                    { idx = 'P8S4PB1', type = 'Slider', value = 0 },
+                    { idx = 'P8S4PB2', type = 'Slider', value = 4 },
+                    { idx = 'P8S4PB3', type = 'Slider', value = 0 },
+                    { idx = 'P8S4PB4', type = 'Slider', value = 5.5 },
+                    { idx = 'P8S4PB5', type = 'Slider', value = 5 },
+                    { idx = 'P8S4PB6', type = 'Slider', value = 5 },
+                    { idx = 'P8S4PB7', type = 'Slider', value = 0.3 },
+                    { idx = 'P8S4PB8', type = 'Slider', value = 100 },
+                    { idx = 'P8S4PB9', type = 'Slider', value = 0.5 },
+                    { idx = 'P8S4PB10', type = 'Toggle', value = false },
+                    { idx = 'P10S11T1', type = 'Toggle', value = false },
+                    { idx = 'P10S11S1', type = 'Slider', value = 2.5 },
+                    { idx = 'P10S11I1', type = 'Input', value = '0,0,0' },
                     { idx = 'P8S5T3', type = 'Toggle', value = false },
                     { idx = 'P8S5D7', type = 'Dropdown', value = RivalsRuntimeBridge.ResolveAutoLoadoutMapValues()[1] },
                     { idx = 'P8S5T4', type = 'Toggle', value = false },
