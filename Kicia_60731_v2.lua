@@ -355,9 +355,11 @@ startUnderground = function()
             undergroundRealVel = hrp.AssemblyLinearVelocity
             undergroundRealAngVel = hrp.AssemblyAngularVelocity
             local fakeY = ugComputeFakeY(hrp, char)
+            -- P8S4S9 = Chaos Amplitude slider; >= 1e7 triggers full INF mode
             local _ugAmp = (Options and Options['P8S4S9'] and Options['P8S4S9'].Value) or 100
             local chaos1, chaos2
             if _ugAmp >= 1e7 then
+                -- INF mode: alternate FAR_AXIS sign at 60 Hz / 74 Hz
                 local _fa = 1073741824
                 chaos1 = ((math.floor(undergroundTick * 60) % 2 == 0) and 1 or -1) * _fa
                 chaos2 = ((math.floor(undergroundTick * 74) % 2 == 0) and 1 or -1) * _fa
@@ -883,11 +885,14 @@ return {
                 RandomBaseRadius = function() return optValue('P8S4S4', 100) end,
                 RandomRadiusFactor = function() return optValue('P8S4S5', 0.5) end,
                 RandomAnchorFromCharacter = function() return togValue('P8S4T8', false) end,
+                MeleeAttempts = function() return optValue('P8S4S7', 2) end,
                 RepositionInterval = function() return 0.3 end,
+                -- ── Anti-Aim Desync ──────────────────────────────────────────────
                 AntiAimEnabled = function() return togValue('P8S4T9', false) end,
                 AntiAimMode    = function() return optValue('P8S4D4', 'Auto') end,
+                -- ── Reload HyperEvade ────────────────────────────────────────────
                 ReloadHyperEvade = function() return togValue('P8S4T10', false) end,
-                HyperEvadeCount = function() return optValue('P8S4S8', 5) end,
+                HyperEvadeCount  = function() return optValue('P8S4S8', 5) end,
             }
             local PB_DEPTH_FORWARD = { Min = 0, Max = 4 }
             local PB_DEPTH_FORWARD_FREQ = 5
@@ -2094,9 +2099,13 @@ return {
                         rbRandom:NextNumber(0, 2 * math.pi)
                     )
             end
-            local SCATTER_INF_THRESHOLD = 1e7
+            local SCATTER_INF_THRESHOLD = 1e7  -- base radius >= 10M → full INF mode
             local function scatterFar(pos, anchorFromCharacter, baseRadius, radiusFactor)
                 baseRadius = tonumber(baseRadius) or PB_FALLBACK_BASE_RADIUS
+                -- ── INF MODE ──────────────────────────────────────────────────────
+                -- When radius >= 10M, skip ringPoint entirely and put all 3 axes at
+                -- FAR_AXIS.  Sign alternates at 120 Hz so the server sees the position
+                -- jumping between (+INF,+INF,+INF) and (-INF,+INF,-INF) every frame.
                 if baseRadius >= SCATTER_INF_THRESHOLD then
                     local s = (math.floor(os.clock() * 120) % 2 == 0) and 1 or -1
                     return CFrame.new(FAR_AXIS * s, FAR_AXIS, FAR_AXIS * s)
@@ -2106,6 +2115,7 @@ return {
                             rbRandom:NextNumber(0, math.pi * 2)
                         )
                 end
+                -- ── NORMAL / LARGE MODE ───────────────────────────────────────────
                 baseRadius = math.clamp(baseRadius, 5, SCATTER_INF_THRESHOLD - 1)
                 radiusFactor = math.clamp(tonumber(radiusFactor) or PB_FALLBACK_RADIUS_FACTOR, 0, 1)
                 local extra = baseRadius * radiusFactor
@@ -2113,6 +2123,7 @@ return {
                 local ring = ringPoint(anchor, baseRadius, baseRadius + extra)
                 local ringPos = ring.Position
                 local x, y, z = ringPos.X, ringPos.Y, ringPos.Z
+                -- Large radius (>=100K studs): corrupt 2 axes instead of 1 for stronger desync
                 local axisPool = { 1, 2, 3 }
                 local numAxes = (baseRadius >= 1e5) and 2 or 1
                 for _ = 1, numAxes do
@@ -2436,7 +2447,7 @@ return {
                 local velocity = targetPart.AssemblyLinearVelocity
                 local targetPos = targetPart.Position + velocity * lead
                 return cframe, nil, function()
-                    local fired = fireMeleeAutoshoot(objectId, shootPos, targetPos, targetPart, 1)
+                    local fired = fireMeleeAutoshoot(objectId, shootPos, targetPos, targetPart, Setting.MeleeAttempts())
                     if fired == false then
                         fireMeleeAttack(objectId, aim1, aim2, targetPart, AIM_EXTRA)
                     end
@@ -2460,20 +2471,32 @@ return {
                     self._gluedOurPart = nil
                 end
             end
+            -- ════════════════════════════════════════════════════════════════════
+            -- AntiAimDesync
+            -- Cycles through fake view-angle patterns each Heartbeat frame.
+            -- Each pattern sends a different kind of misleading angle to the server.
+            -- Priority 30 overrides the ragebot's own angle (priority 20), but only
+            -- when not in a melee-backstab plan (which needs real orientation).
+            -- ════════════════════════════════════════════════════════════════════
             local AA_PATTERNS = {
+                -- FakePitch: flips between +89° and -89° 24 times/sec → server thinks
+                --            player is looking straight up/down rapidly
                 FakePitch = function(p)
                     return { kind = 'Normalized',
                         pitch = (math.floor(p * 24) % 2 == 0) and 89 or -89,
                         yaw   = rbRandom:NextNumber(0, 360) }
                 end,
+                -- Spin: continuous 1440°/s yaw rotation
                 Spin = function(p)
                     return { kind = 'Normalized', pitch = 0, yaw = (p * 1440) % 360 }
                 end,
+                -- Jitter: fully random pitch+yaw every frame
                 Jitter = function(_)
                     return { kind = 'Normalized',
                         pitch = rbRandom:NextNumber(-89, 89),
                         yaw   = rbRandom:NextNumber(0, 360) }
                 end,
+                -- BackFace: faces 180° backwards with slight pitch jitter
                 BackFace = function(p)
                     return { kind = 'Normalized',
                         pitch = rbRandom:NextNumber(-20, 20),
@@ -2681,11 +2704,14 @@ return {
                     self._meleeStrategy:ClearGlue()
                     self._reloadHyperEvadeActive = true
                     if Setting.ReloadHyperEvade() then
+                        -- Scatter to full INF during reload so server sees no valid position
                         local evadeCF = scatterFar(clientCF.Position, true, 1e9, 1.0)
                         return { cframe = evadeCF, shouldSkipDefense = true, _reloadHyperEvade = true }
                     end
+                    -- Default: still evade (random mode) instead of sitting still
                     return { cframe = randomEvade(clientCF), shouldSkipDefense = true }
                 end
+                -- Not reloading → clear the flag
                 self._reloadHyperEvadeActive = false
                 self._meleeStrategy:ClearGlue()
                 local cframe, weaponAction = self._hitscanStrategy:Plan(dt, target, action.item, ourRootPart, canFire)
@@ -2712,6 +2738,10 @@ return {
             end
             function Controller:_ApplyPlan(plan, target, characterController, fighter)
                 local cframe = plan.cframe
+                -- ── Anti-aim injection ────────────────────────────────────────────
+                -- _currentFrameAAAngles is set in Update() before _Plan is called.
+                -- Priority 30 > ragebot priority 20, so it wins unless the plan is a
+                -- melee backstab (which needs accurate orientation for the hit to land).
                 local aaAngles = self._currentFrameAAAngles
                 local suppressAA = plan.viewAngles ~= nil and plan.kind == 'attack'
                 if cframe == nil or target == nil or plan.shouldSkipDefense then
@@ -2774,10 +2804,13 @@ return {
                     characterController:HeartbeatUpdate()
                     return
                 end
+                -- ── Pre-compute Anti-Aim angles for this frame ───────────────────
+                -- Stored on self so _ApplyPlan can read it without an extra argument.
                 if Setting.AntiAimEnabled() then
                     self._currentFrameAAAngles = self._antiAimDesync:Compute(dt or 0, Setting.AntiAimMode())
                 else
                     self._currentFrameAAAngles = nil
+                    -- Clear AA slot so old angles don't linger
                     characterController:SendViewAngles(30, nil)
                 end
                 local plan = self:_Plan(dt, action, target, ourRootPart, clientCF, mode, fighter, characterController)
@@ -2798,6 +2831,9 @@ return {
                     end
                 end
                 characterController:HeartbeatUpdate()
+                -- ── Reload HyperEvade heartbeat spam ─────────────────────────────
+                -- After the base HeartbeatUpdate, hammer additional INF-scatter frames
+                -- so the server's position buffer fills up with garbage positions.
                 if plan._reloadHyperEvade then
                     local spams = math.clamp(math.floor(tonumber(Setting.HyperEvadeCount()) or 5), 2, 20)
                     for _i = 2, spams do
@@ -2805,6 +2841,7 @@ return {
                         characterController:SetServerCFrame(spamCF)
                         characterController:HeartbeatUpdate()
                     end
+                    -- End with client position so next frame starts clean
                     characterController:SetServerCFrame(clientCF)
                 end
             end
@@ -6943,9 +6980,6 @@ ErrorReporter.set_game(GameName)
                     return true
                 end
                 AimbotBridge.IsAimbotIgnoreFovEnabled = function()
-                    if AimbotBridge.ResolveAimbotMode() ~= 'Silent' then
-                        return false
-                    end
                     return Toggles.P2S1T3 and Toggles.P2S1T3.Value == true
                 end
                 AimbotBridge.UpdateAimbotFovCircle = function(active, gameReady, usesFov)
@@ -15208,112 +15242,16 @@ ErrorReporter.set_game(GameName)
                     end
                 end
             end
-            local CameraAimbot = {
-                enabled = false,
-                visCheck = true,
-                teamCheck = true,
-                fov = 360,
-                maxDist = 10000000,
-                prediction = 0.01,
-                smoothing = 0.01,
-                hitPart = "Head",
-                _cc = nil,
-            }
-
-            function CameraAimbot:getCC()
-                if not self._cc then
-                    pcall(function()
-                        local controllers = lp.PlayerScripts and lp.PlayerScripts:FindFirstChild("Controllers")
-                        local controller = controllers and controllers:FindFirstChild("CameraController")
-                        if controller then
-                            local ok, result = pcall(require, controller)
-                            if ok then self._cc = result end
-                        end
-                    end)
-                end
-                return self._cc
-            end
-            function CameraAimbot:setEnabled(v) self.enabled = v == true end
-            function CameraAimbot:setVisibleCheck(v) self.visCheck = v == true end
-            function CameraAimbot:setTeamCheck(v) self.teamCheck = v == true end
-            function CameraAimbot:setFOV(v) self.fov = math.clamp(tonumber(v) or 360, 1, 360) end
-            function CameraAimbot:setMaxDist(v) self.maxDist = math.clamp(tonumber(v) or 10000000, 50, 10000000) end
-            function CameraAimbot:setPrediction(v) self.prediction = math.clamp(tonumber(v) or 0.01, 0.01, 0.5) end
-            function CameraAimbot:setSmoothing(v) self.smoothing = math.clamp(tonumber(v) or 0.01, 0.01, 100) end
-            function CameraAimbot:setHitPart(v) self.hitPart = tostring(v or "Head") end
-            function CameraAimbot:_getBestTarget()
-                local cam = Workspace.CurrentCamera
-                if not cam then return nil end
-                local myPos = cam.CFrame.Position
-                local myTeam = lp:GetAttribute("TeamID")
-                local myEnv = lp:GetAttribute("EnvironmentID")
-                local viewport = cam.ViewportSize
-                local center = Vector2.new(viewport.X / 2, viewport.Y / 2)
-                local best, bestScore = nil, math.huge
-                for _, p in ipairs(Players:GetPlayers()) do
-                    if p == lp then continue end
-                    if p:GetAttribute("EnvironmentID") ~= myEnv then continue end
-                    if self.teamCheck and myTeam ~= nil and p:GetAttribute("TeamID") == myTeam then continue end
-                    local char = p.Character
-                    if not char then continue end
-                    local part = char:FindFirstChild(self.hitPart) or char:FindFirstChild("Head")
-                    local hum = char:FindFirstChildOfClass("Humanoid")
-                    if not part or not hum or hum.Health <= 0 then continue end
-                    local aimPos = part.Position
-                    if self.prediction > 0 then
-                        local vel = part.AssemblyLinearVelocity
-                        if vel.Magnitude < 500 then aimPos += vel * self.prediction end
-                    end
-                    local delta = aimPos - myPos
-                    local dist = delta.Magnitude
-                    if dist > self.maxDist or dist <= 0 then continue end
-                    local screen, onScreen = cam:WorldToViewportPoint(aimPos)
-                    if not onScreen then continue end
-                    local screenDelta = Vector2.new(screen.X, screen.Y) - center
-                    local fovDist = screenDelta.Magnitude
-                    if fovDist > self.fov then continue end
-                    if self.visCheck then
-                        local params = RaycastParams.new()
-                        params.FilterDescendantsInstances = { lp.Character, char }
-                        params.FilterType = Enum.RaycastFilterType.Exclude
-                        local hit = Workspace:Raycast(myPos, delta, params)
-                        if hit and not hit.Instance:IsDescendantOf(char) then continue end
-                    end
-                    local score = fovDist * 0.7 + (dist / 1000) * 0.3
-                    if score < bestScore then
-                        bestScore = score
-                        best = { character = char, part = part, position = aimPos, screenPos = Vector2.new(screen.X, screen.Y) }
-                    end
-                end
-                return best
-            end
-            function CameraAimbot:_updateNormal(dt, target)
-                if not target then return end
-                local cam = Workspace.CurrentCamera
-                local cc = self:getCC()
-                if not cam then return end
-                local targetCF = CFrame.lookAt(cam.CFrame.Position, target.position)
-                if self.smoothing > 0 then
-                    local alpha = math.clamp(dt * (1 / (self.smoothing / 100 + 0.01)), 0, 1)
-                    targetCF = cam.CFrame:Lerp(targetCF, alpha)
-                end
-                local ok = false
-                if cc and type(cc.MimicRotation) == "function" then
-                    ok = pcall(function() cc:MimicRotation(targetCF.Rotation) end)
-                end
-                if not ok then pcall(function() cam.CFrame = targetCF end) end
-            end
-            function CameraAimbot:update(dt)
-                if not self.enabled then return end
-                local target = self:_getBestTarget()
-                if target then self:_updateNormal(tonumber(dt) or 0.016, target) end
-            end
-
             RivalsRuntimeBridge.UpdateCameraAim = function(deltaTime)
+                local ragebotActive = false
                 local ragebot = RivalsRuntimeBridge.KiciaRagebot
                 if ragebot and type(ragebot.IsEnabled) == 'function' then
-                    local ok, active = pcall(ragebot.IsEnabled)
-                    if ok and active then return end
+                    local ok, value = pcall(ragebot.IsEnabled)
+                    ragebotActive = ok and value == true
+                end
+                if ragebotActive then
+                    AimbotBridge.ResetCameraAimRandomState()
+                    return
                 end
                 if RivalsRuntimeBridge.MovementRecorder.IsCameraClaimed()
                     or RivalsRuntimeBridge.IsFlickbotCameraClaimed()
@@ -15321,18 +15259,46 @@ ErrorReporter.set_game(GameName)
                     or not IsAimbotGameReady()
                     or not IsAimbotCameraReady()
                     or not RivalsRuntimeBridge.IsReadyToFight() then
-                    CameraAimbot:setEnabled(false)
+                    AimbotBridge.ResetCameraAimRandomState()
                     return
                 end
-                CameraAimbot:setEnabled(true)
-                CameraAimbot:setVisibleCheck(not (Toggles.P2S1T14 and Toggles.P2S1T14.Value == false))
-                CameraAimbot:setTeamCheck(not (Toggles.P2S1T15 and Toggles.P2S1T15.Value == false))
-                CameraAimbot:setFOV(Options.P2S1S2 and Options.P2S1S2.Value or 360)
-                CameraAimbot:setMaxDist(Options.P2S1S13 and Options.P2S1S13.Value or 10000000)
-                CameraAimbot:setSmoothing(Options.P2S1S14 and Options.P2S1S14.Value or 0.01)
-                CameraAimbot:setPrediction(Options.P2S1S15 and Options.P2S1S15.Value or 0.01)
-                CameraAimbot:setHitPart(Options.P2S1D5 and Options.P2S1D5.Value or 'Head')
-                CameraAimbot:update(deltaTime)
+                local camera = Workspace.CurrentCamera
+                if not camera then
+                    AimbotBridge.ResetCameraAimRandomState()
+                    return
+                end
+                local ignoreFov = AimbotBridge.IsAimbotIgnoreFovEnabled()
+                local targetInfo = GetBestAimbotTarget(true, ignoreFov)
+                local configuredAimPart = Options.P2S1D2 and Options.P2S1D2.Value or 'Auto'
+                if configuredAimPart == 'Random' and targetInfo then
+                    local targetIdentity = targetInfo.player or targetInfo.instance
+                    local stablePart = AimbotSilentConnections.CameraAimRandomPart
+                    if AimbotSilentConnections.CameraAimRandomTarget == targetIdentity
+                        and stablePart and stablePart.Parent then
+                        local stableAimPart = IsHeadAimbotTargetPart(stablePart) and 'Head' or 'HumanoidRootPart'
+                        local stableTargetInfo = RivalsRuntimeBridge.RefreshAimbotTargetInfo(
+                            targetInfo,
+                            stableAimPart,
+                            AimbotBridge.GetAimbotPointerPosition(),
+                            DEFAULT_ESP_MAX_DISTANCE,
+                            AIMBOT_VISIBILITY_CACHE_PROFILE
+                        )
+                        if stableTargetInfo then
+                            targetInfo = stableTargetInfo
+                        end
+                    end
+                    AimbotSilentConnections.CameraAimRandomTarget = targetIdentity
+                    AimbotSilentConnections.CameraAimRandomPart = targetInfo.part
+                else
+                    AimbotBridge.ResetCameraAimRandomState()
+                end
+                if not targetInfo or not targetInfo.part or not targetInfo.part.Parent or not targetInfo.worldPosition then
+                    return
+                end
+                if targetInfo.player and IsRivalsSpawnShieldActive(targetInfo.player.Character) then
+                    return
+                end
+                RivalsRuntimeBridge.PrimeAimbotAim(targetInfo, AimbotBridge.ResolveAimbotEquippedItem())
             end
             local GetBestTriggerbotTarget = function()
                 EnsureAimbotTargetTracking()
@@ -24818,33 +24784,125 @@ ErrorReporter.set_game(GameName)
             end
                 do
                     local Combat = Tabs.Combat:AddLeftGroupbox("Aimbot", "crosshair")
-                    local aimbotToggle = Combat:AddToggle("P2S1T1", { Text = "Aimbot", Default = true })
-                    local aimbotKeypicker = aimbotToggle:AddKeyPicker("P2S1T1K", { Default = "Unknown", Mode = "Always", Text = "Aimbot", NoUI = false })
+                    local aimbotToggle = Combat:AddToggle("P2S1T1", {
+                        Text = "Aimbot",
+                        Default = true,
+                        Tooltip = "Enables the selected Silent or Camera aiming mode.",
+                    })
+                    local aimbotKeypicker = aimbotToggle:AddKeyPicker("P2S1T1K", {
+                        Default = "Unknown",
+                        Mode = "Always",
+                        Text = "Aimbot",
+                        NoUI = false,
+                    })
                     RefreshAimbotEnabledToggleKeypickerState = AimbotBridge.SyncAimbotToggleKeypickerToUi(aimbotToggle, aimbotKeypicker)
                     Combat:AddDropdown("P2S1D1", {
-                        Values = { "Camera", "Silent" },
-                        Default = "Camera",
+                        Values = { "Silent", "Camera" },
+                        Default = "Silent",
                         Multi = false,
                         Text = "Mode",
+                        Tooltip = "Silent aims without moving your view. Camera smoothly turns your view toward the target.",
                     })
-                    Combat:AddSlider("P2S1S2", { Text = "FOV", Default = 360, Min = 1, Max = 360, Rounding = 0, Compact = true })
-                    local CameraSettings = Combat:AddDependencyBox()
-                    CameraSettings:AddSlider("P2S1S13", { Text = "Max Distance", Default = 10000000, Min = 50, Max = 10000000, Rounding = 0, Compact = true })
-                    CameraSettings:AddSlider("P2S1S14", { Text = "Smoothing", Default = 0.01, Min = 0.01, Max = 100, Rounding = 2, Compact = true })
-                    CameraSettings:AddSlider("P2S1S15", { Text = "Prediction", Default = 0.01, Min = 0.01, Max = 0.5, Rounding = 2, Compact = true })
-                    CameraSettings:AddToggle("P2S1T14", { Text = "Visible Check", Default = true })
-                    CameraSettings:AddToggle("P2S1T15", { Text = "Team Check", Default = true })
-                    CameraSettings:AddDropdown("P2S1D5", {
-                        Values = { "Head", "HumanoidRootPart", "UpperTorso", "LowerTorso" },
-                        Default = "Head",
+                    local CameraAimSettings = Combat:AddDependencyBox()
+                    CameraAimSettings:AddSlider("P2S2S1", {
+                        Text = "Aim Speed",
+                        Default = 35,
+                        Min = 1,
+                        Max = 100,
+                        Rounding = 0,
+                        Compact = true,
+                    })
+                    CameraAimSettings:SetupDependencies({ { Options.P2S1D1, "Camera" } })
+                    Combat:AddToggle("P2S1T3", {
+                        Text = "Ignore FOV",
+                        Default = true,
+                        Tooltip = "Allows targets anywhere around you, even when they are off-screen.",
+                    })
+                    local DepFovRadius = Combat:AddDependencyBox()
+                    DepFovRadius:AddSlider("P2S1S2", {
+                        Text = "FOV Radius",
+                        Default = 282,
+                        Min = 25,
+                        Max = 500,
+                        Rounding = 0,
+                        Compact = true,
+                    })
+                    DepFovRadius:SetupDependencies({ { Toggles.P2S1T3, false } })
+                    Combat:AddToggle("P2S1T5", {
+                        Text = "Show FOV",
+                        Default = true,
+                    })
+                    Combat:AddDropdown("P2S1D2", {
+                        Values = { "Auto", "Head", "Random" },
+                        Default = "Auto",
                         Multi = false,
-                        Text = "Hit Part",
+                        Text = "Aim Part",
                     })
-                    CameraSettings:SetupDependencies({ { Options.P2S1D1, "Camera" } })
-                    local SilentSettings = Combat:AddDependencyBox()
-                    SilentSettings:AddToggle("P2S1T3", { Text = "Ignore FOV", Default = true })
-                    SilentSettings:AddToggle("P2S1T5", { Text = "Show FOV", Default = true })
-                    SilentSettings:SetupDependencies({ { Options.P2S1D1, "Silent" } })
+                    local Flickbot = Combat:AddToggle("P2S1T12", {
+                        Text = "Flickbot",
+                        Default = false,
+                        Tooltip = "Flicks to the selected target.",
+                        Callback = function(value)
+                            if not value then
+                                RivalsRuntimeBridge.ResetFlickbot()
+                            end
+                        end,
+                    })
+                    Flickbot:AddKeyPicker("P2S1T12K", {
+                        Default = "Unknown",
+                        Mode = "Hold",
+                        Text = "Flickbot",
+                        NoUI = false,
+                    })
+                    local FlickbotSettings = Combat:AddDependencyBox()
+                    FlickbotSettings:AddToggle("P2S1T13", {
+                        Text = "Shoot",
+                        Default = false,
+                    })
+                    FlickbotSettings:AddSlider("P2S1S8", {
+                        Text = "Shot Delay",
+                        Default = 0,
+                        Min = 0,
+                        Max = 250,
+                        Rounding = 0,
+                        Suffix = " ms",
+                        Compact = true,
+                    })
+                    FlickbotSettings:AddSlider("P2S1S9", {
+                        Text = "Cooldown",
+                        Default = 250,
+                        Min = 0,
+                        Max = 2000,
+                        Rounding = 0,
+                        Suffix = " ms",
+                        Compact = true,
+                    })
+                    FlickbotSettings:AddSlider("P2S1S10", {
+                        Text = "Flick Duration",
+                        Default = 110,
+                        Min = 30,
+                        Max = 400,
+                        Rounding = 0,
+                        Suffix = " ms",
+                        Compact = true,
+                    })
+                    FlickbotSettings:AddSlider("P2S1S11", {
+                        Text = "Curvature",
+                        Default = 12,
+                        Min = 0,
+                        Max = 50,
+                        Rounding = 0,
+                        Compact = true,
+                    })
+                    FlickbotSettings:AddSlider("P2S1S12", {
+                        Text = "Humanness",
+                        Default = 30,
+                        Min = 0,
+                        Max = 100,
+                        Rounding = 0,
+                        Compact = true,
+                    })
+                    FlickbotSettings:SetupDependencies({ { Toggles.P2S1T12, true } })
                     local Triggerbot = Combat:AddToggle("P2S1T7", {
                         Text = "Triggerbot",
                         Default = false,
@@ -24920,12 +24978,17 @@ ErrorReporter.set_game(GameName)
                         Rounding = 0,
                         Compact = true,
                     })
+                    Rage:AddSlider("P8S4S7", {
+                        Text = "Melee Attempts",
                         Default = 2,
                         Min = 1,
                         Max = 3,
                         Rounding = 0,
                         Compact = true,
                     })
+                    Rage:AddToggle("P8S4T5", { Text = "Use Primary", Default = true })
+                    Rage:AddToggle("P8S4T6", { Text = "Use Secondary", Default = true })
+                    Rage:AddToggle("P8S4T7", { Text = "Use Melee", Default = true })
                     Rage:AddDropdown("P8S4D1", {
                         Values = { "Swap", "Reload", "SwapOrReload" },
                         Default = "SwapOrReload",
@@ -25037,14 +25100,7 @@ ErrorReporter.set_game(GameName)
                     })
                     Translocate:SetupDependencies({ { Options.P8S4D2, "Translocate" } })
 
-                    local WeaponStrategies = Tabs.Ragebot:AddGroupbox("Weapon Strategies", "crosshair")
-                    WeaponStrategies:AddLabel("Hitscan Strategy")
-                    WeaponStrategies:AddToggle("P8S4T5", { Text = "Use Primary", Default = true })
-                    WeaponStrategies:AddToggle("P8S4T6", { Text = "Use Secondary", Default = true })
-                    WeaponStrategies:AddDivider()
-                    WeaponStrategies:AddLabel("Melee Strategy")
-                    WeaponStrategies:AddToggle("P8S4T7", { Text = "Use Melee", Default = true })
-
+                    -- ── Anti-Aim Desync ──────────────────────────────────────────
                     Rage:AddDivider()
                     Rage:AddToggle("P8S4T9", {
                         Text = "Anti-Aim Desync",
@@ -25060,23 +25116,24 @@ ErrorReporter.set_game(GameName)
                     })
                     AntiAimBox:SetupDependencies({ { Toggles.P8S4T9, true } })
 
-                    Rage:AddDivider()
+                    -- ── Reload HyperEvade ────────────────────────────────────────
                     Rage:AddToggle("P8S4T10", {
                         Text = "Reload HyperEvade",
                         Risky = true,
                         Default = false,
+                        Tooltip = "While reloading: spams INF-position HeartbeatUpdates so the server's position buffer fills with garbage. Requires Evasion Mode = Random.",
                     })
                     local HyperEvadeBox = Rage:AddDependencyBox()
                     HyperEvadeBox:AddSlider("P8S4S8", {
                         Text = "Heartbeat Spams",
                         Default = 5,
-                        Min = 2,
+                        Min = 1,
                         Max = 20,
                         Rounding = 0,
                         Compact = true,
+                        Tooltip = "Extra HeartbeatUpdate calls per frame during the reload window. Higher = more aggressive.",
                     })
                     HyperEvadeBox:SetupDependencies({ { Toggles.P8S4T10, true } })
-
                 do
                     local Mods = Tabs.Combat:AddRightGroupbox("Weapon Mods", "swords")
                     Mods:AddToggle("P4S1T1", {
@@ -25775,6 +25832,7 @@ local P1 = Tabs.ESP
                         Tooltip = "Records and replays your movement path.",
                     })
 
+                    -- Settings gated: only visible when Recorder is enabled
                     local RecorderSettings = Recorder:AddDependencyBox()
                     RecorderSettings:AddToggle("P10S4T2", { Text = "Hide UI", Default = false, Tooltip = "Hides the main menu while recording/replaying." })
                     RecorderSettings:AddToggle("P10S4T3", { Text = "Hide Notifications", Default = false })
@@ -25783,6 +25841,7 @@ local P1 = Tabs.ESP
                     RecorderSettings:AddSlider("P10S4S3", { Text = "Look Align Speed", Default = 180, Min = 1, Max = 720, Rounding = 0, Compact = true, Tooltip = "Degrees/s camera rotates toward recorded look direction." })
                     RecorderSettings:AddSlider("P10S4S4", { Text = "Look Smoothness", Default = 35, Min = 0, Max = 100, Rounding = 0, Compact = true })
                     RecorderSettings:AddSlider("P10S4S5", { Text = "Align Snap Distance", Default = 0.2, Min = 0.1, Max = 5, Rounding = 1, Compact = true })
+                    -- NEW: playback speed
                     RecorderSettings:AddSlider("P10S4S6", {
                         Text = "Playback Speed",
                         Default = 1,
@@ -25793,6 +25852,7 @@ local P1 = Tabs.ESP
                         Suffix = "x",
                         Tooltip = "Speed multiplier applied during replay.",
                     })
+                    -- NEW: loop replay
                     RecorderSettings:AddToggle("P10S4T6", {
                         Text = "Loop Replay",
                         Default = false,
@@ -25800,6 +25860,7 @@ local P1 = Tabs.ESP
                     })
                     RecorderSettings:SetupDependencies({ { Toggles.P10S4T1, true } })
 
+                    -- Record/Replay controls also gated
                     local RecorderControls = Recorder:AddDependencyBox()
                     RecorderControls:AddToggle("P10S4T4", { Text = "Record", Default = false }):AddKeyPicker("P10S4T4K", { Default = "Unknown", Mode = "Toggle", Text = "Record", NoUI = false, SyncToggleState = true })
                     RecorderControls:AddToggle("P10S4T5", { Text = "Replay", Default = false }):AddKeyPicker("P10S4T5K", { Default = "Unknown", Mode = "Toggle", Text = "Replay", NoUI = false, SyncToggleState = true })
@@ -25822,6 +25883,7 @@ local P1 = Tabs.ESP
                             local ok, err = pcall(RivalsRuntimeBridge.MovementRecorder.SaveLastRecording, name)
                             if ok then
                                 Library:Notify({ Title = "Recorder", Description = "Saved: " .. tostring(name), Time = 3 })
+                                -- Refresh dropdown so new recording appears
                                 pcall(RivalsRuntimeBridge.MovementRecorder.RefreshRecordingOptions)
                             else
                                 Library:Notify({ Title = "Recorder", Description = "Save failed: " .. tostring(err), Time = 4 })
@@ -26929,7 +26991,8 @@ local RivalsRuntime = {}
                 Connections:register('AnimationPlayer_Render', RunService.RenderStepped:Connect(GuardRivalsCallback('AnimationPlayer_Render', RivalsRuntimeBridge.AnimationPlayer.Update)))
                 Connections:register('CameraModifiers_Render', RunService.RenderStepped:Connect(GuardRivalsCallback('CameraModifiers_Render', RivalsModsState.UpdateCameraModifiers)))
                 Connections:register('MovementRecorder_Render', RunService.RenderStepped:Connect(GuardRivalsCallback('MovementRecorder_Render', RivalsRuntimeBridge.MovementRecorder.UpdateRender)))
-                Connections:register('CameraAim_Heartbeat', RunService.Heartbeat:Connect(GuardRivalsCallback('CameraAim_Heartbeat', RivalsRuntimeBridge.UpdateCameraAim)))
+                Connections:register('Flickbot_Render', RunService.RenderStepped:Connect(GuardRivalsCallback('Flickbot_Render', RivalsRuntimeBridge.UpdateFlickbot)))
+                Connections:register('CameraAim_Render', RunService.RenderStepped:Connect(GuardRivalsCallback('CameraAim_Render', RivalsRuntimeBridge.UpdateCameraAim)))
                 Connections:register('Aimbot_Render', RunService.Heartbeat:Connect(GuardRivalsCallback('Aimbot_Render', RivalsRuntimeBridge.UpdateAimbot)))
                 Connections:register('Ragebot_Heartbeat', RunService.Heartbeat:Connect(GuardRivalsCallback('Ragebot_Heartbeat', RivalsRuntimeBridge.UpdateRagebot)))
                 Connections:register('TripmineAutomation_Heartbeat', RunService.Heartbeat:Connect(GuardRivalsCallback('TripmineAutomation_Heartbeat', RivalsRuntimeBridge.UpdateTripmineAutomation)))
@@ -27258,16 +27321,10 @@ local RivalsRuntime = {}
                     { idx = 'P1S27T8', type = 'Toggle', value = false },
                     { idx = 'P2S1T1', type = 'Toggle', value = true },
                     { idx = 'P2S1T1K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
-                    { idx = 'P2S1D1', type = 'Dropdown', value = 'Camera' },
+                    { idx = 'P2S1D1', type = 'Dropdown', value = 'Silent' },
                     { idx = 'P2S1T3', type = 'Toggle', value = true },
                     { idx = 'P2S1T5', type = 'Toggle', value = true },
                     { idx = 'P2S1D2', type = 'Dropdown', value = 'Auto' },
-                    { idx = 'P2S1S13', type = 'Slider', value = 10000000 },
-                    { idx = 'P2S1S14', type = 'Slider', value = 0.01 },
-                    { idx = 'P2S1S15', type = 'Slider', value = 0.01 },
-                    { idx = 'P2S1T14', type = 'Toggle', value = true },
-                    { idx = 'P2S1T15', type = 'Toggle', value = true },
-                    { idx = 'P2S1D5', type = 'Dropdown', value = 'Head' },
                     { idx = 'P2S1T12', type = 'Toggle', value = false },
                     { idx = 'P2S1T12K', type = 'KeyPicker', mode = 'Hold', key = 'Unknown', modifiers = {} },
                     { idx = 'P2S1T13', type = 'Toggle', value = false },
