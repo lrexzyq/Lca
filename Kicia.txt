@@ -1215,21 +1215,21 @@ return {
                 return type(item) == 'table' and rawget(item, 'IsEquipped') == true
             end
             local function resolveItemIndex(item, fighter, fallback)
-                if type(fighter) == 'table' then
-                    local items = rawget(fighter, 'Items')
-                    if type(items) == 'table' then
-                        for slotIndex, candidate in next, items do
-                            if candidate == item then
-                                return tonumber(slotIndex) or slotIndex
-                            end
-                        end
-                    end
-                end
                 if type(item) == 'table' then
                     local data = rawget(item, 'Data')
                     local index = type(data) == 'table' and tonumber(rawget(data, 'ItemIndex')) or nil
                     if index then
                         return index
+                    end
+                end
+                if type(fighter) == 'table' then
+                    local items = rawget(fighter, 'Items')
+                    if type(items) == 'table' then
+                        for slotIndex, candidate in pairs(items) do
+                            if candidate == item then
+                                return tonumber(slotIndex) or slotIndex
+                            end
+                        end
                     end
                 end
                 return fallback
@@ -1880,17 +1880,6 @@ return {
                 end
                 return nil
             end
-            local function sameItem(a, b)
-                if a == nil or b == nil then
-                    return false
-                end
-                if a == b then
-                    return true
-                end
-                local aid = itemObjectId(a)
-                local bid = itemObjectId(b)
-                return aid ~= nil and bid ~= nil and tostring(aid) == tostring(bid)
-            end
             local function resolveRageTargetPart(target, preferHead)
                 if not target then return nil end
                 if preferHead and target.hitboxHead and target.hitboxHead.Parent then
@@ -1910,59 +1899,149 @@ return {
                 end
                 local items = rawget(fighter, 'Items')
                 if type(items) ~= 'table' then
-                    return nil
+                    items = rawget(fighter, 'Loadout') or rawget(fighter, 'Slots') or rawget(fighter, 'Inventory')
                 end
-                local onEmpty = Setting.OnEmpty()
-                local priorityList = {}
-                local bestAttack, bestAttackPri, bestAttackIndex = nil, math.huge, nil
-                local bestSwap, bestSwapPri, bestSwapIndex = nil, math.huge, nil
-                local anyEnabled = false
-                for slotKey, item in next, items do
-                    if type(item) == 'table' then
-                        local category = itemCategory(slotKey)
-                        if category ~= nil and isCategoryEnabled(category) then
-                            anyEnabled = true
-                            local priority = table.find(priorityList, category) or math.huge
-                            if itemType(item) == 'Gun' and itemAmmo(item) == 0 then
-                                if itemAmmoReserve(item) > 0 and priority < bestSwapPri then
-                                    if onEmpty == 'Reload' then
-                                        bestAttackPri = priority
-                                        bestAttack = item
-                                        bestAttackIndex = slotKey
-                                    else
-                                        bestSwap = item
-                                        bestSwapPri = priority
-                                        bestSwapIndex = slotKey
-                                    end
-                                end
-                            elseif bestAttack == nil or priority < bestAttackPri then
-                                bestAttackPri = priority
-                                bestAttack = item
-                                bestAttackIndex = slotKey
-                            end
+                if type(items) ~= 'table' then
+                    local observer = rawget(fighter, 'itemObserver') or rawget(fighter, 'ItemObserver')
+                    if observer and type(observer.GetItems) == 'function' then
+                        local ok, observed = pcall(observer.GetItems, observer)
+                        if ok and type(observed) == 'table' then
+                            items = observed
                         end
                     end
                 end
-                if not anyEnabled then
+                if type(items) ~= 'table' then
                     return nil
                 end
-                if bestAttack == nil then
-                    if onEmpty == 'Swap' or bestSwap == nil then
+                local onEmpty = Setting.OnEmpty()
+                local priority = { Primary = 1, Secondary = 2, Melee = 3 }
+                local enabled = {
+                    Primary = Setting.WeaponPrimary(),
+                    Secondary = Setting.WeaponSecondary(),
+                    Melee = Setting.WeaponMelee(),
+                }
+                local equipped = resolveFighterEquippedItem(fighter) or rawget(fighter, 'EquippedItem')
+                local entries = {}
+                for slotKey, item in pairs(items) do
+                    if type(item) == 'table' then
+                        local data = rawget(item, 'Data')
+                        local rawIndex = type(data) == 'table' and tonumber(rawget(data, 'ItemIndex')) or nil
+                        local numericSlot = tonumber(slotKey)
+                        local slotName = string.lower(tostring(slotKey))
+                        local index = rawIndex or numericSlot
+                        local category = nil
+                        if index == 1 or slotName == 'primary' or slotName == 'slot1' then
+                            category = 'Primary'
+                        elseif index == 2 or slotName == 'secondary' or slotName == 'slot2' then
+                            category = 'Secondary'
+                        elseif index == 3 or slotName == 'melee' or slotName == 'slot3' then
+                            category = 'Melee'
+                        elseif itemType(item) == 'Melee' or (itemInfo(item) and rawget(itemInfo(item), 'Class') == 'Melee') then
+                            category = 'Melee'
+                        elseif itemType(item) == 'Gun' or (itemInfo(item) and rawget(itemInfo(item), 'Class') == 'Gun') then
+                            local name = string.lower(tostring(itemName(item) or ''))
+                            if name == 'primary' then
+                                category = 'Primary'
+                            elseif name == 'secondary' then
+                                category = 'Secondary'
+                            end
+                        end
+                        if category and not index then
+                            index = ({ Primary = 1, Secondary = 2, Melee = 3 })[category]
+                        end
+                        if category and enabled[category] then
+                            entries[#entries + 1] = {
+                                item = item,
+                                category = category,
+                                index = resolveItemIndex(item, fighter, index),
+                                priority = priority[category],
+                                effectiveType = (category == 'Melee') and 'Melee' or 'Gun',
+                            }
+                        end
+                    end
+                end
+                if equipped and type(equipped) == 'table' then
+                    local found = false
+                    for _, entry in ipairs(entries) do
+                        if entry.item == equipped then
+                            found = true
+                            break
+                        end
+                    end
+                    if not found then
+                        local info = itemInfo(equipped)
+                        local kind = itemType(equipped) or (info and rawget(info, 'Class'))
+                        local category = kind == 'Melee' and 'Melee' or nil
+                        local data = rawget(equipped, 'Data')
+                        local index = type(data) == 'table' and tonumber(rawget(data, 'ItemIndex')) or nil
+                        if not category and kind == 'Gun' then
+                            if index == 2 then category = 'Secondary' else category = 'Primary' end
+                        end
+                        if category and enabled[category] then
+                            entries[#entries + 1] = {
+                                item = equipped,
+                                category = category,
+                                index = resolveItemIndex(equipped, fighter, index),
+                                priority = priority[category],
+                                effectiveType = category == 'Melee' and 'Melee' or 'Gun',
+                            }
+                        end
+                    end
+                end
+                if #entries == 0 then
+                    return nil
+                end
+                table.sort(entries, function(a, b)
+                    return a.priority < b.priority
+                end)
+                local equippedEntry = nil
+                for _, entry in ipairs(entries) do
+                    if entry.item == equipped or itemIsEquipped(entry.item) then
+                        equippedEntry = entry
+                        break
+                    end
+                end
+                if equippedEntry then
+                    local item = equippedEntry.item
+                    if (equippedEntry.category == 'Primary' or equippedEntry.category == 'Secondary') and itemAmmo(item) <= 0 then
+                        if onEmpty == 'Reload' or onEmpty == 'SwapOrReload' then
+                            if itemAmmoReserve(item) > 0 then
+                                return { type = 'Reload', item = item, itemType = equippedEntry.effectiveType, index = equippedEntry.index }
+                            end
+                        end
+                        if onEmpty == 'Swap' or onEmpty == 'SwapOrReload' then
+                            for _, entry in ipairs(entries) do
+                                if entry.item ~= item and itemAmmo(entry.item) > 0 then
+                                    return { type = 'Swap', item = entry.item, itemType = entry.effectiveType, index = entry.index }
+                                end
+                            end
+                        end
                         return nil
                     end
-                    if itemIsEquipped(bestSwap) then
-                        return { type = 'Reload', item = bestSwap, itemType = itemType(bestSwap), index = bestSwapIndex }
+                    local resolvedType = itemType(item) or equippedEntry.effectiveType
+                    if resolvedType == 'Melee' or (itemInfo(item) and rawget(itemInfo(item), 'Class') == 'Melee') then
+                        return { type = 'Attack', item = item, itemType = 'Melee', index = equippedEntry.index }
                     end
-                    return { type = 'Swap', item = bestSwap, itemType = itemType(bestSwap), index = bestSwapIndex }
+                    if itemAmmo(item) > 0 or resolvedType ~= 'Gun' then
+                        return { type = 'Attack', item = item, itemType = equippedEntry.effectiveType or resolvedType, index = equippedEntry.index }
+                    end
                 end
-                local emptyGun = itemType(bestAttack) == 'Gun' and itemAmmo(bestAttack) == 0
-                if not itemIsEquipped(bestAttack) then
-                    return { type = 'Swap', item = bestAttack, itemType = itemType(bestAttack), index = bestAttackIndex }
+                for _, entry in ipairs(entries) do
+                    local item = entry.item
+                    if entry.item ~= equipped and itemIsEquipped(item) then
+                        continue
+                    end
+                    local resolvedType = itemType(item)
+                    local isGun = resolvedType == 'Gun' or (itemInfo(item) and rawget(itemInfo(item), 'Class') == 'Gun')
+                    if isGun and itemAmmo(item) <= 0 then
+                        if itemAmmoReserve(item) > 0 and (onEmpty == 'Reload' or onEmpty == 'SwapOrReload') then
+                            return { type = 'Reload', item = item, itemType = entry.effectiveType or resolvedType, index = entry.index }
+                        end
+                    else
+                        return { type = 'Swap', item = item, itemType = entry.effectiveType or resolvedType, index = entry.index }
+                    end
                 end
-                if emptyGun then
-                    return { type = 'Reload', item = bestAttack, itemType = itemType(bestAttack), index = bestAttackIndex }
-                end
-                return { type = 'Attack', item = bestAttack, itemType = itemType(bestAttack), index = bestAttackIndex }
+                return nil
             end
             local ShootLock = {}
             ShootLock.__index = ShootLock
@@ -2504,6 +2583,7 @@ return {
                     _projectileEnvironmentID = nil,
                     _lastTargetWorld = nil,
                     _lastDefensiveViewAngles = nil,
+                    _weaponTransitionUntil = 0,
                     _lastEquippedItem = nil,
                     _lastClientCFrame = nil,
                     _antiAimDesync = AntiAimDesync.new(),
@@ -2555,6 +2635,7 @@ return {
                 return { cframe = self._projectileBreaker:Compute(clientCF), shouldSkipDefense = true }
             end
             function Controller:_Plan(dt, action, target, ourRootPart, clientCF, mode, fighter, characterController)
+                local inWeaponTransition = os.clock() < self._weaponTransitionUntil
                 local canFire = true
                 if target ~= nil then
                     canFire = not self._spatialLimitGate:Tick(target)
@@ -2617,7 +2698,7 @@ return {
                     return { cframe = clientCF }
                 end
                 local currentlyEquipped = resolveFighterEquippedItem(fighter)
-                if not sameItem(currentlyEquipped, action.item) and not itemIsEquipped(action.item) then
+                if currentlyEquipped ~= action.item and not itemIsEquipped(action.item) then
                     self._hitscanStrategy:ClearGlue()
                     self._meleeStrategy:ClearGlue()
                     local index = action.index
@@ -2650,9 +2731,16 @@ return {
                 if itemIsReloading(action.item) then
                     self._hitscanStrategy:ClearGlue()
                     self._meleeStrategy:ClearGlue()
-                    self._reloadHyperEvadeActive = Setting.ReloadHyperEvade() == true
+                    if inWeaponTransition then
+                        self._reloadHyperEvadeActive = false
+                        return { cframe = clientCF, shouldSkipDefense = true, _weaponTransitionReload = true }
+                    end
+                    self._reloadHyperEvadeActive = true
                     if Setting.ReloadHyperEvade() then
-                        return { cframe = scatterFar(clientCF.Position, true, 1e9, 1.0), shouldSkipDefense = true, _reloadHyperEvade = true }
+                        -- Use scatterFar immediately (not clientCF) so the FIRST
+                        -- HeartbeatUpdate also sends an INF position, not real pos.
+                        local evadeCF = scatterFar(clientCF.Position, true, 1e9, 1.0)
+                        return { cframe = evadeCF, shouldSkipDefense = true, _reloadHyperEvade = true }
                     end
                     return { cframe = randomEvade(clientCF), shouldSkipDefense = true }
                 end
@@ -2716,22 +2804,27 @@ return {
                 self:_RefreshProjectileEnvironment(fighter)
                 local ourRootPart = self._boundRootPart
                 local clientCF = characterController:GetClientCFrame()
+                -- ── UNDERGROUND GUARD ─────────────────────────────────────────────
+                -- Underground's Heartbeat may run before or after ragebot's, and
+                -- GetClientCFrame() reads _rootPart.CFrame when _oldCFrame is nil.
+                -- If underground just set hrp.CFrame = fakePos, we get the fake Y
+                -- as clientCF.  This causes weapon-switch, reload, and plan calls
+                -- to send the underground (or INF-scatter) position to the server,
+                -- which the server treats as a void-level position → character dies.
+                -- Fix: always prefer the live undergroundRealCF (true client pos).
                 if undergroundEnabled and undergroundRealCF
                     and typeof(undergroundRealCF) == 'CFrame'
                     and undergroundSnapshotCharacter == lp.Character then
                     clientCF = undergroundRealCF
                 end
-                if clientCF == nil or typeof(clientCF) ~= 'CFrame' then
-                    return
-                end
+                -- Hard sanity: bail if clientCF is nil, NaN, or suspiciously far
+                if clientCF == nil or typeof(clientCF) ~= 'CFrame' then return end
                 do
                     local p = clientCF.Position
                     local px, py, pz = p.X, p.Y, p.Z
-                    if px ~= px or py ~= py or pz ~= pz then
-                        return
-                    end
-                    if math.abs(px) > 5000000 or math.abs(py) > 500000 or math.abs(pz) > 5000000 then
-                        if undergroundRealCF and typeof(undergroundRealCF) == 'CFrame' then
+                    if px ~= px or py ~= py or pz ~= pz then return end      -- NaN
+                    if math.abs(py) > 500000 then                              -- leaked scatter Y
+                        if undergroundRealCF then
                             clientCF = undergroundRealCF
                         else
                             return
@@ -2744,8 +2837,28 @@ return {
                     target = nil
                 end
                 local action = getAction(fighter)
+                local equippedNow = resolveFighterEquippedItem(fighter)
+                if self._lastEquippedItem ~= nil and equippedNow ~= nil and equippedNow ~= self._lastEquippedItem then
+                    self._hitscanStrategy:ClearGlue()
+                    self._meleeStrategy:ClearGlue()
+                    self._hitscanStrategy:ResetState()
+                    self._meleeStrategy:ResetState()
+                    self._weaponTransitionUntil = math.max(self._weaponTransitionUntil, os.clock() + 0.20)
+                    characterController:SetServerCFrame(clientCF)
+                    characterController:HeartbeatUpdate()
+                end
+                self._lastEquippedItem = equippedNow or self._lastEquippedItem
                 self._lastClientCFrame = clientCF
                 self._lastTargetWorld = target ~= nil and target.rootPart.Position or nil
+                if os.clock() < self._weaponTransitionUntil then
+                    self._hitscanStrategy:ClearGlue()
+                    self._meleeStrategy:ClearGlue()
+                    self:_ApplyForcedCrouch(false)
+                    characterController:SetServerCFrame(clientCF)
+                    characterController:SendViewAngles(20, nil)
+                    characterController:HeartbeatUpdate()
+                    return
+                end
                 if Setting.AntiAimEnabled() then
                     self._currentFrameAAAngles = self._antiAimDesync:Compute(dt or 0, Setting.AntiAimMode())
                 else
@@ -2756,30 +2869,33 @@ return {
                 self:_ApplyPlan(plan, target, characterController, fighter)
                 self:_ApplyForcedCrouch(plan.shouldForceCrouch == true)
                 if plan.weaponAction ~= nil then
-                    self._reloadHyperEvadeActive = false
+                    if plan.kind == 'weapon' then
+                        self._weaponTransitionUntil = os.clock() + 0.35
+                        self._hitscanStrategy:ResetState()
+                        self._meleeStrategy:ResetState()
+                        characterController:SetServerCFrame(clientCF)
+                        characterController:HeartbeatUpdate()
+                    end
                     plan.weaponAction()
-                    characterController:HeartbeatUpdate()
-                    return
+                    if plan.kind == 'weapon' then
+                        characterController:SetServerCFrame(clientCF)
+                        characterController:HeartbeatUpdate()
+                    end
                 end
                 characterController:HeartbeatUpdate()
-                if plan._reloadHyperEvade and Setting.ReloadHyperEvade() and action and action.item then
-                    local equippedNow = resolveFighterEquippedItem(fighter)
-                    if sameItem(equippedNow, action.item) then
-                        local spams = math.clamp(math.floor(tonumber(Setting.HyperEvadeCount()) or 5), 2, 20)
-                        for _i = 2, spams do
-                            if not self._enabled then
-                                break
-                            end
-                            local currentCF = undergroundEnabled and undergroundRealCF or clientCF
-                            if typeof(currentCF) ~= 'CFrame' then
-                                break
-                            end
-                            local spamCF = scatterFar(currentCF.Position, true, 1e9, 1.0)
-                            characterController:SetServerCFrame(spamCF)
-                            characterController:HeartbeatUpdate()
+                if plan._reloadHyperEvade and os.clock() >= self._weaponTransitionUntil and self._lastEquippedItem == equippedNow and equippedNow ~= nil then
+                    local spams = math.clamp(math.floor(tonumber(Setting.HyperEvadeCount()) or 5), 2, 20)
+                    for _i = 2, spams do
+                        if os.clock() < self._weaponTransitionUntil or self._lastEquippedItem ~= equippedNow then
+                            break
                         end
-                        characterController:SetServerCFrame(clientCF)
+                        local spamCF = scatterFar(clientCF.Position, true, 1e9, 1.0)
+                        characterController:SetServerCFrame(spamCF)
+                        characterController:HeartbeatUpdate()
                     end
+                    characterController:SetServerCFrame(clientCF)
+                else
+                    characterController:SetServerCFrame(clientCF)
                 end
             end
             function Controller:GetLastTargetWorld()
@@ -2788,6 +2904,7 @@ return {
             function Controller:_Reset()
                 self._lastTargetWorld = nil
                 self._lastDefensiveViewAngles = nil
+                self._weaponTransitionUntil = 0
                 self._lastEquippedItem = nil
                 self._lastClientCFrame = nil
                 self:_ApplyForcedCrouch(false)
@@ -15991,33 +16108,50 @@ ErrorReporter.set_game(GameName)
                 RivalsRuntimeBridge.LogDiagnosticEvent('Ready', 'Loaded -- ready to fight (' .. tostring(source) .. ')')
             end
             RivalsRuntimeBridge.IsLocalReadyToFight = function()
+                if not IsAimbotGameReady() then
+                    return false
+                end
+                local duel = FighterDataCache.LocalDuel
+                if duel and duel.Seeded and duel.IsInShootingRange == true then
+                    RivalsRuntimeBridge.NotifyLocalReadyOnce('shooting range')
+                    return true
+                end
+                local state = RivalsRuntimeBridge.LocalReadyState
+                if state.ShieldSeen then
+                    return true
+                end
                 local fighter = ResolveLocalFighter()
                 if not fighter then
                     return false
                 end
-                local entity = fighter.Entity
-                local model = entity and entity.Model
-                if not model or model ~= LP.Character then
-                    return false
+                if type(fighter.Data) == 'table' and fighter.Data.IsInShootingRange == true then
+                    RivalsRuntimeBridge.NotifyLocalReadyOnce('shooting range (sync)')
+                    return true
                 end
-                local duel = FighterDataCache.LocalDuel
-                if duel and duel.Seeded then
-                    if duel.IsInDuel == true or duel.IsInShootingRange == true then
+                if state.LastSeenFighter ~= fighter then
+                    state.LastSeenFighter = fighter
+                end
+                local entity = fighter.Entity
+                if entity and type(entity.Data) == 'table' and entity.Data.IsInvincible == true then
+                    state.ShieldSeen = true
+                    RivalsRuntimeBridge.NotifyLocalReadyOnce('spawn shield')
+                    return true
+                end
+                if FighterDataCache.Cache[fighter] == true then
+                    state.ShieldSeen = true
+                    RivalsRuntimeBridge.NotifyLocalReadyOnce('spawn shield (cache)')
+                    return true
+                end
+                if state.InitialLifeAdoptionOpen then
+                    if type(entity) == 'table' and rawget(entity, '_is_in_world') == true
+                        and rawget(fighter, 'EquippedItem') ~= nil then
+                        state.InitialLifeAdoptionOpen = false
+                        state.ShieldSeen = true
+                        RivalsRuntimeBridge.NotifyLocalReadyOnce('mid-life adopt (equipped item)')
                         return true
                     end
-                    return false
                 end
-                if ReadFighterValue(fighter, 'IsInDuel') == true or ReadFighterValue(fighter, 'IsInShootingRange') == true then
-                    return true
-                end
-                local data = type(fighter.Data) == 'table' and fighter.Data or nil
-                if data and (rawget(data, 'IsInDuel') == true or rawget(data, 'IsInShootingRange') == true) then
-                    return true
-                end
-                if type(entity) == 'table' and rawget(entity, '_is_in_world') == true and rawget(fighter, 'EquippedItem') ~= nil then
-                    return true
-                end
-                return FighterDataCache.Cache[fighter] == true
+                return false
             end
             RivalsRuntimeBridge.WaitForLocalReady = function(timeoutSec)
                 local deadline = timeoutSec and (tick() + timeoutSec) or nil
@@ -16883,7 +17017,7 @@ ErrorReporter.set_game(GameName)
             end
             function RivalsRagebot.Update(deltaTime)
                 local now = tick()
-                if RivalsRagebot.IsEnabled() and RivalsRagebot.IsBaitModeEnabled() then
+                if RivalsRagebot.IsBaitModeEnabled() then
                     RivalsRagebot.UpdateHostileTeleportTracker(now)
                     if RivalsRagebot.IsHostileCheating() then
                         if RivalsRuntimeBridge.ResetKiciaRagebot then
