@@ -2823,7 +2823,31 @@ return {
                 return controllerInstance
             end
             function KiciaRagebot.IsEnabled()
-                return togValue('P8S4T1', false)
+                if not togValue('P8S4T1', false) then
+                    return false
+                end
+                -- Executor capability gate: getgc walks GC to find FighterController;
+                -- sethiddenproperty writes PhysicsRepRootPart for void redirect.
+                -- Without both, the bot cannot function. Gate fires a one-time notify.
+                if KiciaRagebot.CapsOk == nil then
+                    KiciaRagebot.CapsOk = __kicia_hook_genv.KiciaHookCaps.gate(
+                        'Ragebot', 'getgc', 'sethiddenproperty'
+                    )
+                end
+                if not KiciaRagebot.CapsOk then
+                    return false
+                end
+                -- Never run in practice / shooting range (no real match).
+                local localDuel = FighterDataCache and FighterDataCache.LocalDuel
+                if localDuel and localDuel.Seeded and localDuel.IsInShootingRange == true then
+                    return false
+                end
+                -- Respect keypicker state (Mode 'Always' -> GetState() always true).
+                local keypicker = Options and Options.P8S4T1K
+                if keypicker and type(keypicker.GetState) == 'function' then
+                    return keypicker:GetState() == true
+                end
+                return true
             end
             function KiciaRagebot.Update(dt)
                 local controller = ensureController()
@@ -15331,6 +15355,7 @@ ErrorReporter.set_game(GameName)
 
             RivalsRuntimeBridge.UpdateCameraAim = function(deltaTime)
                 if RivalsRuntimeBridge.MovementRecorder.IsCameraClaimed()
+                    or RivalsRuntimeBridge.IsFlickbotCameraClaimed()
                     or not AimbotBridge.IsCameraAimEnabled()
                     or not IsAimbotGameReady()
                     or not IsAimbotCameraReady()
@@ -24869,6 +24894,50 @@ end
                         Text = "Hit Part",
                     })
                     SilentSettings:SetupDependencies({ { Options.P2S1D1, "Silent" } })
+                    local flickbotToggle = Combat:AddToggle('P2S1T12', {
+                        Text = 'Flickbot',
+                        Default = false,
+                        Tooltip = 'Flicks to the target with a human-looking motion. Uses the Aimbot target and FOV settings.',
+                        Callback = function(value)
+                            if not value then
+                                RivalsRuntimeBridge.ResetFlickbot()
+                            end
+                        end,
+                    })
+                    flickbotToggle:AddKeyPicker('P2S1T12K', {
+                        Default = 'Unknown',
+                        Mode = 'Hold',
+                        Text = 'Flickbot',
+                        NoUI = false,
+                    })
+                    local FlickbotSettings = Combat:AddDependencyBox()
+                    FlickbotSettings:AddToggle('P2S1T13', {
+                        Text = 'Shoot',
+                        Default = false,
+                        Tooltip = 'Fires automatically once the flick lands.',
+                    })
+                    FlickbotSettings:AddSlider('P2S1S8', {
+                        Text = 'Shot Delay', Default = 0, Min = 0, Max = 250,
+                        Rounding = 0, Suffix = ' ms', Compact = true,
+                    })
+                    FlickbotSettings:AddSlider('P2S1S9', {
+                        Text = 'Cooldown', Default = 250, Min = 0, Max = 2000,
+                        Rounding = 0, Suffix = ' ms', Compact = true,
+                    })
+                    FlickbotSettings:AddSlider('P2S1S10', {
+                        Text = 'Flick Duration', Default = 110, Min = 30, Max = 400,
+                        Rounding = 0, Suffix = ' ms', Compact = true,
+                    })
+                    FlickbotSettings:AddSlider('P2S1S11', {
+                        Text = 'Curvature', Default = 12, Min = 0, Max = 50,
+                        Rounding = 0, Compact = true,
+                    })
+                    FlickbotSettings:AddSlider('P2S1S12', {
+                        Text = 'Humanness', Default = 30, Min = 0, Max = 100,
+                        Rounding = 0, Compact = true,
+                    })
+                    FlickbotSettings:SetupDependencies({{ Toggles.P2S1T12, true }})
+
                     local Triggerbot = Combat:AddToggle("P2S1T7", {
                         Text = "Triggerbot",
                         Default = false,
@@ -27040,6 +27109,7 @@ local RivalsRuntime = {}
                 Connections:register('AnimationPlayer_Render', RunService.RenderStepped:Connect(GuardRivalsCallback('AnimationPlayer_Render', RivalsRuntimeBridge.AnimationPlayer.Update)))
                 Connections:register('CameraModifiers_Render', RunService.RenderStepped:Connect(GuardRivalsCallback('CameraModifiers_Render', RivalsModsState.UpdateCameraModifiers)))
                 Connections:register('MovementRecorder_Render', RunService.RenderStepped:Connect(GuardRivalsCallback('MovementRecorder_Render', RivalsRuntimeBridge.MovementRecorder.UpdateRender)))
+                Connections:register('Flickbot_Render', RunService.RenderStepped:Connect(GuardRivalsCallback('Flickbot_Render', RivalsRuntimeBridge.UpdateFlickbot)))
                 Connections:register('CameraAim_Heartbeat', RunService.Heartbeat:Connect(GuardRivalsCallback('CameraAim_Heartbeat', RivalsRuntimeBridge.UpdateCameraAim)))
                 Connections:register('Aimbot_Render', RunService.Heartbeat:Connect(GuardRivalsCallback('Aimbot_Render', RivalsRuntimeBridge.UpdateAimbot)))
                 Connections:register('Ragebot_Heartbeat', RunService.Heartbeat:Connect(GuardRivalsCallback('Ragebot_Heartbeat', RivalsRuntimeBridge.UpdateRagebot)))
@@ -27381,6 +27451,14 @@ local RivalsRuntime = {}
                     { idx = 'P2S1T15', type = 'Toggle', value = true },
                     { idx = 'P2S1D5', type = 'Dropdown', value = 'Head' },
                     { idx = 'P2S1S2', type = 'Slider', value = 282 },
+                    { idx = 'P2S1T12', type = 'Toggle', value = false },
+                    { idx = 'P2S1T12K', type = 'KeyPicker', mode = 'Hold', key = 'Unknown', modifiers = {} },
+                    { idx = 'P2S1T13', type = 'Toggle', value = false },
+                    { idx = 'P2S1S8', type = 'Slider', value = 0 },
+                    { idx = 'P2S1S9', type = 'Slider', value = 250 },
+                    { idx = 'P2S1S10', type = 'Slider', value = 110 },
+                    { idx = 'P2S1S11', type = 'Slider', value = 12 },
+                    { idx = 'P2S1S12', type = 'Slider', value = 30 },
                     { idx = 'P2S1T6', type = 'Toggle', value = false },
                     { idx = 'P2S1T7K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
                     { idx = 'P2S1S7', type = 'Slider', value = 0 },
