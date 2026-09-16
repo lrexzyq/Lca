@@ -37,7 +37,7 @@ local Window = Library:CreateWindow({
         KeyPicker = true,
         SubTabUnderline = true,
     },
-    TabTransitionTime = 0.22,
+    TabTransitionTime = 0.001,
     TabSwipeOffset = 26,
     TabSwipeFrom = "right",
 })
