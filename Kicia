@@ -814,7 +814,7 @@ end
 return module
 end
 __kicia_hook_shared.rivals_ragebot_kernel = function()
-return {
+return {}
     init = function(ctx)
         local RivalsRuntimeBridge = ctx.RivalsRuntimeBridge
         local Options = ctx.Options
