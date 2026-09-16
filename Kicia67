@@ -5,9 +5,6 @@ local SaveManager = loadstring(game:HttpGet(Repo .. "addons/SaveManager.lua"))()
 local Players = game:GetService("Players")
 local Stats = game:GetService("Stats")
 local LocalPlayer = Players.LocalPlayer
-local lp = LocalPlayer
-local RunService = game:GetService("RunService")
-local Workspace = game:GetService("Workspace")
 local Options = Library.Options
 local Toggles = Library.Toggles
 Library.ForceCheckbox = false
@@ -30,20 +27,19 @@ local Window = Library:CreateWindow({
     MinimizeKeybind = Enum.KeyCode.RightBracket,
     MinimizedWidth = 300,
     Animations = {
-        ToggleWindow = false,
-        TabSwitch = false,
-        Groupbox = false,
-        Dropdown = false,
-        KeyPicker = false,
-        SubTabUnderline = false,
+        ToggleWindow = true,
+        TabSwitch = true,
+        Groupbox = true,
+        Dropdown = true,
+        KeyPicker = true,
+        SubTabUnderline = true,
     },
-    TabTransitionTime = 0,
-    TabSwipeOffset = 0,
+    TabTransitionTime = 0.22,
+    TabSwipeOffset = 26,
     TabSwipeFrom = "right",
 })
 local Tabs = {
     Combat = Window:AddTab({ Name = "Combat", Icon = "crosshair", Description = "Combat" }),
-    Ragebot = Window:AddTab({ Name = "Ragebot", Icon = "zap", Description = "Ragebot", SingleColumn = true }),
     Automation = Window:AddTab({ Name = "Automation", Icon = "zap", Description = "Automation" }),
     ESP = Window:AddTab({ Name = "ESP", Icon = "eye", Description = "Player ESP" }),
     Movement = Window:AddTab({ Name = "Movement", Icon = "move", Description = "Movement controls" }),
@@ -75,421 +71,6 @@ local function ResolveGlobalEnv()
     end
     return _G
 end
-local undergroundEnabled = false
-local undergroundDepth = 2.5
-local undergroundOffset = Vector3.zero
-local undergroundConn = nil
-local undergroundSteppedConn = nil
-local undergroundRenderConn = nil
-local undergroundRenderConn2 = nil
-local undergroundRenderConn3 = nil
-local undergroundFloodConn = nil
-local undergroundOwnershipConn = nil
-local undergroundRemoteConn = nil
-local undergroundPhysicsConn = nil
-local undergroundJointConn = nil
-local undergroundSafeConn = nil
-local undergroundRestoreConn = nil
-local undergroundRealCF = nil
-local undergroundRealVel = nil
-local undergroundRealAngVel = nil
-local undergroundSnapshot = nil
-local undergroundSnapshotCharacter = nil
-local undergroundFirstRun = true
-local undergroundTick = 0
-local undergroundChaosSeed = 0
-local undergroundRemoteList = {}
-local undergroundPhysForces = {}
-local undergroundFallHeight = -500
-local undergroundSafeBuffer = 100
-
-local function ugGetCharacter()
-    local char = lp.Character
-    return char
-end
-
-local function ugGetHrp()
-    local char = ugGetCharacter()
-    if not char then return nil end
-    return char:FindFirstChild("HumanoidRootPart")
-end
-
-local function ugUpdateFallHeight()
-    pcall(function()
-        local fh = Workspace.FallenPartsDestroyHeight
-        if type(fh) == "number" then
-            undergroundFallHeight = fh
-        end
-    end)
-end
-
-local function ugClampY(y)
-    local minY = undergroundFallHeight + undergroundSafeBuffer
-    if y < minY then return minY end
-    return y
-end
-
-local function ugComputeFakeY(hrp, char)
-    local depth = math.clamp(tonumber(undergroundDepth) or 2.5, -15, 30)
-    local params = RaycastParams.new()
-    params.FilterDescendantsInstances = { char }
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    local result = Workspace:Raycast(hrp.Position, Vector3.new(0, -500, 0), params)
-    local fakeY = result and (result.Position.Y - depth) or (hrp.Position.Y - depth)
-    return ugClampY(fakeY)
-end
-
-local function ugCollectRemotes()
-    undergroundRemoteList = {}
-    local seen = {}
-    local function scan(container)
-        if not container then return end
-        for _, obj in ipairs(container:GetDescendants()) do
-            if (obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") or obj:IsA("UnreliableRemoteEvent")) and not seen[obj] then
-                seen[obj] = true
-                table.insert(undergroundRemoteList, obj)
-            end
-        end
-    end
-    pcall(scan, game:GetService("ReplicatedStorage"))
-end
-
-local function ugCleanupForces()
-    for _, force in ipairs(undergroundPhysForces) do
-        pcall(function() force:Destroy() end)
-    end
-    undergroundPhysForces = {}
-end
-
-local function ugCaptureSnapshot()
-    local char = ugGetCharacter()
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not char or not hrp then return false end
-    local camera = Workspace.CurrentCamera
-    local snap = {
-        character = char,
-        pivot = char:GetPivot(),
-        camera = camera and camera.CFrame or nil,
-        hrpCFrame = hrp.CFrame,
-        hrpVelocity = hrp.AssemblyLinearVelocity,
-        hrpAngularVelocity = hrp.AssemblyAngularVelocity,
-        humanoidState = nil,
-        humanoidAutoRotate = nil,
-        parts = {},
-        joints = {},
-    }
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if hum then
-        pcall(function() snap.humanoidState = hum:GetState() end)
-        pcall(function() snap.humanoidAutoRotate = hum.AutoRotate end)
-    end
-    for _, obj in ipairs(char:GetDescendants()) do
-        if obj:IsA("BasePart") then
-            snap.parts[obj] = {
-                cframe = obj.CFrame,
-                velocity = obj.AssemblyLinearVelocity,
-                angularVelocity = obj.AssemblyAngularVelocity,
-                anchored = obj.Anchored,
-                collide = obj.CanCollide,
-                touch = obj.CanTouch,
-                query = obj.CanQuery,
-            }
-        elseif obj:IsA("Motor6D") then
-            snap.joints[obj] = {
-                transform = obj.Transform,
-                c0 = obj.C0,
-                c1 = obj.C1,
-                part0 = obj.Part0,
-                part1 = obj.Part1,
-            }
-        elseif obj:IsA("Weld") then
-            snap.joints[obj] = {
-                c0 = obj.C0,
-                c1 = obj.C1,
-                part0 = obj.Part0,
-                part1 = obj.Part1,
-            }
-        end
-    end
-    undergroundSnapshot = snap
-    undergroundSnapshotCharacter = char
-    undergroundFirstRun = false
-    return true
-end
-
-local function ugRestoreSnapshot()
-    local snap = undergroundSnapshot
-    local char = ugGetCharacter()
-    if not snap or not char or snap.character ~= char then
-        return false
-    end
-
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return false end
-
-    pcall(function() char:PivotTo(snap.pivot) end)
-
-    for joint, state in pairs(snap.joints) do
-        if joint and joint.Parent then
-            pcall(function()
-                if state.part0 then joint.Part0 = state.part0 end
-                if state.part1 then joint.Part1 = state.part1 end
-                if state.c0 then joint.C0 = state.c0 end
-                if state.c1 then joint.C1 = state.c1 end
-                if state.transform and joint:IsA("Motor6D") then joint.Transform = state.transform end
-            end)
-        end
-    end
-
-    for part, state in pairs(snap.parts) do
-        if part and part.Parent then
-            pcall(function()
-                part.CFrame = state.cframe
-                part.AssemblyLinearVelocity = state.velocity
-                part.AssemblyAngularVelocity = state.angularVelocity
-                part.Anchored = state.anchored
-                part.CanCollide = state.collide
-                part.CanTouch = state.touch
-                part.CanQuery = state.query
-            end)
-        end
-    end
-
-    pcall(function()
-        hrp.CFrame = snap.hrpCFrame
-        hrp.AssemblyLinearVelocity = snap.hrpVelocity
-        hrp.AssemblyAngularVelocity = snap.hrpAngularVelocity
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum then
-            if snap.humanoidAutoRotate ~= nil then
-                hum.AutoRotate = snap.humanoidAutoRotate
-            end
-            if snap.humanoidState then
-                pcall(function() hum:ChangeState(snap.humanoidState) end)
-            end
-        end
-    end)
-
-    pcall(function()
-        local camera = Workspace.CurrentCamera
-        if camera and snap.camera then camera.CFrame = snap.camera end
-    end)
-
-    return true
-end
-
-local function ugStartRestoreWindow()
-    if undergroundRestoreConn then
-        undergroundRestoreConn:Disconnect()
-        undergroundRestoreConn = nil
-    end
-    local remaining = 12
-    undergroundRestoreConn = RunService.Heartbeat:Connect(function()
-        if ugRestoreSnapshot() then
-            remaining = remaining - 1
-            if remaining <= 0 then
-                undergroundRestoreConn:Disconnect()
-                undergroundRestoreConn = nil
-                undergroundSnapshot = nil
-                undergroundSnapshotCharacter = nil
-            end
-        else
-            undergroundRestoreConn:Disconnect()
-            undergroundRestoreConn = nil
-            undergroundSnapshot = nil
-            undergroundSnapshotCharacter = nil
-        end
-    end)
-end
-
-local function ugSafeTeleport(hrp)
-    if not hrp then return end
-    local pos = hrp.Position
-    local minY = undergroundFallHeight + undergroundSafeBuffer + 50
-    if pos.Y < minY then
-        pcall(function()
-            hrp.CFrame = CFrame.new(pos.X, minY, pos.Z)
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.AssemblyAngularVelocity = Vector3.zero
-        end)
-    end
-end
-
-startUnderground = function()
-    local currentCharacter = ugGetCharacter()
-    if undergroundConn then
-        if undergroundSnapshotCharacter ~= currentCharacter and currentCharacter ~= nil then
-            ugCaptureSnapshot()
-        end
-        return
-    end
-    if undergroundRestoreConn then
-        undergroundRestoreConn:Disconnect()
-        undergroundRestoreConn = nil
-    end
-    if not ugCaptureSnapshot() then
-        undergroundEnabled = false
-        return
-    end
-    pcall(function() RunService:UnbindFromRenderStep("UndergroundSync") end)
-    pcall(function() RunService:UnbindFromRenderStep("UndergroundSync2") end)
-    pcall(function() RunService:UnbindFromRenderStep("UndergroundSync3") end)
-    undergroundEnabled = true
-    undergroundTick = 0
-    undergroundChaosSeed = math.random(1, 1e9)
-    ugUpdateFallHeight()
-    ugCollectRemotes()
-
-    undergroundConn = RunService.Heartbeat:Connect(function(dt)
-        if not undergroundEnabled then return end
-        undergroundTick = undergroundTick + dt
-        pcall(function()
-            local char = ugGetCharacter()
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            if not char or not hrp or char ~= undergroundSnapshotCharacter then return end
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if hum then
-                pcall(function() hum:ChangeState(Enum.HumanoidStateType.Physics) end)
-            end
-            undergroundRealCF = hrp.CFrame
-            undergroundRealVel = hrp.AssemblyLinearVelocity
-            undergroundRealAngVel = hrp.AssemblyAngularVelocity
-            local fakeY = ugComputeFakeY(hrp, char)
-            local chaos1 = math.sin(undergroundTick * 180 + undergroundChaosSeed) * 100
-            local chaos2 = math.cos(undergroundTick * 220 + undergroundChaosSeed) * 100
-            local base = undergroundRealCF and undergroundRealCF.Position or hrp.Position
-            hrp.CFrame = CFrame.new(base.X + chaos1 + undergroundOffset.X, fakeY, base.Z + chaos2 + undergroundOffset.Z)
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.AssemblyAngularVelocity = Vector3.zero
-        end)
-    end)
-
-    undergroundSteppedConn = RunService.Stepped:Connect(function()
-        if not undergroundEnabled then return end
-        pcall(function()
-            local char = ugGetCharacter()
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            if not char or not hrp or char ~= undergroundSnapshotCharacter then return end
-            local fakeY = ugClampY(ugComputeFakeY(hrp, char))
-            local base = undergroundRealCF and undergroundRealCF.Position or hrp.Position
-            hrp.CFrame = CFrame.new(base.X + undergroundOffset.X, fakeY, base.Z + undergroundOffset.Z)
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.AssemblyAngularVelocity = Vector3.zero
-        end)
-    end)
-
-    undergroundRenderConn = RunService:BindToRenderStep("UndergroundSync", Enum.RenderPriority.First.Value, function()
-        if undergroundEnabled and undergroundRealCF then
-            pcall(function()
-                local hrp = ugGetHrp()
-                if not hrp or lp.Character ~= undergroundSnapshotCharacter then return end
-                hrp.CFrame = undergroundRealCF
-                hrp.AssemblyLinearVelocity = undergroundRealVel or Vector3.zero
-                hrp.AssemblyAngularVelocity = undergroundRealAngVel or Vector3.zero
-            end)
-        end
-    end)
-
-    undergroundRenderConn2 = RunService:BindToRenderStep("UndergroundSync2", Enum.RenderPriority.Camera.Value, function()
-        if not undergroundEnabled then return end
-        pcall(function()
-            local hrp = ugGetHrp()
-            if hrp and undergroundSnapshotCharacter == lp.Character then
-                local base = undergroundRealCF and undergroundRealCF.Position or hrp.Position
-                hrp.CFrame = CFrame.new(base.X + undergroundOffset.X, ugClampY(ugComputeFakeY(hrp, lp.Character)), base.Z + undergroundOffset.Z)
-            end
-        end)
-    end)
-
-    undergroundRenderConn3 = RunService:BindToRenderStep("UndergroundSync3", Enum.RenderPriority.Last.Value, function()
-        if not undergroundEnabled then return end
-        pcall(function()
-            local hrp = ugGetHrp()
-            if not hrp or undergroundSnapshotCharacter ~= lp.Character then return end
-            local base = undergroundRealCF and undergroundRealCF.Position or hrp.Position
-            local pos = hrp.Position
-            hrp.CFrame = CFrame.new(base.X + undergroundOffset.X, ugClampY(pos.Y), base.Z + undergroundOffset.Z)
-        end)
-    end)
-
-    undergroundOwnershipConn = RunService.Heartbeat:Connect(function()
-        if not undergroundEnabled then return end
-        pcall(function()
-            local hrp = ugGetHrp()
-            if hrp and undergroundSnapshotCharacter == lp.Character and math.random() < 0.05 then
-                pcall(function() hrp:SetNetworkOwner(lp) end)
-            end
-        end)
-    end)
-
-    undergroundJointConn = RunService.Heartbeat:Connect(function()
-        if not undergroundEnabled then return end
-    end)
-
-    undergroundRemoteConn = nil
-    undergroundPhysicsConn = RunService.Heartbeat:Connect(function()
-        if not undergroundEnabled then return end
-        pcall(function()
-            local char = ugGetCharacter()
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            if not char or not hrp or undergroundSnapshotCharacter ~= char then return end
-            ugCleanupForces()
-        end)
-    end)
-
-    undergroundSafeConn = RunService.Heartbeat:Connect(function()
-        if not undergroundEnabled then return end
-        ugUpdateFallHeight()
-        pcall(function()
-            local char = ugGetCharacter()
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            if not char or not hrp or undergroundSnapshotCharacter ~= char then return end
-            ugSafeTeleport(hrp)
-        end)
-    end)
-end
-
-stopUnderground = function()
-    undergroundEnabled = false
-    if undergroundConn then undergroundConn:Disconnect() undergroundConn = nil end
-    if undergroundSteppedConn then undergroundSteppedConn:Disconnect() undergroundSteppedConn = nil end
-    if undergroundOwnershipConn then undergroundOwnershipConn:Disconnect() undergroundOwnershipConn = nil end
-    if undergroundJointConn then undergroundJointConn:Disconnect() undergroundJointConn = nil end
-    if undergroundPhysicsConn then undergroundPhysicsConn:Disconnect() undergroundPhysicsConn = nil end
-    if undergroundSafeConn then undergroundSafeConn:Disconnect() undergroundSafeConn = nil end
-    pcall(function() RunService:UnbindFromRenderStep("UndergroundSync") end)
-    pcall(function() RunService:UnbindFromRenderStep("UndergroundSync2") end)
-    pcall(function() RunService:UnbindFromRenderStep("UndergroundSync3") end)
-    undergroundRenderConn = nil
-    undergroundRenderConn2 = nil
-    undergroundRenderConn3 = nil
-    if undergroundRemoteConn then pcall(function() task.cancel(undergroundRemoteConn) end) undergroundRemoteConn = nil end
-    if undergroundFloodConn then pcall(function() task.cancel(undergroundFloodConn) end) undergroundFloodConn = nil end
-    if undergroundRestoreConn then undergroundRestoreConn:Disconnect() undergroundRestoreConn = nil end
-    ugCleanupForces()
-
-    local restored = ugRestoreSnapshot()
-    if restored then
-        ugStartRestoreWindow()
-    else
-        local char = ugGetCharacter()
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp and undergroundRealCF then
-            pcall(function()
-                hrp.CFrame = undergroundRealCF
-                hrp.AssemblyLinearVelocity = undergroundRealVel or Vector3.zero
-                hrp.AssemblyAngularVelocity = undergroundRealAngVel or Vector3.zero
-            end)
-        end
-    end
-
-    undergroundRemoteList = {}
-    undergroundRealCF = nil
-    undergroundRealVel = nil
-    undergroundRealAngVel = nil
-    undergroundFirstRun = true
-end
-
 local __kicia_hook_genv = ResolveGlobalEnv()
 if __kicia_hook_genv.Executed or _G.__KiciaHookExecuted then
     return
@@ -623,6 +204,69 @@ local function RequireSharedModule(name)
     return result
 end
 local ErrorReporter = nil
+__kicia_hook_shared.obsidian_icons = function()
+local Lucide = {}
+local IS_GETCUSTOMASSET_BROKEN = false
+if writefile and isfolder and makefolder and getcustomasset then
+	if not isfolder("lucide-icons") then
+		makefolder("lucide-icons")
+	end
+	if not isfile("lucide-icons/version.txt") then
+		writefile("lucide-icons/version.txt", "2026-08-03T17:46:40.608886867+00:00")
+	end
+	local ShouldUpdate = readfile("lucide-icons/version.txt") ~= "2026-08-03T17:46:40.608886867+00:00"
+	if ShouldUpdate then
+		writefile("lucide-icons/version.txt", "2026-08-03T17:46:40.608886867+00:00")
+	end
+	for spritesheet = 1, 2 do
+		if isfile(`lucide-icons/{spritesheet}.png`) and not ShouldUpdate then
+			continue
+		end
+		writefile(
+			`lucide-icons/{spritesheet}.png`,
+			game:HttpGet(
+				`https://raw.githubusercontent.com/mstudio45/lucide-roblox-direct/refs/heads/main/spritesheets/{spritesheet}.png`
+			)
+		)
+	end
+	local Success, _Error = pcall(function()
+		return getcustomasset("lucide-icons/1.png")
+	end)
+	IS_GETCUSTOMASSET_BROKEN = not Success
+end
+local icons = {{"align-vertical-distribute-center","chevron-down","list-restart","table-cells-split","gavel","dna-off","refresh-ccw-dot","venus","bean","circle-question-mark","folder-code","bolt","heater","feather","align-horizontal-distribute-center","grip-vertical","pill-bottle","person-standing","badge-swiss-franc","between-horizontal-end","file-braces-corner","rotate-cw","house-plus","bus-front","shield-ellipsis","between-vertical-end","globe-lock","tags","concierge-bell","bookmark-minus","file-down","picture-in-picture","messages-square","scissors","file-check-corner","phone-call","anchor","hand-helping","text-wrap","birdhouse","wifi-off","cloud-alert","message-square","cloud-download","folder-plus","cctv-off","mirror-round","user-round","pointer","between-horizontal-start","chevrons-up-down","brush","message-circle-more","parentheses","book-up-2","flame","chevrons-up","square-dashed","square-mouse-pointer","superscript","signal","wifi-cog","hexagon","navigation-2-off","eye-off","arrows-up-from-line","file-code-corner","square-centerline-dashed-horizontal","panels-right-bottom","scaling","hash","arrow-left-from-line","ship","ticket-percent","calendar-clock","x","non-binary","voicemail","presentation","tree-palm","badge","captions-off","align-vertical-justify-center","download","mouse-right","lens-convex","focus","diamond-percent","arrow-big-up","volume-x","mouse-pointer-click","origami","hard-drive","grid-2x2-x","package-minus","cloud","pipette","corner-left-down","badge-cent","cloud-lightning","user-round-pen","arrow-left-to-line","book-open-text","monitor-cloud","parking-meter","cat","heart-handshake","dam","trees","ham","circle-pause","chess-king","bean-off","rat","separator-horizontal","ambulance","signal-zero","citrus","phone-missed","calendar-off","chart-column","battery-medium","square-minus","star-check","decimals-arrow-left","folder-output","menu","image-down","terminal","angry","circle-dot-dashed","medal","cake-slice","git-graph","armchair","tickets","qr-code","copy","goal","trending-down","creative-commons","ev-charger","user-star","road","nfc","align-center-horizontal","car","notebook-tabs","ear","videotape","sun-moon","chart-scatter","podium","toolbox","calendar","calendar-cog","gallery-horizontal","clipboard-x","list-sort-ascending","book-open","circle-pile","rectangle-ellipsis","badge-plus","badge-info","file-headphone","bow-arrow","clipboard-pen-line","user-round-key","folder-search","utensils-crossed","arrow-up","arrow-up-from-dot","align-vertical-justify-start","layers-minus","pause","shrub","flag","biceps-flexed","align-horizontal-distribute-end","donut","calendar-plus-2","move-vertical","file-pen-line","badge-russian-ruble","radius","pilcrow","corner-left-up","georgian-lari","cable","book-user","square-arrow-down","circle-plus","view","cctv","circle-arrow-left","square-off","octagon-alert","panel-bottom-dashed","book-a","align-end-vertical","thumbs-up","globe","rabbit","layers-plus","banknote-arrow-down","message-square-off","dice-4","message-circle-x","folder-x","message-circle-warning","map","move","arrow-up-left","award","arrow-down-wide-narrow","unfold-horizontal","lens-concave","motorbike","music-4","shield-x","file-volume","disc-3","file-signal","columns-4","archive-x","square-dashed-kanban","mouse-pointer-2","clock-arrow-up","clock-fading","pencil-sparkles","vegan","star-plus","message-circle-plus","fast-forward","user-pen","chess-knight","wifi-pen","files","send-to-back","alarm-clock","shopping-basket","send","brush-cleaning","skip-back","book-audio","file-scan","message-square-dashed","chevrons-left","umbrella","skip-forward","clipboard-copy","map-pin-off","arrow-up-from-line","circle-chevron-up","circle-small","align-vertical-space-between","lamp-desk","circle-arrow-up","zap","beaker","paintbrush","broccoli","chevron-up","pen-tool","database-check","form","pencil-ruler","dna","arrow-big-down-dash","chart-area","bug-off","card-sim","map-pin-search","eye-dashed","ellipse","spell-check","popcorn","blocks","washing-machine","microchip","badge-minus","cloud-sun","circle","shield-alert","map-minus","separator-vertical","scan-square","ampersands","user-search","fence","square-user-round","sunrise","strikethrough","calendar-days","folder-bookmark","banknote-arrow-up","dollar-sign","message-square-quote","list-minus","cloud-hail","eye-closed","app-window-mac","ellipsis","copy-check","satellite","bookmark-plus","folder-key","coffee","circle-power","hourglass","tickets-plane","folder-git","bomb","layers-2","battery-full","user-minus","chart-gantt","folder-tree","command","badge-dollar-sign","align-start-vertical","briefcase-conveyor-belt","message-circle-question-mark","bluetooth-off","square-square","cannabis","book","grip-horizontal","circle-minus","audio-waveform","moon-star","arrow-down-narrow-wide","database-backup","wand","receipt-turkish-lira","calendar-minus-2","copy-minus","folder-input","book-image","mouse-left","tag-plus","shirt","server-off","move-up","plug-2","chess-rook","brackets","calendar-heart","list-ordered","star-x","mic-off","arrow-big-left","square-split-horizontal","clover","sun-snow","sofa","funnel-x","clock-2","calendar-fold","fish-off","baby","database-x","fold-vertical","hop","paperclip","cigarette","minus","smile-plus","diamond-plus","file-chart-column","triangle-dashed","git-pull-request-closed","badge-check","zoom-out","zoom-in","zodiac-virgo","plug-zap","heading-4","chess-queen","graduation-cap","grid-3x2","zodiac-sagittarius","list-music","square-dashed-bottom-code","clock-7","ethernet-port","scan-text","file-up","shower-head","equal-not","zodiac-pisces","move-down","clock-arrow-down","ticket-slash","ruler","tornado","zodiac-libra","circle-user-round","zodiac-leo","zodiac-gemini","list-filter","map-pin-check","egg-off","square-kanban","cog","dog","folder-closed","swords","spotlight","panel-right-dashed","zodiac-aries","paper-bag","truck-electric","zodiac-aquarius","check-line","save","bubbles","bot","chart-bar-increasing","x-line-top","trash-2","air-vent","swiss-franc","dot","sprout","worm","file-symlink","clipboard-paste","chevron-last","book-heart","workflow","circle-parking","globe-check","cloud-check","panel-left","circle-chevron-right","wine-off","wine","squares-unite","arrow-down-up","git-fork","forward","brain-circuit","between-vertical-start","database","panel-right","wind-arrow-down","message-square-diff","popsicle","log-out","git-branch-plus","clipboard-minus","file-text","wifi-sync","bell-off","wifi-high","table-rows-split","milk-off","tv-minimal","cloud-upload","banknote","wifi","webcam-off","drumstick","wheat-off","calendar-search","wheat","weight-tilde","bell-ring","circle-chevron-left","weight","arrow-down","arrow-up-down","folder-dot","fingerprint-pattern","folder-up","whole-word","monitor","disc-2","trending-up-down","webcam","user-shield","waypoints","tv-minimal-play","circle-stop","align-vertical-space-around","waves-vertical","waves-ladder","waves-horizontal","arrow-big-down","circle-parking-off","calendar-x-2","user-plus","move-diagonal-2","bandage","gallery-horizontal-end","panel-top-dashed","octagon-minus","waves-arrow-down","tram-front","watch","indian-rupee","wand-sparkles","audio-lines","wallpaper","wallet-minimal","wallet-cards","flip-vertical-2","rocket","wallet","ear-off","vote","save-check","volume-off","shield-half","printer","megaphone-off","volume-1","arrow-big-right","section","file-clock","volume","toy-brick","square-chevron-down","dice-1","drill","app-window","shield-check","hand-metal","volleyball","spell-check-2","umbrella-off","video","list-plus","sun-dim","rotate-ccw-key","vibrate","chart-pie","venus-and-mars","cloud-backup","copy-slash","wind","vault","layout-panel-left","badge-x","circle-percent","van","circle-arrow-out-down-right","square-x","italic","chart-column-increasing","utility-pole","step-forward","utensils","a-arrow-down","container","sticker","users-round","users","user-x","user-round-x","user-round-search","log-in","import","badge-turkish-lira","square-terminal","file-music","mic-vocal","beef","route-off","file-user","user-round-cog","square-radical","user-round-check","image-upscale","book-type","smile","signpost-big","user-round-arrow-left","cloudy","user-lock","square-percent","user-key","navigation-off","arrow-left","car-taxi-front","square-play","sparkle","chevrons-right-left","user","map-pin-plus","upload","unplug","square-code","unlink","university","square-pause","align-end-horizontal","ungroup","equal","megaphone","calendar-x","unfold-vertical","lamp-ceiling","egg","undo-2","undo","underline","circle-pound-sterling","video-off","japanese-yen","type-outline","fuel","file-search-corner","library","file-terminal","circle-chevron-down","accessibility","folder-lock","square-library","amphora","turntable","tally-2","turkish-lira","truck","trophy","gamepad-directional","sheet","circle-check-big","triangle-alert","triangle","map-pinned","corner-down-left","circuit-board","trending-up","train-front-tunnel","tree-deciduous","school","folder-open-dot","book-dashed","transgender","chevron-left","bluetooth","tree-pine","receipt-indian-rupee","monitor-stop","traffic-cone","tractor","tower-control","replace-all","touchpad-off","flask-conical","touchpad","funnel","square-star","folder-sync","torus","zodiac-ophiuchus","tool-case","toilet","arrow-up-narrow-wide","fishing-hook","text-quote","toggle-left","timer-reset","frame","calendar-arrow-down","clock-12","star-minus","radar","timer","images","lollipop","book-text","timeline","lamp-floor","file-plus-corner","image","ticket-x","badge-euro","bike","squares-exclude","list-checks","send-horizontal","dices","panel-left-dashed","thermometer-sun","thermometer-snowflake","option","banknote-check","scroll-text","server-plus","thermometer","theater","message-circle-off","toggle-right","pc-case","ferris-wheel","camera-off","text-cursor-input","text-cursor","info","text-align-justify","text-align-end","group","text-align-center","battery","test-tubes","tent-tree","test-tube-diagonal","rectangle-horizontal","bug","tent","telescope","bitcoin","lamp","battery-plus","database-search","tangent","file-diff","phone-off","link","tally-3","spline-pointer","circle-alert","axis-3d","shell","tag","binoculars","tablets","tablet-smartphone","screen-share","rose","table-properties","mail-minus","table-of-contents","table-columns-split","table-cells-merge","table-2","clipboard-pen","bottle-wine","alarm-clock-off","table","list","syringe","square-arrow-right","rotate-ccw-clock","badge-pound-sterling","bookmark-check","switch-camera","wrench-off","square-arrow-out-down-left","a-arrow-up","clock-check","sunset","sun-medium","vibrate-off","mail-check","zodiac-cancer","file-chart-column-increasing","file-code","subscript","chart-column-big","stretch-vertical","stretch-horizontal","cassette-tape","battery-low","monitor-pause","stone","signpost","image-plus","calendar-arrow-up","landmark","fish-symbol","sticky-note-x","loader","bold","dice-2","file-type","clipboard-clock","beer","lectern","chart-bar-stacked","file-check","git-pull-request-create","binary","move-diagonal","sticky-note-check","door-closed","sticky-note","layout-template","stethoscope","step-back","star-off","bookmark-off","hand-heart","scroll","scan-qr-code","message-square-check","star","stamp","squirrel","brain","folder","squircle","snail","key","clock-11","earth-lock","ticket-plus","arrow-up-0-1","bell-electric","square-user","heading","book-open-check","panel-top-close","lasso-select","move-left","square-stack","square-split-vertical","square-slash","bus","square-sigma","bed-single","chart-no-axes-gantt","file-spreadsheet","square-scissors","clipboard-list","square-round-corner","contact-round","leaf","keyboard-off","square-plus","file-badge","battery-warning","mail-question-mark","arrow-down-from-line","briefcase","biohazard","rectangle-circle","braces","scale-3d","panel-top-bottom-dashed","mail-x","square-dashed-mouse-pointer","user-cog","lock-open","square-pilcrow","pizza","list-indent-decrease","arrow-up-wide-narrow","square-pi","clock-5","mouse-pointer","rotate-ccw","align-horizontal-justify-center","database-arrow-down","antenna","memory-stick","scan-eye","square-parking","square-check","heart-plus","receipt-russian-ruble","map-pin-minus-inside","git-merge","gallery-vertical-end","square-m","hand-coins","zodiac-capricorn","wifi-low","square-equal","clock","file-pen","git-compare-arrows","cloud-sun-rain","align-horizontal-justify-start","square-dot","square-divide","square-arrow-right-enter","calendar-plus","square-bottom-dashed-scissors","arrow-down-z-a","bath","square-dashed-bottom","unlink-2","square-chevron-up","pin","folder-check","square-chevron-left","book-key","ribbon","microwave","saudi-riyal","gallery-vertical","square-chart-gantt","square-centerline-dashed-vertical","square-dashed-text","map-pin-pen","move-up-left","square-asterisk","folder-heart","square-arrow-up-right","shield-cog-corner","circle-play","arrow-up-a-z","square-arrow-right-exit","square-dashed-top-solid","square-arrow-out-up-right","square-arrow-out-up-left","circle-ellipsis","swatch-book","receipt-cent","spool","folder-archive","folder-symlink","columns-3","ban","message-square-x","paint-roller","soup","archive","square-arrow-down-right","construction","building-2","circle-slash-2","package","cake","cloud-rain","chart-bar","square","wrench","spray-can","sport-shoe","smartphone","flag-triangle-right","receipt-euro","speech","bell","speaker","sparkles","music-3","chart-bar-big","user-check","proportions","spade","plane","webhook-off","carrot","square-arrow-left","file-cog","circle-dashed","solar-panel","soap-dispenser-droplet","snowflake","mailbox","squares-subtract","smartphone-nfc","chevrons-left-right-ellipsis","split","list-sort-descending","sliders-vertical","forklift","sliders-horizontal","alarm-clock-minus","heart-x","eraser","book-marked","package-search","bluetooth-connected","rotate-ccw-square","chart-no-axes-column","cannabis-off","folder-kanban","message-square-plus","mars-stroke","skull","siren","signature","file-box","signal-medium","paint-bucket","glass-water","signal-low","glasses","piggy-bank","maximize-2","cuboid","cloud-off","check-check","activity","axe","plane-takeoff","sigma","cloud-rain-wind","flower","expand","copy-x","file-axis-3d","radical","chart-column-decreasing","shrimp","bug-play","align-vertical-distribute-start","highlighter","waves-arrow-up","tally-5","shopping-bag","ship-wheel","shield-user","circle-divide","shield-question-mark","shield-plus","shield-off","life-buoy","hard-hat","shield-keyhole","volume-2","battery-charging","russian-ruble","square-arrow-up-left","brick-wall-shield","footprints","shield-cog","building","shield-ban","shield","shelving-unit","tag-x","book-alert","link-2","astroid","bell-minus","image-up","closed-caption","drum","arrow-up-z-a","sun","share","shapes","file-key","settings-2","settings","scissors-line-dashed","server-crash","server-cog","server","ticket-check","combine","search-x","search-slash","mountain","mars","picture-in-picture-2","radio-off","flower-2","search-code","squares-intersect","search-alert","search","keyboard-music","star-half","screen-share-off","code-xml","pencil-line","mails","brain-cog","tablet","loader-circle","pi","trash","book-down","hdmi-port","scan-search","case-upper","circle-fading-arrow-up","redo","croissant","move-down-right","scan-face","barcode","scan-box","scan-barcode","bed","scan","divide","grape","remove-formatting","party-popper","file-chart-pie","save-plus","file-braces","dice-6","save-off","blender","image-minus","zap-off","square-check-big","satellite-dish","sandwich","salad","laptop-minimal","sailboat","monitor-check","map-pin-minus","file-minus-corner","chart-spline","message-square-more","rows-4","chart-candlestick","rows-3","arrow-down-a-z","rows-2","router","move-horizontal","file-sliders","frown","route","cup-soda","rewind","rotate-cw-fading-clock","sword","rotate-3d","roller-coaster","earth","slice","dice-3","milk","mouse-pointer-ban","crown","circle-slash","circle-star","rotate-cw-square","atom","package-x","bed-double","list-chevrons-up-down","circle-dot","file-exclamation-point","hand-fist","message-circle-code","folder-git-2","message-square-code","reply","towel-rack","replace","arrow-big-left-dash","repeat-off","dumbbell","repeat-2","repeat-1","repeat","scale","regex","flashlight","panel-top-open","refrigerator","refresh-cw-off","notebook","redo-2","refresh-cw","square-menu","brick-wall","monitor-smartphone","laptop","scan-line","clock-4","square-arrow-up","book-minus","file-question-mark","rectangle-vertical","rectangle-goggles","save-pen","arrow-down-to-line","receipt-swiss-franc","refresh-ccw","venetian-mask","calendar-check-2","receipt-japanese-yen","spline","banknote-x","git-pull-request-create-arrow","pound-sterling","circle-check","ratio","rainbow","phone","radio-receiver","radio","radiation","timer-off","arrow-big-right-dash","quote","pyramid","puzzle","backpack","projector","list-check","printer-check","power-off","mic-signal","arrow-down-right","power","receipt","wifi-zero","folder-minus","list-collapse","plus","plug","image-off","play-off","play","plane-landing","pin-off","square-chevron-right","mail-search","pill","bone-fracture","microscope","pilcrow-left","pickaxe","piano","tally-1","ampersand","ad","shopping-cart","align-vertical-justify-end","phone-incoming","alarm-smoke","phone-forwarded","file-input","clock-8","hand-grab","cloud-cog","blend","hd","radio-tower","list-tree","droplet","grid-2x2","eye","phi","percent","banana","gpu","pentagon","pencil-off","circle-equal","delete","pen-off","pen-line","headset","text-initial","arrow-up-right","move-right","leafy-green","message-square-dot","file-chart-line","columns-3-cog","parasol","calendar-minus","minimize-2","panels-left-bottom","panel-top","cone","panel-right-open","file-image","panel-right-close","palette","barrel","gallery-thumbnails","panel-left-right-dashed","cpu","panel-left-open","thumbs-down","merge","hamburger","bird","hat-glasses","code","helicopter","panel-bottom-close","panel-bottom","panda","file-video-camera","paintbrush-vertical","kanban","bone","apple","rocking-chair","bot-off","package-plus","package-open","diameter","circle-arrow-out-up-left","package-2","cable-car","arrow-down-left","square-activity","orbit","cigarette-off","omega","message-circle","circle-arrow-out-up-right","locate-fixed","octagon-pause","fold-horizontal","shovel","calendar-1","cloud-moon","square-arrow-out-down-right","nut-off","clock-plus","circle-euro","cloud-snow","anvil","arrow-big-up-dash","nut","notepad-text-dashed","notepad-text","list-video","monitor-off","newspaper","chevrons-down-up","clipboard-plus","circle-x","list-end","network","navigation-2","chevrons-right","navigation","message-square-reply","corner-down-right","music-2","summary","lamp-wall-down","move-up-right","paw-print","ellipsis-vertical","globe-off","square-stop","arrow-up-1-0","align-horizontal-justify-end","scan-heart","align-vertical-distribute-end","heart-crack","airplay","move-down-left","move-3d","message-square-share","monitor-x","bell-check","database-minus","square-pen","mouse-off","lasso","dice-5","octagon","ticket","moon","monitor-up","train-front","bookmark","monitor-speaker","album","monitor-play","chart-bar-decreasing","database-plus","calendar-sync","funnel-plus","store","circle-arrow-down","notebook-pen","egg-fried","message-circle-heart","monitor-dot","corner-right-up","monitor-cog","ruler-dimension-line","user-round-plus","panel-left-close","milestone","pilcrow-right","user-round-minus","mic-audio-lines","mic","mail-plus","case-sensitive","message-square-warning","message-square-text","mouse-pointer-2-off","drone","slash","message-square-lock","aperture","arrow-right-left","message-square-heart","vector-square","circle-gauge","gem","check","text-search","arrow-down-to-dot","monitor-down","message-circle-dashed","chef-hat","message-circle-check","meh","file-archive","signal-high","inbox","flip-horizontal-2","maximize","image-play","align-horizontal-space-between","kayak","calendar-check","database-zap","droplets","calendar-range","map-pin-x-inside","map-pin-x","layout-list","file-search","heart","alarm-clock-plus","circle-dollar-sign","usb","house","receipt-pound-sterling","file-digit","map-pin","id-card","mouse","minimize","mail","magnet","circle-arrow-right","logs","book-x","mirror-rectangular","lock-keyhole-open","lock-keyhole","lock","headphone-off","asterisk","calculator","octagon-x","languages","locate","alarm-clock-check","guitar","loader-pinwheel","beer-off","scooter","square-parking-off","notebook-text","arrow-right-to-line","ticket-minus","tally-4","zodiac-taurus","list-indent-increase","door-open","flag-triangle-left","grid-3x3","file","keyboard","pocket-knife","book-copy","castle","car-front","clock-alert","reply-all","cloud-moon-rain","clipboard-type","list-chevrons-down-up","list-todo","printer-x","link-2-off","list-start","line-style","a-large-small","line-squiggle","line-dot-right-horizontal","map-plus","lightbulb","ligature","library-big","database-arrow-up","arrow-right-from-line","flame-kindling","square-power","layout-panel-top","bring-to-front","layout-grid","layout-freeform","bell-plus","layout-dashboard","layers","laugh","folders","mail-warning","book-plus","land-plot","lamp-wall-up","chevrons-left-right","chart-line","file-lock","cast","circle-fading-plus","clock-10","undo-dot","target","list-filter-plus","key-square","drama","file-type-corner","baseline","martini","contrast","joystick","candy-off","iteration-cw","book-check","iteration-ccw","book-lock","inspection-panel","briefcase-medical","calendars","text-align-start","infinity","hop-off","warehouse","sticky-notes","drafting-compass","save-all","id-card-lanyard","ice-cream-cone","ice-cream-bowl","house-wifi","house-plug","fishing-rod","book-headphones","credit-card","house-heart","hotel","hospital","shredder","panel-bottom-open","heart-pulse","heart-off","heart-minus","balloon","map-pin-plus-inside","bookmark-x","badge-question-mark","pen","file-stack","candy-cane","heading-6","heading-5","gamepad-2","heading-3","heading-2","heading-1","haze","shield-minus","circle-off","dessert","eclipse","church","hard-drive-upload","cylinder","badge-japanese-yen","hard-drive-download","receipt-text","handbag","hand-platter","hand","hammer","file-output","disc-album","grip","arrow-down-0-1","captions","flashlight-off","grid-2x2-check","philippine-peso","badge-alert","globe-x","folder-pen","cross","git-pull-request-draft","chevron-right","sticky-note-minus","square-arrow-down-left","share-2","git-merge-conflict","git-compare","git-commit-vertical","git-commit-horizontal","clipboard","git-branch","chess-pawn","gift","briefcase-business","ghost","message-circle-reply","gauge","triangle-right","folder-clock","gamepad","fullscreen","type","webhook","folder-search-2","align-horizontal-distribute-start","folder-root","folder-open","pointer-off","turtle","camera","compass","folder-cog","git-pull-request","bluetooth-searching","arrow-up-to-line","squircle-dashed","clock-3","badge-percent","shuffle","flask-round","flask-conical-off","grid-2x2-plus","flag-off","box","fish","clock-1","file-heart","fire-extinguisher","space","film","file-x-corner","file-x","corner-up-left","clock-6","zodiac-scorpio","key-round","headphones","tv","contact","file-play","rss","file-minus","at-sign","map-pin-check-inside","sticky-note-off","music","handshake","fan","circle-user","copy-plus","factory","external-link","shrink","euro","equal-approximately","search-check","clipboard-check","columns-2","droplet-off","cloud-sync","align-center-vertical","dock","disc","diff","cloud-fog","mosque","diamond-minus","map-pin-house","package-check","chevron-first","pencil","component","list-x","currency","crosshair","corner-up-right","crop","clock-arrow-left","corner-right-down","copyright","badge-indian-rupee","copyleft","redo-dot","cookie","align-start-horizontal","chart-column-stacked","file-plus","git-pull-request-arrow","computer","decimals-arrow-right","bell-dot","folder-down","coins","club","align-horizontal-space-around","door-closed-locked","cloud-drizzle","diamond","blinds","clock-arrow-right","clock-9","book-search","git-branch-minus","clapperboard","recycle","mountain-snow","luggage","circle-arrow-out-down-left","bot-message-square","phone-outgoing","smartphone-charging","chevrons-down","train-track","chess-bishop","cherry","sticky-note-plus","chart-no-axes-column-increasing","chart-no-axes-column-decreasing","chart-network","chart-no-axes-combined","metronome","case-lower","arrow-down-1-0","caravan","candy","arrow-left-right","lightbulb-off","panels-top-left","beef-off","locate-off","annoyed","test-tube","brick-wall-fire","cooking-pot","boxes","boom-box","book-up","laptop-minimal-check","mail-open","square-function","baggage-claim","variable","arrow-right","archive-restore"},{if getcustomasset and not IS_GETCUSTOMASSET_BROKEN then getcustomasset("lucide-icons/1.png") else "rbxassetid://122605056588923",if getcustomasset and not IS_GETCUSTOMASSET_BROKEN then getcustomasset("lucide-icons/2.png") else "rbxassetid://87013611700945"},{[48]={{1,{24,24},{150,25}},{1,{24,24},{275,350}},{1,{24,24},{400,650}},{1,{24,24},{975,725}},{1,{24,24},{175,750}},{1,{24,24},{300,500}},{1,{24,24},{450,850}},{2,{24,24},{200,100}},{1,{24,24},{75,325}},{1,{24,24},{275,400}},{1,{24,24},{400,500}},{1,{24,24},{75,375}},{1,{24,24},{50,925}},{1,{24,24},{825,25}},{1,{24,24},{25,100}},{1,{24,24},{150,800}},{1,{24,24},{650,600}},{1,{24,24},{375,850}},{1,{24,24},{325,50}},{1,{24,24},{125,300}},{1,{24,24},{650,200}},{1,{24,24},{400,925}},{1,{24,24},{775,225}},{1,{24,24},{0,525}},{1,{24,24},{975,450}},{1,{24,24},{75,350}},{1,{24,24},{525,425}},{1,{24,24},{950,775}},{1,{24,24},{425,325}},{1,{24,24},{325,175}},{1,{24,24},{300,550}},{1,{24,24},{775,475}},{1,{24,24},{750,375}},{1,{24,24},{700,675}},{1,{24,24},{500,350}},{1,{24,24},{300,925}},{1,{24,24},{75,125}},{1,{24,24},{875,100}},{1,{24,24},{825,950}},{1,{24,24},{350,100}},{2,{24,24},{275,100}},{1,{24,24},{575,150}},{1,{24,24},{775,350}},{1,{24,24},{475,250}},{1,{24,24},{0,900}},{1,{24,24},{525,75}},{1,{24,24},{325,800}},{2,{24,24},{25,225}},{1,{24,24},{925,350}},{1,{24,24},{100,325}},{1,{24,24},{625,25}},{1,{24,24},{175,350}},{1,{24,24},{500,600}},{1,{24,24},{800,425}},{1,{24,24},{475,25}},{1,{24,24},{850,50}},{1,{24,24},{600,50}},{1,{24,24},{975,575}},{1,{24,24},{725,825}},{1,{24,24},{900,775}},{1,{24,24},{825,625}},{2,{24,24},{350,25}},{1,{24,24},{0,975}},{1,{24,24},{800,375}},{1,{24,24},{75,750}},{1,{24,24},{200,125}},{1,{24,24},{425,425}},{1,{24,24},{925,600}},{1,{24,24},{925,300}},{1,{24,24},{425,925}},{1,{24,24},{625,350}},{1,{24,24},{50,225}},{1,{24,24},{700,725}},{1,{24,24},{975,850}},{1,{24,24},{275,275}},{2,{24,24},{350,50}},{1,{24,24},{625,550}},{2,{24,24},{25,275}},{1,{24,24},{775,500}},{2,{24,24},{50,50}},{1,{24,24},{250,125}},{1,{24,24},{275,300}},{1,{24,24},{75,100}},{1,{24,24},{50,750}},{1,{24,24},{475,675}},{1,{24,24},{125,900}},{1,{24,24},{600,300}},{1,{24,24},{700,100}},{1,{24,24},{100,150}},{2,{24,24},{250,75}},{1,{24,24},{525,625}},{1,{24,24},{200,975}},{1,{24,24},{675,300}},{1,{24,24},{275,675}},{1,{24,24},{925,275}},{1,{24,24},{100,625}},{1,{24,24},{550,700}},{1,{24,24},{750,25}},{1,{24,24},{250,100}},{1,{24,24},{375,350}},{2,{24,24},{125,125}},{1,{24,24},{0,275}},{1,{24,24},{100,375}},{1,{24,24},{275,850}},{1,{24,24},{775,450}},{1,{24,24},{550,50}},{1,{24,24},{225,750}},{1,{24,24},{300,475}},{2,{24,24},{0,100}},{1,{24,24},{50,900}},{1,{24,24},{450,225}},{1,{24,24},{400,225}},{1,{24,24},{100,300}},{1,{24,24},{975,325}},{1,{24,24},{900,500}},{1,{24,24},{175,25}},{1,{24,24},{850,600}},{1,{24,24},{0,675}},{1,{24,24},{975,275}},{1,{24,24},{100,450}},{1,{24,24},{200,400}},{1,{24,24},{225,175}},{1,{24,24},{750,800}},{1,{24,24},{650,950}},{1,{24,24},{25,750}},{1,{24,24},{50,850}},{1,{24,24},{650,450}},{1,{24,24},{600,400}},{1,{24,24},{925,825}},{1,{24,24},{50,150}},{1,{24,24},{50,600}},{1,{24,24},{775,325}},{1,{24,24},{475,75}},{1,{24,24},{825,125}},{1,{24,24},{25,200}},{1,{24,24},{975,875}},{1,{24,24},{575,700}},{1,{24,24},{75,675}},{1,{24,24},{425,525}},{2,{24,24},{125,0}},{1,{24,24},{575,200}},{1,{24,24},{200,625}},{2,{24,24},{250,25}},{1,{24,24},{700,625}},{1,{24,24},{650,525}},{1,{24,24},{125,0}},{1,{24,24},{175,400}},{1,{24,24},{575,600}},{1,{24,24},{600,225}},{2,{24,24},{75,225}},{1,{24,24},{700,950}},{1,{24,24},{600,25}},{1,{24,24},{975,300}},{1,{24,24},{975,925}},{1,{24,24},{500,75}},{1,{24,24},{250,300}},{1,{24,24},{375,550}},{1,{24,24},{425,275}},{1,{24,24},{375,675}},{1,{24,24},{75,400}},{1,{24,24},{400,275}},{1,{24,24},{650,650}},{1,{24,24},{25,325}},{1,{24,24},{125,225}},{1,{24,24},{250,600}},{1,{24,24},{75,425}},{1,{24,24},{525,175}},{2,{24,24},{175,75}},{1,{24,24},{875,50}},{2,{24,24},{125,150}},{1,{24,24},{225,100}},{1,{24,24},{75,225}},{1,{24,24},{25,150}},{1,{24,24},{475,550}},{1,{24,24},{725,500}},{1,{24,24},{450,975}},{1,{24,24},{900,0}},{1,{24,24},{25,400}},{1,{24,24},{0,125}},{1,{24,24},{175,625}},{1,{24,24},{75,475}},{1,{24,24},{950,225}},{1,{24,24},{0,850}},{1,{24,24},{350,25}},{1,{24,24},{325,950}},{1,{24,24},{675,575}},{1,{24,24},{725,50}},{1,{24,24},{125,800}},{1,{24,24},{500,50}},{1,{24,24},{425,75}},{1,{24,24},{800,700}},{1,{24,24},{350,325}},{2,{24,24},{50,250}},{1,{24,24},{500,100}},{1,{24,24},{450,200}},{1,{24,24},{700,850}},{1,{24,24},{400,775}},{1,{24,24},{600,600}},{1,{24,24},{475,0}},{1,{24,24},{50,75}},{1,{24,24},{875,925}},{1,{24,24},{450,500}},{1,{24,24},{525,750}},{1,{24,24},{450,575}},{1,{24,24},{100,275}},{1,{24,24},{975,150}},{1,{24,24},{550,250}},{1,{24,24},{350,750}},{1,{24,24},{750,175}},{1,{24,24},{375,725}},{1,{24,24},{925,175}},{1,{24,24},{925,250}},{1,{24,24},{25,275}},{1,{24,24},{25,300}},{1,{24,24},{125,150}},{2,{24,24},{125,75}},{1,{24,24},{150,875}},{1,{24,24},{725,425}},{1,{24,24},{850,325}},{1,{24,24},{775,650}},{1,{24,24},{375,500}},{1,{24,24},{400,400}},{1,{24,24},{675,200}},{1,{24,24},{575,175}},{1,{24,24},{75,150}},{1,{24,24},{625,900}},{1,{24,24},{575,575}},{1,{24,24},{725,0}},{1,{24,24},{675,50}},{1,{24,24},{475,750}},{2,{24,24},{275,25}},{1,{24,24},{925,700}},{1,{24,24},{450,650}},{1,{24,24},{850,0}},{2,{24,24},{25,200}},{1,{24,24},{375,250}},{2,{24,24},{250,125}},{1,{24,24},{275,600}},{1,{24,24},{950,450}},{1,{24,24},{50,50}},{1,{24,24},{625,800}},{1,{24,24},{925,475}},{1,{24,24},{200,325}},{1,{24,24},{700,750}},{1,{24,24},{425,50}},{1,{24,24},{750,125}},{1,{24,24},{250,850}},{1,{24,24},{25,600}},{2,{24,24},{25,150}},{1,{24,24},{675,775}},{1,{24,24},{625,75}},{1,{24,24},{275,800}},{1,{24,24},{50,250}},{1,{24,24},{150,500}},{1,{24,24},{200,475}},{1,{24,24},{200,0}},{1,{24,24},{850,175}},{1,{24,24},{300,350}},{2,{24,24},{300,100}},{1,{24,24},{125,275}},{1,{24,24},{700,500}},{1,{24,24},{225,300}},{1,{24,24},{150,475}},{1,{24,24},{600,625}},{1,{24,24},{200,575}},{1,{24,24},{625,300}},{1,{24,24},{500,725}},{1,{24,24},{275,525}},{1,{24,24},{0,225}},{1,{24,24},{475,125}},{1,{24,24},{125,400}},{1,{24,24},{125,450}},{1,{24,24},{175,900}},{1,{24,24},{100,725}},{1,{24,24},{425,400}},{1,{24,24},{600,875}},{1,{24,24},{900,375}},{1,{24,24},{225,225}},{2,{24,24},{0,325}},{1,{24,24},{575,550}},{1,{24,24},{75,275}},{1,{24,24},{175,550}},{1,{24,24},{50,625}},{1,{24,24},{525,875}},{1,{24,24},{425,650}},{1,{24,24},{875,525}},{1,{24,24},{825,550}},{1,{24,24},{125,75}},{2,{24,24},{0,250}},{1,{24,24},{800,50}},{1,{24,24},{950,650}},{1,{24,24},{950,725}},{1,{24,24},{825,825}},{1,{24,24},{225,325}},{1,{24,24},{500,400}},{1,{24,24},{75,300}},{1,{24,24},{200,600}},{1,{24,24},{925,200}},{1,{24,24},{500,550}},{1,{24,24},{400,325}},{1,{24,24},{125,700}},{1,{24,24},{175,50}},{1,{24,24},{375,450}},{1,{24,24},{200,550}},{1,{24,24},{675,675}},{1,{24,24},{275,225}},{1,{24,24},{175,725}},{1,{24,24},{725,25}},{1,{24,24},{300,375}},{1,{24,24},{850,150}},{1,{24,24},{850,975}},{1,{24,24},{275,625}},{1,{24,24},{50,400}},{1,{24,24},{500,525}},{1,{24,24},{275,125}},{2,{24,24},{50,175}},{1,{24,24},{175,425}},{1,{24,24},{800,125}},{1,{24,24},{525,225}},{1,{24,24},{200,150}},{1,{24,24},{175,0}},{1,{24,24},{325,200}},{1,{24,24},{425,675}},{1,{24,24},{175,275}},{1,{24,24},{675,900}},{1,{24,24},{300,275}},{1,{24,24},{375,125}},{1,{24,24},{175,775}},{1,{24,24},{550,125}},{1,{24,24},{50,275}},{1,{24,24},{800,350}},{1,{24,24},{250,25}},{1,{24,24},{225,550}},{2,{24,24},{50,275}},{1,{24,24},{725,575}},{1,{24,24},{150,400}},{1,{24,24},{175,575}},{1,{24,24},{225,675}},{1,{24,24},{250,225}},{1,{24,24},{650,500}},{1,{24,24},{750,950}},{1,{24,24},{675,750}},{1,{24,24},{800,600}},{1,{24,24},{975,200}},{1,{24,24},{375,875}},{1,{24,24},{300,325}},{1,{24,24},{525,0}},{1,{24,24},{175,375}},{1,{24,24},{450,600}},{1,{24,24},{900,725}},{1,{24,24},{675,450}},{1,{24,24},{200,50}},{1,{24,24},{725,850}},{1,{24,24},{50,675}},{1,{24,24},{675,975}},{1,{24,24},{850,625}},{1,{24,24},{450,475}},{1,{24,24},{275,425}},{1,{24,24},{200,350}},{1,{24,24},{175,700}},{1,{24,24},{325,25}},{1,{24,24},{100,675}},{1,{24,24},{550,350}},{1,{24,24},{925,75}},{1,{24,24},{850,375}},{1,{24,24},{525,125}},{1,{24,24},{375,750}},{1,{24,24},{975,500}},{1,{24,24},{675,125}},{1,{24,24},{575,275}},{2,{24,24},{25,100}},{1,{24,24},{725,225}},{1,{24,24},{225,125}},{2,{24,24},{375,50}},{2,{24,24},{400,25}},{2,{24,24},{425,0}},{1,{24,24},{350,900}},{1,{24,24},{425,550}},{1,{24,24},{325,300}},{1,{24,24},{375,575}},{1,{24,24},{225,725}},{2,{24,24},{50,350}},{1,{24,24},{475,575}},{1,{24,24},{675,850}},{1,{24,24},{150,550}},{1,{24,24},{250,575}},{1,{24,24},{800,575}},{1,{24,24},{450,425}},{1,{24,24},{550,875}},{1,{24,24},{325,500}},{2,{24,24},{75,325}},{1,{24,24},{300,850}},{1,{24,24},{50,650}},{1,{24,24},{925,900}},{1,{24,24},{825,525}},{1,{24,24},{950,950}},{2,{24,24},{125,275}},{1,{24,24},{125,550}},{2,{24,24},{150,250}},{2,{24,24},{175,225}},{1,{24,24},{575,475}},{1,{24,24},{375,700}},{1,{24,24},{475,350}},{1,{24,24},{850,700}},{1,{24,24},{700,50}},{1,{24,24},{225,575}},{1,{24,24},{425,475}},{1,{24,24},{775,900}},{1,{24,24},{950,550}},{1,{24,24},{375,825}},{2,{24,24},{250,150}},{1,{24,24},{875,350}},{2,{24,24},{100,50}},{2,{24,24},{275,125}},{1,{24,24},{525,100}},{1,{24,24},{500,850}},{1,{24,24},{150,375}},{1,{24,24},{125,375}},{1,{24,24},{400,200}},{2,{24,24},{375,25}},{2,{24,24},{0,75}},{1,{24,24},{75,0}},{1,{24,24},{850,825}},{1,{24,24},{75,725}},{1,{24,24},{900,600}},{2,{24,24},{25,350}},{1,{24,24},{575,300}},{1,{24,24},{550,150}},{1,{24,24},{225,400}},{1,{24,24},{275,200}},{2,{24,24},{50,325}},{1,{24,24},{475,200}},{1,{24,24},{550,400}},{1,{24,24},{525,200}},{1,{24,24},{425,775}},{1,{24,24},{175,475}},{2,{24,24},{100,275}},{2,{24,24},{75,300}},{1,{24,24},{775,825}},{1,{24,24},{150,125}},{1,{24,24},{850,100}},{1,{24,24},{600,325}},{1,{24,24},{500,25}},{1,{24,24},{50,375}},{1,{24,24},{50,725}},{1,{24,24},{325,875}},{2,{24,24},{150,225}},{1,{24,24},{225,875}},{1,{24,24},{875,400}},{1,{24,24},{825,250}},{1,{24,24},{25,900}},{1,{24,24},{575,125}},{1,{24,24},{525,350}},{2,{24,24},{225,150}},{1,{24,24},{225,200}},{2,{24,24},{325,50}},{1,{24,24},{875,825}},{1,{24,24},{475,650}},{2,{24,24},{150,25}},{1,{24,24},{125,600}},{1,{24,24},{0,375}},{2,{24,24},{175,200}},{2,{24,24},{175,175}},{1,{24,24},{675,150}},{2,{24,24},{25,325}},{1,{24,24},{0,550}},{2,{24,24},{0,350}},{2,{24,24},{75,275}},{1,{24,24},{175,250}},{1,{24,24},{200,450}},{2,{24,24},{50,300}},{1,{24,24},{75,200}},{1,{24,24},{100,200}},{1,{24,24},{350,550}},{1,{24,24},{225,650}},{1,{24,24},{775,150}},{2,{24,24},{375,0}},{1,{24,24},{825,325}},{1,{24,24},{425,375}},{2,{24,24},{100,25}},{2,{24,24},{150,200}},{2,{24,24},{275,0}},{2,{24,24},{200,150}},{2,{24,24},{175,0}},{1,{24,24},{150,525}},{1,{24,24},{0,175}},{2,{24,24},{225,125}},{2,{24,24},{250,100}},{2,{24,24},{275,75}},{1,{24,24},{250,0}},{1,{24,24},{500,175}},{1,{24,24},{550,25}},{2,{24,24},{0,225}},{1,{24,24},{400,750}},{1,{24,24},{125,250}},{1,{24,24},{400,525}},{1,{24,24},{250,950}},{1,{24,24},{375,800}},{2,{24,24},{325,25}},{2,{24,24},{50,25}},{2,{24,24},{350,0}},{1,{24,24},{325,675}},{2,{24,24},{75,250}},{1,{24,24},{75,250}},{2,{24,24},{100,225}},{2,{24,24},{150,175}},{2,{24,24},{175,150}},{1,{24,24},{675,225}},{1,{24,24},{675,650}},{2,{24,24},{125,200}},{1,{24,24},{625,200}},{2,{24,24},{200,125}},{1,{24,24},{600,750}},{2,{24,24},{275,50}},{1,{24,24},{950,475}},{1,{24,24},{700,575}},{1,{24,24},{750,350}},{2,{24,24},{325,0}},{1,{24,24},{150,100}},{1,{24,24},{400,975}},{1,{24,24},{450,400}},{2,{24,24},{225,100}},{2,{24,24},{25,0}},{1,{24,24},{800,725}},{1,{24,24},{625,175}},{1,{24,24},{825,0}},{1,{24,24},{150,75}},{1,{24,24},{475,925}},{1,{24,24},{850,125}},{2,{24,24},{0,300}},{1,{24,24},{625,850}},{2,{24,24},{50,125}},{2,{24,24},{100,200}},{1,{24,24},{425,625}},{1,{24,24},{750,900}},{1,{24,24},{525,800}},{2,{24,24},{150,150}},{1,{24,24},{625,0}},{2,{24,24},{225,75}},{1,{24,24},{550,175}},{1,{24,24},{125,625}},{2,{24,24},{125,250}},{2,{24,24},{0,275}},{1,{24,24},{300,725}},{1,{24,24},{275,100}},{1,{24,24},{425,250}},{2,{24,24},{50,225}},{1,{24,24},{400,250}},{1,{24,24},{900,700}},{1,{24,24},{225,775}},{1,{24,24},{250,350}},{2,{24,24},{75,200}},{1,{24,24},{825,800}},{2,{24,24},{100,175}},{1,{24,24},{0,0}},{1,{24,24},{300,450}},{1,{24,24},{775,850}},{2,{24,24},{175,100}},{2,{24,24},{150,125}},{2,{24,24},{225,50}},{2,{24,24},{50,200}},{2,{24,24},{75,175}},{1,{24,24},{850,225}},{1,{24,24},{375,625}},{1,{24,24},{300,75}},{1,{24,24},{975,625}},{1,{24,24},{50,800}},{1,{24,24},{625,500}},{1,{24,24},{400,25}},{1,{24,24},{375,950}},{1,{24,24},{425,450}},{2,{24,24},{200,50}},{1,{24,24},{850,725}},{2,{24,24},{225,25}},{1,{24,24},{450,550}},{1,{24,24},{500,0}},{1,{24,24},{950,525}},{1,{24,24},{775,675}},{2,{24,24},{250,0}},{1,{24,24},{75,650}},{2,{24,24},{75,150}},{1,{24,24},{575,975}},{2,{24,24},{100,125}},{1,{24,24},{750,425}},{1,{24,24},{300,0}},{1,{24,24},{200,375}},{1,{24,24},{925,650}},{1,{24,24},{725,750}},{1,{24,24},{0,625}},{2,{24,24},{200,75}},{1,{24,24},{200,875}},{2,{24,24},{200,25}},{2,{24,24},{225,0}},{1,{24,24},{700,825}},{2,{24,24},{0,200}},{2,{24,24},{50,150}},{1,{24,24},{625,925}},{1,{24,24},{75,50}},{2,{24,24},{75,125}},{1,{24,24},{300,525}},{1,{24,24},{725,375}},{1,{24,24},{525,50}},{2,{24,24},{100,100}},{1,{24,24},{875,150}},{1,{24,24},{450,375}},{2,{24,24},{200,0}},{2,{24,24},{150,50}},{2,{24,24},{0,175}},{1,{24,24},{325,350}},{2,{24,24},{125,175}},{1,{24,24},{150,850}},{2,{24,24},{100,75}},{1,{24,24},{525,400}},{1,{24,24},{725,150}},{1,{24,24},{75,950}},{1,{24,24},{550,325}},{1,{24,24},{225,425}},{1,{24,24},{50,0}},{1,{24,24},{150,750}},{1,{24,24},{825,725}},{1,{24,24},{100,100}},{2,{24,24},{25,125}},{1,{24,24},{900,825}},{2,{24,24},{50,100}},{2,{24,24},{75,75}},{2,{24,24},{125,25}},{1,{24,24},{250,675}},{1,{24,24},{600,800}},{1,{24,24},{275,375}},{2,{24,24},{50,75}},{2,{24,24},{150,0}},{1,{24,24},{975,125}},{1,{24,24},{0,750}},{1,{24,24},{25,650}},{2,{24,24},{75,50}},{2,{24,24},{25,25}},{2,{24,24},{75,25}},{1,{24,24},{750,625}},{1,{24,24},{100,800}},{1,{24,24},{350,125}},{2,{24,24},{25,50}},{1,{24,24},{200,425}},{1,{24,24},{125,325}},{2,{24,24},{25,75}},{1,{24,24},{875,425}},{1,{24,24},{900,250}},{2,{24,24},{50,0}},{2,{24,24},{0,25}},{2,{24,24},{0,0}},{1,{24,24},{850,475}},{1,{24,24},{975,950}},{1,{24,24},{750,150}},{1,{24,24},{950,975}},{1,{24,24},{425,500}},{1,{24,24},{625,950}},{1,{24,24},{825,100}},{1,{24,24},{925,975}},{2,{24,24},{100,300}},{1,{24,24},{900,975}},{1,{24,24},{925,950}},{1,{24,24},{0,300}},{1,{24,24},{100,775}},{1,{24,24},{875,900}},{1,{24,24},{975,900}},{1,{24,24},{900,950}},{1,{24,24},{575,350}},{1,{24,24},{375,175}},{1,{24,24},{300,400}},{1,{24,24},{975,650}},{1,{24,24},{500,775}},{1,{24,24},{875,975}},{1,{24,24},{400,600}},{1,{24,24},{775,300}},{1,{24,24},{0,475}},{1,{24,24},{950,900}},{1,{24,24},{825,200}},{1,{24,24},{825,50}},{1,{24,24},{425,575}},{1,{24,24},{900,925}},{1,{24,24},{175,175}},{1,{24,24},{0,425}},{1,{24,24},{850,750}},{1,{24,24},{725,325}},{1,{24,24},{975,425}},{1,{24,24},{475,325}},{1,{24,24},{500,700}},{1,{24,24},{950,850}},{1,{24,24},{975,825}},{1,{24,24},{250,925}},{1,{24,24},{50,325}},{1,{24,24},{600,775}},{1,{24,24},{775,625}},{1,{24,24},{925,875}},{1,{24,24},{800,975}},{1,{24,24},{475,625}},{1,{24,24},{950,925}},{1,{24,24},{675,550}},{1,{24,24},{775,75}},{1,{24,24},{450,125}},{1,{24,24},{950,825}},{1,{24,24},{925,850}},{1,{24,24},{275,725}},{1,{24,24},{775,975}},{1,{24,24},{800,950}},{1,{24,24},{100,850}},{1,{24,24},{825,925}},{1,{24,24},{150,250}},{1,{24,24},{850,900}},{1,{24,24},{975,775}},{1,{24,24},{900,850}},{1,{24,24},{600,700}},{1,{24,24},{75,450}},{1,{24,24},{950,800}},{1,{24,24},{750,975}},{1,{24,24},{325,125}},{1,{24,24},{750,275}},{1,{24,24},{200,200}},{1,{24,24},{125,650}},{1,{24,24},{800,925}},{1,{24,24},{350,500}},{1,{24,24},{950,300}},{1,{24,24},{775,275}},{1,{24,24},{875,850}},{1,{24,24},{575,900}},{1,{24,24},{500,150}},{1,{24,24},{350,0}},{1,{24,24},{575,825}},{1,{24,24},{975,750}},{1,{24,24},{425,25}},{1,{24,24},{775,925}},{1,{24,24},{825,875}},{1,{24,24},{625,750}},{1,{24,24},{600,725}},{1,{24,24},{900,800}},{1,{24,24},{675,400}},{1,{24,24},{925,775}},{1,{24,24},{950,750}},{1,{24,24},{700,975}},{1,{24,24},{725,950}},{1,{24,24},{500,200}},{1,{24,24},{100,400}},{1,{24,24},{100,0}},{1,{24,24},{850,850}},{1,{24,24},{200,850}},{1,{24,24},{750,925}},{1,{24,24},{600,900}},{1,{24,24},{550,775}},{1,{24,24},{0,350}},{1,{24,24},{350,150}},{1,{24,24},{825,850}},{2,{24,24},{0,375}},{1,{24,24},{750,750}},{1,{24,24},{25,0}},{1,{24,24},{700,25}},{1,{24,24},{925,750}},{1,{24,24},{725,925}},{2,{24,24},{175,125}},{1,{24,24},{700,375}},{2,{24,24},{225,175}},{1,{24,24},{600,250}},{1,{24,24},{400,450}},{1,{24,24},{800,850}},{1,{24,24},{300,300}},{1,{24,24},{850,800}},{1,{24,24},{875,775}},{1,{24,24},{0,575}},{1,{24,24},{250,150}},{1,{24,24},{150,975}},{1,{24,24},{925,725}},{1,{24,24},{750,700}},{1,{24,24},{500,500}},{1,{24,24},{350,200}},{1,{24,24},{700,325}},{1,{24,24},{150,725}},{1,{24,24},{650,975}},{1,{24,24},{125,925}},{1,{24,24},{100,350}},{1,{24,24},{600,200}},{1,{24,24},{475,400}},{1,{24,24},{650,50}},{1,{24,24},{350,75}},{1,{24,24},{175,850}},{1,{24,24},{375,225}},{1,{24,24},{475,375}},{1,{24,24},{675,275}},{1,{24,24},{450,0}},{1,{24,24},{375,775}},{1,{24,24},{750,875}},{1,{24,24},{125,675}},{1,{24,24},{975,675}},{1,{24,24},{250,775}},{1,{24,24},{800,825}},{1,{24,24},{850,775}},{1,{24,24},{950,675}},{1,{24,24},{300,200}},{1,{24,24},{900,75}},{1,{24,24},{575,800}},{1,{24,24},{875,500}},{1,{24,24},{300,800}},{1,{24,24},{875,750}},{1,{24,24},{675,925}},{1,{24,24},{700,900}},{1,{24,24},{450,75}},{1,{24,24},{725,200}},{1,{24,24},{725,875}},{1,{24,24},{925,550}},{1,{24,24},{975,50}},{1,{24,24},{325,375}},{1,{24,24},{575,250}},{1,{24,24},{950,875}},{1,{24,24},{175,125}},{1,{24,24},{275,150}},{1,{24,24},{925,675}},{1,{24,24},{350,625}},{1,{24,24},{125,350}},{1,{24,24},{275,925}},{1,{24,24},{575,450}},{1,{24,24},{250,900}},{1,{24,24},{650,925}},{1,{24,24},{700,875}},{1,{24,24},{750,825}},{1,{24,24},{550,0}},{1,{24,24},{775,800}},{1,{24,24},{25,375}},{1,{24,24},{0,600}},{1,{24,24},{625,250}},{1,{24,24},{800,775}},{1,{24,24},{600,100}},{1,{24,24},{825,750}},{1,{24,24},{350,400}},{1,{24,24},{225,800}},{1,{24,24},{925,100}},{1,{24,24},{900,675}},{1,{24,24},{700,150}},{1,{24,24},{175,225}},{1,{24,24},{600,475}},{1,{24,24},{0,250}},{1,{24,24},{275,250}},{1,{24,24},{400,50}},{1,{24,24},{675,625}},{1,{24,24},{0,500}},{1,{24,24},{475,875}},{1,{24,24},{300,900}},{1,{24,24},{525,550}},{1,{24,24},{600,925}},{2,{24,24},{125,100}},{1,{24,24},{900,175}},{1,{24,24},{950,625}},{1,{24,24},{525,725}},{1,{24,24},{550,500}},{1,{24,24},{275,50}},{1,{24,24},{975,600}},{1,{24,24},{200,500}},{1,{24,24},{500,650}},{1,{24,24},{475,850}},{1,{24,24},{125,25}},{1,{24,24},{275,500}},{1,{24,24},{0,200}},{1,{24,24},{675,425}},{1,{24,24},{975,400}},{1,{24,24},{650,900}},{1,{24,24},{825,700}},{1,{24,24},{150,825}},{1,{24,24},{800,500}},{1,{24,24},{325,750}},{1,{24,24},{775,175}},{1,{24,24},{325,600}},{1,{24,24},{800,750}},{1,{24,24},{975,0}},{2,{24,24},{200,200}},{2,{24,24},{300,75}},{1,{24,24},{900,650}},{1,{24,24},{625,100}},{1,{24,24},{875,0}},{1,{24,24},{900,50}},{1,{24,24},{200,525}},{1,{24,24},{75,75}},{1,{24,24},{925,625}},{1,{24,24},{950,600}},{1,{24,24},{650,850}},{1,{24,24},{50,500}},{1,{24,24},{950,575}},{1,{24,24},{100,175}},{1,{24,24},{325,75}},{1,{24,24},{650,875}},{2,{24,24},{25,175}},{1,{24,24},{725,800}},{1,{24,24},{575,675}},{1,{24,24},{475,425}},{1,{24,24},{775,750}},{1,{24,24},{225,250}},{1,{24,24},{725,600}},{1,{24,24},{525,600}},{1,{24,24},{650,700}},{1,{24,24},{300,625}},{1,{24,24},{875,650}},{1,{24,24},{900,625}},{1,{24,24},{575,950}},{1,{24,24},{250,825}},{1,{24,24},{200,950}},{1,{24,24},{975,550}},{1,{24,24},{250,650}},{1,{24,24},{550,950}},{1,{24,24},{450,950}},{1,{24,24},{375,300}},{1,{24,24},{125,175}},{1,{24,24},{625,875}},{1,{24,24},{550,975}},{1,{24,24},{675,825}},{1,{24,24},{700,800}},{1,{24,24},{0,650}},{1,{24,24},{875,800}},{1,{24,24},{925,375}},{1,{24,24},{500,975}},{1,{24,24},{525,375}},{1,{24,24},{850,75}},{1,{24,24},{600,150}},{1,{24,24},{175,200}},{1,{24,24},{800,325}},{1,{24,24},{750,450}},{1,{24,24},{800,675}},{1,{24,24},{50,175}},{1,{24,24},{825,675}},{1,{24,24},{375,375}},{1,{24,24},{50,475}},{1,{24,24},{250,425}},{1,{24,24},{800,400}},{1,{24,24},{450,100}},{1,{24,24},{250,475}},{1,{24,24},{350,250}},{1,{24,24},{875,725}},{2,{24,24},{400,0}},{1,{24,24},{925,575}},{1,{24,24},{975,525}},{1,{24,24},{475,975}},{1,{24,24},{0,875}},{1,{24,24},{900,400}},{1,{24,24},{650,825}},{1,{24,24},{150,275}},{1,{24,24},{675,800}},{1,{24,24},{700,775}},{1,{24,24},{875,300}},{1,{24,24},{450,150}},{2,{24,24},{150,75}},{1,{24,24},{650,625}},{1,{24,24},{750,725}},{1,{24,24},{450,800}},{2,{24,24},{125,225}},{1,{24,24},{100,475}},{1,{24,24},{775,725}},{1,{24,24},{375,475}},{1,{24,24},{125,525}},{1,{24,24},{825,650}},{1,{24,24},{875,600}},{1,{24,24},{900,575}},{1,{24,24},{475,600}},{1,{24,24},{800,800}},{1,{24,24},{500,950}},{1,{24,24},{75,550}},{1,{24,24},{525,950}},{1,{24,24},{350,700}},{1,{24,24},{550,900}},{1,{24,24},{650,275}},{1,{24,24},{575,875}},{1,{24,24},{0,75}},{1,{24,24},{100,875}},{1,{24,24},{275,550}},{1,{24,24},{175,300}},{1,{24,24},{850,350}},{1,{24,24},{200,250}},{1,{24,24},{500,825}},{1,{24,24},{50,550}},{1,{24,24},{325,250}},{1,{24,24},{200,700}},{1,{24,24},{950,175}},{1,{24,24},{900,200}},{1,{24,24},{650,800}},{1,{24,24},{725,725}},{1,{24,24},{800,650}},{1,{24,24},{675,175}},{1,{24,24},{875,575}},{1,{24,24},{775,425}},{1,{24,24},{600,350}},{1,{24,24},{900,550}},{1,{24,24},{575,375}},{1,{24,24},{750,500}},{1,{24,24},{825,275}},{1,{24,24},{400,375}},{1,{24,24},{300,425}},{1,{24,24},{550,75}},{1,{24,24},{25,25}},{1,{24,24},{0,325}},{1,{24,24},{475,775}},{1,{24,24},{950,500}},{1,{24,24},{275,450}},{1,{24,24},{625,275}},{1,{24,24},{175,650}},{1,{24,24},{100,650}},{1,{24,24},{725,125}},{1,{24,24},{450,825}},{1,{24,24},{275,325}},{1,{24,24},{500,925}},{1,{24,24},{100,425}},{1,{24,24},{100,75}},{1,{24,24},{975,25}},{2,{24,24},{300,50}},{1,{24,24},{825,900}},{1,{24,24},{650,775}},{1,{24,24},{725,700}},{1,{24,24},{800,625}},{1,{24,24},{100,550}},{1,{24,24},{825,600}},{1,{24,24},{850,575}},{1,{24,24},{875,550}},{1,{24,24},{50,975}},{1,{24,24},{650,325}},{1,{24,24},{925,500}},{2,{24,24},{300,25}},{1,{24,24},{300,100}},{1,{24,24},{800,550}},{1,{24,24},{575,925}},{1,{24,24},{400,125}},{1,{24,24},{675,250}},{1,{24,24},{425,975}},{1,{24,24},{25,500}},{1,{24,24},{500,900}},{1,{24,24},{750,675}},{1,{24,24},{550,850}},{1,{24,24},{725,975}},{1,{24,24},{450,25}},{1,{24,24},{800,250}},{1,{24,24},{150,175}},{1,{24,24},{250,175}},{1,{24,24},{475,525}},{1,{24,24},{600,125}},{1,{24,24},{700,125}},{1,{24,24},{250,75}},{1,{24,24},{975,700}},{1,{24,24},{625,775}},{1,{24,24},{675,725}},{1,{24,24},{150,700}},{1,{24,24},{725,675}},{1,{24,24},{700,700}},{1,{24,24},{725,650}},{1,{24,24},{825,575}},{1,{24,24},{850,550}},{1,{24,24},{750,650}},{1,{24,24},{850,950}},{1,{24,24},{550,200}},{1,{24,24},{450,925}},{1,{24,24},{475,900}},{1,{24,24},{675,475}},{1,{24,24},{875,225}},{1,{24,24},{800,450}},{1,{24,24},{425,850}},{1,{24,24},{650,250}},{1,{24,24},{500,875}},{1,{24,24},{825,775}},{1,{24,24},{550,825}},{1,{24,24},{425,950}},{1,{24,24},{950,75}},{1,{24,24},{625,975}},{1,{24,24},{650,725}},{1,{24,24},{0,725}},{1,{24,24},{550,675}},{1,{24,24},{450,625}},{1,{24,24},{475,50}},{1,{24,24},{800,900}},{1,{24,24},{175,875}},{1,{24,24},{875,375}},{2,{24,24},{100,0}},{1,{24,24},{325,150}},{1,{24,24},{525,450}},{1,{24,24},{850,525}},{1,{24,24},{25,550}},{1,{24,24},{625,50}},{1,{24,24},{475,825}},{1,{24,24},{525,250}},{1,{24,24},{325,825}},{1,{24,24},{950,425}},{1,{24,24},{400,0}},{1,{24,24},{375,975}},{1,{24,24},{400,950}},{1,{24,24},{0,400}},{1,{24,24},{775,600}},{1,{24,24},{325,475}},{1,{24,24},{350,600}},{1,{24,24},{975,350}},{1,{24,24},{750,475}},{1,{24,24},{525,325}},{1,{24,24},{525,825}},{1,{24,24},{625,225}},{1,{24,24},{500,300}},{1,{24,24},{575,775}},{1,{24,24},{275,175}},{1,{24,24},{575,425}},{2,{24,24},{325,75}},{1,{24,24},{850,675}},{1,{24,24},{700,650}},{1,{24,24},{725,625}},{1,{24,24},{750,600}},{1,{24,24},{625,400}},{1,{24,24},{775,575}},{1,{24,24},{300,825}},{1,{24,24},{300,775}},{1,{24,24},{100,750}},{1,{24,24},{575,50}},{1,{24,24},{125,975}},{1,{24,24},{900,450}},{1,{24,24},{325,275}},{1,{24,24},{925,425}},{1,{24,24},{25,225}},{1,{24,24},{950,400}},{1,{24,24},{975,375}},{1,{24,24},{275,875}},{1,{24,24},{650,225}},{1,{24,24},{550,375}},{1,{24,24},{350,975}},{1,{24,24},{375,400}},{1,{24,24},{750,575}},{1,{24,24},{450,875}},{1,{24,24},{800,875}},{1,{24,24},{575,750}},{1,{24,24},{625,700}},{1,{24,24},{550,275}},{1,{24,24},{600,850}},{1,{24,24},{575,225}},{1,{24,24},{450,675}},{1,{24,24},{550,600}},{1,{24,24},{425,350}},{1,{24,24},{225,450}},{1,{24,24},{175,500}},{1,{24,24},{425,900}},{1,{24,24},{100,225}},{1,{24,24},{825,375}},{1,{24,24},{50,350}},{1,{24,24},{675,375}},{1,{24,24},{25,625}},{1,{24,24},{275,575}},{1,{24,24},{950,25}},{1,{24,24},{575,525}},{1,{24,24},{300,600}},{1,{24,24},{275,825}},{1,{24,24},{775,550}},{1,{24,24},{975,975}},{1,{24,24},{825,500}},{1,{24,24},{225,25}},{1,{24,24},{900,425}},{1,{24,24},{650,175}},{1,{24,24},{925,400}},{1,{24,24},{950,375}},{1,{24,24},{875,450}},{1,{24,24},{450,900}},{1,{24,24},{325,975}},{1,{24,24},{800,100}},{1,{24,24},{225,975}},{1,{24,24},{350,950}},{1,{24,24},{400,900}},{1,{24,24},{525,650}},{1,{24,24},{525,775}},{1,{24,24},{375,925}},{1,{24,24},{775,775}},{1,{24,24},{375,150}},{1,{24,24},{950,200}},{1,{24,24},{600,425}},{1,{24,24},{900,475}},{1,{24,24},{225,475}},{1,{24,24},{525,975}},{1,{24,24},{150,325}},{1,{24,24},{775,100}},{1,{24,24},{575,725}},{1,{24,24},{625,675}},{1,{24,24},{550,800}},{1,{24,24},{175,100}},{1,{24,24},{775,525}},{1,{24,24},{425,875}},{2,{24,24},{250,50}},{1,{24,24},{325,225}},{1,{24,24},{850,450}},{1,{24,24},{550,925}},{1,{24,24},{25,350}},{1,{24,24},{700,250}},{1,{24,24},{850,425}},{1,{24,24},{250,400}},{1,{24,24},{950,350}},{1,{24,24},{300,975}},{1,{24,24},{900,350}},{1,{24,24},{400,875}},{1,{24,24},{350,925}},{1,{24,24},{475,800}},{1,{24,24},{925,925}},{1,{24,24},{175,75}},{1,{24,24},{550,725}},{1,{24,24},{600,675}},{1,{24,24},{625,650}},{1,{24,24},{300,50}},{1,{24,24},{675,600}},{1,{24,24},{750,300}},{1,{24,24},{750,525}},{1,{24,24},{825,450}},{1,{24,24},{650,475}},{1,{24,24},{225,50}},{1,{24,24},{800,475}},{1,{24,24},{700,600}},{2,{24,24},{200,175}},{1,{24,24},{125,775}},{1,{24,24},{650,400}},{1,{24,24},{300,950}},{1,{24,24},{325,925}},{1,{24,24},{550,450}},{1,{24,24},{425,825}},{1,{24,24},{400,850}},{1,{24,24},{500,750}},{1,{24,24},{600,650}},{1,{24,24},{750,775}},{1,{24,24},{575,500}},{1,{24,24},{625,625}},{1,{24,24},{25,425}},{1,{24,24},{550,575}},{1,{24,24},{725,525}},{1,{24,24},{825,425}},{1,{24,24},{850,400}},{1,{24,24},{925,800}},{1,{24,24},{150,50}},{1,{24,24},{0,50}},{1,{24,24},{600,825}},{1,{24,24},{50,125}},{1,{24,24},{250,975}},{1,{24,24},{25,75}},{1,{24,24},{275,950}},{1,{24,24},{175,675}},{1,{24,24},{125,575}},{1,{24,24},{925,50}},{1,{24,24},{500,225}},{1,{24,24},{300,150}},{1,{24,24},{550,425}},{1,{24,24},{375,900}},{1,{24,24},{275,775}},{1,{24,24},{750,75}},{1,{24,24},{250,700}},{1,{24,24},{50,775}},{1,{24,24},{350,875}},{1,{24,24},{400,825}},{1,{24,24},{150,225}},{1,{24,24},{400,550}},{1,{24,24},{425,800}},{1,{24,24},{525,700}},{1,{24,24},{675,0}},{1,{24,24},{800,0}},{1,{24,24},{625,600}},{1,{24,24},{650,575}},{1,{24,24},{275,700}},{1,{24,24},{900,875}},{1,{24,24},{325,0}},{1,{24,24},{225,925}},{1,{24,24},{200,825}},{1,{24,24},{200,900}},{1,{24,24},{550,300}},{1,{24,24},{625,125}},{1,{24,24},{825,400}},{1,{24,24},{125,425}},{1,{24,24},{425,700}},{1,{24,24},{950,275}},{1,{24,24},{975,250}},{1,{24,24},{400,350}},{1,{24,24},{350,850}},{1,{24,24},{200,650}},{1,{24,24},{400,800}},{1,{24,24},{675,525}},{1,{24,24},{375,25}},{1,{24,24},{350,575}},{1,{24,24},{450,750}},{1,{24,24},{600,175}},{1,{24,24},{475,725}},{1,{24,24},{900,900}},{1,{24,24},{625,475}},{1,{24,24},{25,925}},{1,{24,24},{375,75}},{1,{24,24},{600,375}},{1,{24,24},{750,0}},{1,{24,24},{25,950}},{1,{24,24},{625,575}},{1,{24,24},{550,650}},{1,{24,24},{650,550}},{1,{24,24},{400,475}},{1,{24,24},{725,475}},{1,{24,24},{100,900}},{1,{24,24},{0,450}},{1,{24,24},{125,100}},{1,{24,24},{650,675}},{1,{24,24},{150,350}},{1,{24,24},{875,325}},{1,{24,24},{900,300}},{1,{24,24},{750,50}},{1,{24,24},{375,275}},{1,{24,24},{975,225}},{1,{24,24},{525,25}},{1,{24,24},{275,0}},{1,{24,24},{875,625}},{1,{24,24},{225,950}},{1,{24,24},{550,100}},{1,{24,24},{275,900}},{1,{24,24},{325,775}},{1,{24,24},{350,300}},{1,{24,24},{100,950}},{1,{24,24},{350,825}},{1,{24,24},{575,325}},{1,{24,24},{575,850}},{1,{24,24},{400,150}},{1,{24,24},{325,400}},{1,{24,24},{725,775}},{1,{24,24},{450,725}},{1,{24,24},{650,75}},{1,{24,24},{650,25}},{1,{24,24},{225,500}},{1,{24,24},{225,0}},{1,{24,24},{125,125}},{1,{24,24},{425,750}},{1,{24,24},{500,675}},{1,{24,24},{475,700}},{1,{24,24},{250,800}},{1,{24,24},{175,950}},{1,{24,24},{675,500}},{1,{24,24},{125,500}},{1,{24,24},{475,225}},{1,{24,24},{75,600}},{1,{24,24},{625,425}},{1,{24,24},{700,475}},{1,{24,24},{775,400}},{1,{24,24},{650,0}},{1,{24,24},{725,450}},{1,{24,24},{900,225}},{1,{24,24},{775,0}},{1,{24,24},{900,275}},{1,{24,24},{775,875}},{1,{24,24},{800,225}},{1,{24,24},{175,975}},{1,{24,24},{700,525}},{1,{24,24},{400,425}},{1,{24,24},{500,450}},{1,{24,24},{600,975}},{1,{24,24},{150,150}},{1,{24,24},{100,50}},{1,{24,24},{925,450}},{1,{24,24},{125,50}},{1,{24,24},{250,725}},{1,{24,24},{50,25}},{1,{24,24},{350,800}},{1,{24,24},{425,725}},{1,{24,24},{875,250}},{1,{24,24},{850,300}},{1,{24,24},{325,100}},{1,{24,24},{175,600}},{1,{24,24},{600,950}},{1,{24,24},{625,525}},{1,{24,24},{550,475}},{1,{24,24},{525,275}},{1,{24,24},{300,875}},{1,{24,24},{875,950}},{1,{24,24},{775,375}},{1,{24,24},{875,275}},{2,{24,24},{0,50}},{1,{24,24},{225,275}},{1,{24,24},{925,225}},{1,{24,24},{0,100}},{1,{24,24},{975,175}},{1,{24,24},{425,175}},{1,{24,24},{150,625}},{1,{24,24},{575,0}},{1,{24,24},{475,450}},{1,{24,24},{900,750}},{1,{24,24},{475,175}},{1,{24,24},{600,575}},{1,{24,24},{500,325}},{1,{24,24},{525,575}},{1,{24,24},{225,900}},{1,{24,24},{675,100}},{1,{24,24},{250,875}},{1,{24,24},{850,500}},{2,{24,24},{100,150}},{1,{24,24},{525,675}},{1,{24,24},{500,625}},{1,{24,24},{700,550}},{2,{24,24},{150,100}},{1,{24,24},{700,425}},{1,{24,24},{600,525}},{1,{24,24},{625,450}},{1,{24,24},{50,525}},{1,{24,24},{825,300}},{1,{24,24},{850,275}},{1,{24,24},{600,550}},{1,{24,24},{800,25}},{1,{24,24},{625,825}},{1,{24,24},{150,950}},{1,{24,24},{200,25}},{1,{24,24},{250,50}},{1,{24,24},{175,925}},{2,{24,24},{300,0}},{1,{24,24},{575,100}},{1,{24,24},{150,775}},{1,{24,24},{500,125}},{1,{24,24},{850,925}},{1,{24,24},{200,75}},{1,{24,24},{200,925}},{1,{24,24},{550,550}},{1,{24,24},{475,150}},{1,{24,24},{600,500}},{1,{24,24},{700,400}},{1,{24,24},{750,100}},{1,{24,24},{925,525}},{1,{24,24},{350,650}},{1,{24,24},{700,200}},{1,{24,24},{800,300}},{1,{24,24},{525,475}},{1,{24,24},{25,125}},{1,{24,24},{75,925}},{1,{24,24},{300,250}},{1,{24,24},{75,700}},{1,{24,24},{725,100}},{1,{24,24},{25,525}},{1,{24,24},{150,925}},{1,{24,24},{125,950}},{1,{24,24},{325,700}},{1,{24,24},{700,175}},{1,{24,24},{75,900}},{1,{24,24},{75,25}},{1,{24,24},{75,575}},{2,{24,24},{175,50}},{1,{24,24},{725,275}},{1,{24,24},{825,475}},{1,{24,24},{325,525}},{1,{24,24},{100,975}},{1,{24,24},{625,375}},{1,{24,24},{450,700}},{1,{24,24},{400,725}},{1,{24,24},{500,575}},{1,{24,24},{725,350}},{1,{24,24},{325,325}},{1,{24,24},{800,275}},{1,{24,24},{400,100}},{1,{24,24},{350,775}},{1,{24,24},{950,125}},{1,{24,24},{925,150}},{1,{24,24},{875,200}},{1,{24,24},{325,650}},{1,{24,24},{175,150}},{1,{24,24},{425,125}},{1,{24,24},{325,850}},{1,{24,24},{675,350}},{1,{24,24},{975,100}},{1,{24,24},{25,50}},{1,{24,24},{75,875}},{1,{24,24},{150,900}},{1,{24,24},{375,50}},{1,{24,24},{675,700}},{1,{24,24},{675,875}},{1,{24,24},{550,625}},{1,{24,24},{225,75}},{1,{24,24},{825,975}},{1,{24,24},{850,875}},{2,{24,24},{0,400}},{1,{24,24},{525,525}},{1,{24,24},{100,700}},{1,{24,24},{25,850}},{1,{24,24},{200,750}},{1,{24,24},{300,575}},{1,{24,24},{900,125}},{1,{24,24},{275,975}},{1,{24,24},{375,100}},{1,{24,24},{575,25}},{1,{24,24},{225,350}},{1,{24,24},{75,625}},{1,{24,24},{800,525}},{1,{24,24},{350,375}},{1,{24,24},{450,250}},{1,{24,24},{700,350}},{1,{24,24},{300,750}},{1,{24,24},{725,550}},{1,{24,24},{825,225}},{1,{24,24},{325,725}},{1,{24,24},{850,200}},{1,{24,24},{0,25}},{1,{24,24},{875,175}},{1,{24,24},{900,150}},{1,{24,24},{950,150}},{1,{24,24},{925,125}},{1,{24,24},{975,75}},{1,{24,24},{100,925}},{1,{24,24},{250,525}},{1,{24,24},{275,25}},{1,{24,24},{875,25}},{1,{24,24},{875,700}},{1,{24,24},{275,750}},{1,{24,24},{250,275}},{1,{24,24},{350,675}},{1,{24,24},{375,650}},{1,{24,24},{200,225}},{1,{24,24},{400,625}},{1,{24,24},{425,600}},{1,{24,24},{525,500}},{1,{24,24},{700,225}},{1,{24,24},{550,525}},{1,{24,24},{50,425}},{1,{24,24},{725,300}},{1,{24,24},{775,250}},{1,{24,24},{50,575}},{1,{24,24},{150,450}},{1,{24,24},{125,725}},{1,{24,24},{600,0}},{1,{24,24},{600,75}},{1,{24,24},{350,350}},{2,{24,24},{175,25}},{1,{24,24},{775,950}},{1,{24,24},{600,450}},{1,{24,24},{25,975}},{1,{24,24},{0,800}},{1,{24,24},{500,375}},{1,{24,24},{350,50}},{1,{24,24},{850,250}},{1,{24,24},{275,475}},{1,{24,24},{125,875}},{1,{24,24},{375,200}},{1,{24,24},{175,825}},{1,{24,24},{400,75}},{1,{24,24},{200,800}},{1,{24,24},{200,275}},{1,{24,24},{250,750}},{1,{24,24},{300,225}},{1,{24,24},{475,100}},{1,{24,24},{975,800}},{1,{24,24},{300,700}},{1,{24,24},{950,50}},{2,{24,24},{25,300}},{1,{24,24},{950,700}},{1,{24,24},{25,775}},{1,{24,24},{625,725}},{1,{24,24},{650,350}},{1,{24,24},{675,325}},{1,{24,24},{700,300}},{1,{24,24},{750,250}},{1,{24,24},{800,200}},{1,{24,24},{75,800}},{1,{24,24},{300,175}},{1,{24,24},{550,225}},{1,{24,24},{825,175}},{1,{24,24},{875,125}},{1,{24,24},{900,100}},{1,{24,24},{525,900}},{1,{24,24},{575,625}},{1,{24,24},{125,850}},{1,{24,24},{175,800}},{1,{24,24},{200,775}},{1,{24,24},{200,175}},{1,{24,24},{225,850}},{1,{24,24},{250,250}},{1,{24,24},{375,0}},{1,{24,24},{575,650}},{1,{24,24},{600,275}},{1,{24,24},{400,175}},{1,{24,24},{375,600}},{1,{24,24},{400,575}},{1,{24,24},{275,650}},{1,{24,24},{450,525}},{1,{24,24},{475,500}},{1,{24,24},{500,475}},{1,{24,24},{575,400}},{1,{24,24},{900,525}},{1,{24,24},{525,150}},{1,{24,24},{775,25}},{1,{24,24},{525,300}},{1,{24,24},{575,75}},{1,{24,24},{700,275}},{1,{24,24},{325,450}},{1,{24,24},{100,250}},{1,{24,24},{725,250}},{1,{24,24},{750,550}},{1,{24,24},{775,200}},{1,{24,24},{825,150}},{1,{24,24},{800,175}},{1,{24,24},{0,950}},{1,{24,24},{25,825}},{1,{24,24},{375,425}},{1,{24,24},{125,825}},{1,{24,24},{75,175}},{1,{24,24},{250,325}},{1,{24,24},{825,75}},{1,{24,24},{325,625}},{1,{24,24},{325,900}},{1,{24,24},{275,75}},{1,{24,24},{475,475}},{1,{24,24},{25,875}},{1,{24,24},{475,300}},{1,{24,24},{650,300}},{1,{24,24},{175,450}},{1,{24,24},{725,900}},{1,{24,24},{850,650}},{1,{24,24},{650,750}},{1,{24,24},{800,150}},{1,{24,24},{875,75}},{1,{24,24},{925,25}},{1,{24,24},{950,0}},{1,{24,24},{400,300}},{1,{24,24},{0,925}},{1,{24,24},{350,275}},{1,{24,24},{75,850}},{1,{24,24},{350,175}},{1,{24,24},{100,825}},{1,{24,24},{400,700}},{1,{24,24},{200,725}},{2,{24,24},{0,125}},{1,{24,24},{450,450}},{1,{24,24},{225,700}},{1,{24,24},{500,425}},{2,{24,24},{75,100}},{2,{24,24},{100,250}},{1,{24,24},{900,25}},{1,{24,24},{150,0}},{1,{24,24},{925,0}},{1,{24,24},{75,825}},{1,{24,24},{950,325}},{2,{24,24},{0,150}},{1,{24,24},{425,150}},{1,{24,24},{500,250}},{1,{24,24},{375,525}},{1,{24,24},{625,325}},{1,{24,24},{150,300}},{1,{24,24},{300,25}},{1,{24,24},{750,850}},{1,{24,24},{250,450}},{1,{24,24},{50,300}},{1,{24,24},{975,475}},{1,{24,24},{725,175}},{1,{24,24},{775,125}},{1,{24,24},{300,650}},{1,{24,24},{50,825}},{1,{24,24},{50,450}},{1,{24,24},{125,750}},{1,{24,24},{375,325}},{1,{24,24},{225,625}},{1,{24,24},{200,675}},{1,{24,24},{775,700}},{1,{24,24},{250,625}},{1,{24,24},{350,525}},{1,{24,24},{325,550}},{1,{24,24},{650,125}},{1,{24,24},{175,525}},{2,{24,24},{25,375}},{1,{24,24},{50,950}},{1,{24,24},{300,675}},{2,{24,24},{125,50}},{1,{24,24},{325,425}},{1,{24,24},{850,25}},{1,{24,24},{875,475}},{1,{24,24},{75,775}},{1,{24,24},{125,200}},{1,{24,24},{400,675}},{1,{24,24},{700,925}},{1,{24,24},{825,350}},{1,{24,24},{750,225}},{1,{24,24},{0,825}},{1,{24,24},{100,575}},{1,{24,24},{150,600}},{1,{24,24},{25,800}},{1,{24,24},{150,675}},{1,{24,24},{475,950}},{1,{24,24},{225,600}},{1,{24,24},{350,475}},{1,{24,24},{525,850}},{1,{24,24},{675,25}},{1,{24,24},{650,100}},{1,{24,24},{775,50}},{1,{24,24},{150,575}},{1,{24,24},{100,25}},{1,{24,24},{250,550}},{1,{24,24},{350,450}},{1,{24,24},{450,350}},{1,{24,24},{425,300}},{1,{24,24},{750,400}},{1,{24,24},{725,75}},{1,{24,24},{350,725}},{1,{24,24},{950,250}},{1,{24,24},{250,375}},{1,{24,24},{450,775}},{1,{24,24},{475,275}},{1,{24,24},{225,825}},{1,{24,24},{350,425}},{1,{24,24},{450,325}},{1,{24,24},{625,150}},{1,{24,24},{500,275}},{1,{24,24},{25,675}},{1,{24,24},{700,75}},{1,{24,24},{25,725}},{1,{24,24},{150,200}},{1,{24,24},{50,700}},{1,{24,24},{500,800}},{1,{24,24},{250,500}},{1,{24,24},{0,150}},{1,{24,24},{225,375}},{1,{24,24},{800,75}},{1,{24,24},{750,200}},{1,{24,24},{450,300}},{1,{24,24},{0,775}},{1,{24,24},{300,125}},{1,{24,24},{325,575}},{1,{24,24},{675,75}},{1,{24,24},{25,700}},{1,{24,24},{50,100}},{1,{24,24},{150,650}},{1,{24,24},{450,275}},{1,{24,24},{650,150}},{1,{24,24},{250,200}},{1,{24,24},{0,700}},{1,{24,24},{100,600}},{1,{24,24},{25,450}},{1,{24,24},{50,875}},{1,{24,24},{700,0}},{1,{24,24},{550,750}},{1,{24,24},{700,450}},{1,{24,24},{750,325}},{1,{24,24},{425,225}},{1,{24,24},{175,325}},{1,{24,24},{925,325}},{1,{24,24},{525,925}},{1,{24,24},{100,525}},{2,{24,24},{75,0}},{1,{24,24},{425,200}},{1,{24,24},{450,175}},{1,{24,24},{675,950}},{1,{24,24},{75,525}},{1,{24,24},{100,500}},{1,{24,24},{125,475}},{1,{24,24},{25,575}},{1,{24,24},{725,400}},{1,{24,24},{75,500}},{1,{24,24},{50,200}},{1,{24,24},{150,425}},{1,{24,24},{350,225}},{1,{24,24},{25,250}},{1,{24,24},{950,100}},{1,{24,24},{900,325}},{1,{24,24},{425,0}},{1,{24,24},{75,975}},{1,{24,24},{25,175}},{1,{24,24},{875,875}},{1,{24,24},{425,100}},{1,{24,24},{225,525}},{1,{24,24},{25,475}},{1,{24,24},{200,300}},{1,{24,24},{450,50}},{1,{24,24},{650,375}},{1,{24,24},{650,425}},{1,{24,24},{875,675}},{1,{24,24},{225,150}},{2,{24,24},{25,250}},{1,{24,24},{200,100}},{1,{24,24},{100,125}}}}}
+local iconIndices = icons[1]
+local idIndices = icons[2]
+local iconRegistry = icons[3]
+Lucide.Icons = iconIndices
+function Lucide.GetAsset(name)
+	local size = 48
+	local iconIndex = table.find(iconIndices, name)
+	if not iconIndex then
+		return nil
+	end
+	local currentDifference = math.huge
+	local currentSize = size
+	for registrySize, _ in iconRegistry do
+		local diff = math.abs(size - registrySize)
+		if diff < currentDifference then
+			currentDifference = diff
+			currentSize = registrySize
+		end
+	end
+	local icon = iconRegistry[currentSize][iconIndex]
+	if icon then
+		return {
+			IconName = name,
+			Url = idIndices[icon[1]],
+			ImageRectSize = Vector2.new(icon[2][1], icon[2][2]),
+			ImageRectOffset = Vector2.new(icon[3][1], icon[3][2]),
+		}
+	end
+	return nil
+end
+return Lucide
+end
 __kicia_hook_shared.script_paths = function()
 local DisplayName = 'KiciaHook'
 local StorageRoot = 'KiciaHook'
@@ -812,6 +456,453 @@ function module.new()
 end
 return module
 end
+__kicia_hook_shared.ui_settings = function()
+local module = {}
+local DEFAULT_CONFIG_NAMES = { 'Legit', 'Rage' }
+local AUTO_SAVE_DEBOUNCE_SECONDS = 0.35
+local AUTO_SAVE_SUPPORTED_TYPES = {
+    Toggle = true,
+    Slider = true,
+    Dropdown = true,
+    ColorPicker = true,
+    KeyPicker = true,
+    Input = true,
+}
+function module.new(args)
+    local window = args.window
+    local library = args.library
+    local theme_manager = args.theme_manager
+    local script_paths = args.script_paths
+    local toggles = args.toggles
+    local options = args.options
+    local local_player = args.local_player
+    local queue_loader = args.queue_loader
+    local on_load_default = args.on_load_default
+    local on_save = args.on_save
+    local is_queue_on_teleport_forced = args.is_queue_on_teleport_forced
+    local save_manager = args.save_manager
+    local current_config_name = args.current_config_name
+    local function AppendConfigName(list, seen, config_name)
+        if type(config_name) ~= 'string' or config_name == '' or string.lower(config_name) == 'none' or seen[config_name] then
+            return
+        end
+        seen[config_name] = true
+        table.insert(list, config_name)
+    end
+    local function BuildConfigNames()
+        local list = {}
+        local seen = {}
+        local source_config_names = type(args.config_names) == 'table' and args.config_names or DEFAULT_CONFIG_NAMES
+        for _, config_name in ipairs(source_config_names) do
+            AppendConfigName(list, seen, config_name)
+        end
+        if #list == 0 then
+            AppendConfigName(list, seen, current_config_name)
+        end
+        return list
+    end
+    local config_names = BuildConfigNames()
+    local default_config_selection = config_names[1] or current_config_name
+    local config_dropdown_values = {}
+    for _, config_name in ipairs(config_names) do
+        table.insert(config_dropdown_values, config_name)
+    end
+    local function ResolveConfigFileName(config_name)
+        if type(args.resolve_config_name) == 'function' then
+            local resolved = args.resolve_config_name(config_name)
+            if type(resolved) == 'string' and resolved ~= '' then
+                return resolved
+            end
+        end
+        if args.use_global_config_names == true then
+            return config_name
+        end
+        if config_name == current_config_name then
+            return config_name
+        end
+        if type(current_config_name) == 'string' and current_config_name ~= '' then
+            return current_config_name .. ' ' .. config_name
+        end
+        return config_name
+    end
+    local ids = args.ids or {
+        auto_show = 'P3S1T1',
+        show_notification = 'P3S1T2',
+        show_keybind_states = 'P3S1T3',
+        auto_execute_on_teleport = 'P3S1T4',
+        auto_load_config = 'P3S1T5',
+        auto_save_config = 'UIAutoSaveConfig',
+        load_config_name = 'UILoadConfigName',
+    }
+    local defaults = args.defaults or {}
+    local persisted_defaults = script_paths.load_ui_settings(defaults)
+    local persist_menu_keybind = args.persist_menu_keybind ~= false
+    local settings = {}
+    local queue_on_teleport_connection = nil
+    local shutting_down = false
+    local config_load_suppression_count = 0
+    local auto_save_token = 0
+    local auto_save_wrappers = setmetatable({}, { __mode = 'k' })
+    local auto_save_binding_loop_started = false
+    local preserved_ids = {}
+    preserved_ids[ids.auto_show] = true
+    preserved_ids[ids.show_notification] = true
+    preserved_ids[ids.show_keybind_states] = true
+    preserved_ids[ids.auto_execute_on_teleport] = true
+    preserved_ids[ids.auto_load_config] = true
+    preserved_ids[ids.auto_save_config] = true
+    local function IsConfigSelectionValue(value)
+        if type(value) ~= 'string' then
+            return false
+        end
+        for _, config_name in ipairs(config_dropdown_values) do
+            if value == config_name then
+                return true
+            end
+        end
+        return false
+    end
+    local function NormalizeConfigSelectionValue(value, fallback)
+        if IsConfigSelectionValue(value) then
+            return value
+        end
+        if IsConfigSelectionValue(fallback) then
+            return fallback
+        end
+        return default_config_selection
+    end
+    local function ResolveConfigSelectionValue(option_id, fallback)
+        local option = options[option_id]
+        if option and IsConfigSelectionValue(option.Value) then
+            return option.Value
+        end
+        return NormalizeConfigSelectionValue(fallback, default_config_selection)
+    end
+    if save_manager and type(save_manager.SetIgnoreIndexes) == 'function' then
+        local ignore_list = {
+            ids.auto_show,
+            ids.show_notification,
+            ids.show_keybind_states,
+            ids.auto_execute_on_teleport,
+            ids.auto_load_config,
+            ids.auto_save_config,
+            ids.load_config_name,
+            'MenuKeybind',
+        }
+        if type(args.extra_ignore_ids) == 'table' then
+            for _, extra_id in ipairs(args.extra_ignore_ids) do
+                if type(extra_id) == 'string' and extra_id ~= '' then
+                    table.insert(ignore_list, extra_id)
+                end
+            end
+        end
+        save_manager:SetIgnoreIndexes(ignore_list)
+    end
+    local function disconnect_queue_on_teleport()
+        if queue_on_teleport_connection then
+            queue_on_teleport_connection:Disconnect()
+            queue_on_teleport_connection = nil
+        end
+    end
+    local tab = args.settings_tab or window:AddTab('UI Settings', 'settings')
+    local group = tab:AddLeftGroupbox(args.groupbox_title or 'Menu Options')
+    local load_config_name_default = NormalizeConfigSelectionValue(
+        persisted_defaults.load_config_name,
+        defaults.load_config_name or default_config_selection
+    )
+    group:AddToggle(ids.auto_show, {
+        Text = 'Silent Execute',
+        Default = not persisted_defaults.auto_show,
+        Tooltip = 'Keeps the UI hidden on execute. Use your menu keybind to open it.'
+    })
+    group:AddToggle(ids.show_notification, {
+        Text = 'Load Notification',
+        Default = persisted_defaults.show_notification,
+        Tooltip = 'Will show "Successfully loaded" notification on execute'
+    })
+    group:AddToggle(ids.show_keybind_states, {
+        Text = 'Show keybind states',
+        Default = persisted_defaults.show_keybind_states,
+        Tooltip = 'Shows a menu of your active keybind toggles. On mobile, tap a keybind to toggle it.'
+    })
+    group:AddToggle(ids.auto_execute_on_teleport, {
+        Text = 'Auto Execute',
+        Default = persisted_defaults.auto_execute_on_teleport,
+        Tooltip = 'Will execute your script automatically when teleporting to a new area'
+    })
+    group:AddToggle(ids.auto_save_config, {
+        Text = 'Auto Save Config',
+        Default = persisted_defaults.auto_save_config,
+        Tooltip = 'Automatically saves changed toggles, sliders, dropdowns, colors, keybinds, and inputs to the selected config.'
+    })
+    group:AddToggle(ids.auto_load_config, {
+        Text = 'Auto Load Config',
+        Default = persisted_defaults.auto_load_config,
+        Tooltip = 'Automatically loads your saved config on execute'
+    })
+    group:AddDropdown(ids.load_config_name, {
+        Text = 'Selected Config',
+        Values = config_dropdown_values,
+        Default = load_config_name_default,
+        Tooltip = 'Selected config used by Auto Load Config, Auto Save Config, Save Config, and Load Selected Config.'
+    })
+    group:AddButton('Save Config', function()
+        if on_save then
+            local ok, err = on_save(settings:resolve_save_config_name())
+            if ok == false then
+                library:Notify({ Title = 'Config', Description = 'Failed to save config: ' .. tostring(err), Time = 3 })
+                return
+            end
+        end
+        library:Notify({ Title = 'Config', Description = 'Config saved', Time = 3 })
+    end)
+    group:AddButton('Load Selected Config', function()
+        if args.on_load_saved then
+            args.on_load_saved()
+            library:Notify({ Title = 'Config', Description = 'Selected config loaded', Time = 3 })
+        end
+    end)
+    group:AddButton('Reset To Default', function()
+        on_load_default()
+    end)
+    group:AddButton({
+        Text = 'Unload',
+        Func = function()
+            settings:shutdown_for_unload()
+            __kicia_hook_genv.Executed = nil
+            pcall(function() _G.__KiciaHookExecuted = nil end)
+            library:Unload()
+        end,
+        DoubleClick = true,
+    })
+    group:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', {
+        Default = persist_menu_keybind and persisted_defaults.menu_keybind or defaults.menu_keybind or 'LeftControl',
+        NoUI = true,
+        Text = 'Menu keybind'
+    })
+    library.ToggleKeybind = options.MenuKeybind
+    local theme_group = tab:AddRightGroupbox('Themes')
+    theme_group:AddLabel('Background color'):AddColorPicker('BackgroundColor', { Default = library.Scheme.BackgroundColor })
+    theme_group:AddLabel('Main color'):AddColorPicker('MainColor', { Default = library.Scheme.MainColor })
+    theme_group:AddLabel('Accent color'):AddColorPicker('AccentColor', { Default = library.Scheme.AccentColor })
+    theme_group:AddLabel('Outline color'):AddColorPicker('OutlineColor', { Default = library.Scheme.OutlineColor })
+    local ThemesArray = {}
+    for Name in pairs(theme_manager.BuiltInThemes) do
+        table.insert(ThemesArray, Name)
+    end
+    table.sort(ThemesArray, function(a, b)
+        return theme_manager.BuiltInThemes[a][1] < theme_manager.BuiltInThemes[b][1]
+    end)
+    theme_group:AddDivider()
+    theme_group:AddDropdown('ThemeManager_ThemeList', { Text = 'Theme list', Values = ThemesArray, Default = 1 })
+    theme_group:AddButton('Set as default', function()
+        theme_manager:SaveDefault(options.ThemeManager_ThemeList.Value)
+        library:Notify({ Title = 'Theme', Description = string.format('Set default theme to %q', options.ThemeManager_ThemeList.Value), Time = 3 })
+    end)
+    options.ThemeManager_ThemeList:OnChanged(function()
+        theme_manager:ApplyTheme(options.ThemeManager_ThemeList.Value)
+    end)
+    local function UpdateTheme()
+        theme_manager:ThemeUpdate()
+    end
+    options.BackgroundColor:OnChanged(UpdateTheme)
+    options.MainColor:OnChanged(UpdateTheme)
+    options.AccentColor:OnChanged(UpdateTheme)
+    options.OutlineColor:OnChanged(UpdateTheme)
+    theme_manager:LoadDefault()
+    theme_manager.AppliedToTab = true
+    if type(args.after_build) == 'function' then
+        args.after_build(tab, group)
+    end
+    local function ResolveMenuKeybindValue()
+        local option = options.MenuKeybind
+        if option then
+            local value = option.Value
+            if type(value) == 'string' and value ~= '' then
+                return value
+            end
+        end
+        return persisted_defaults.menu_keybind or defaults.menu_keybind or 'LeftControl'
+    end
+    local function persist_ui_settings()
+        script_paths.save_ui_settings({
+            auto_show = not toggles[ids.auto_show].Value,
+            show_notification = toggles[ids.show_notification].Value,
+            show_keybind_states = toggles[ids.show_keybind_states].Value,
+            auto_execute_on_teleport = toggles[ids.auto_execute_on_teleport].Value,
+            auto_load_config = toggles[ids.auto_load_config].Value,
+            auto_save_config = toggles[ids.auto_save_config].Value,
+            load_config_name = ResolveConfigSelectionValue(ids.load_config_name, persisted_defaults.load_config_name),
+            menu_keybind = persist_menu_keybind and ResolveMenuKeybindValue() or defaults.menu_keybind or 'LeftControl',
+        }, defaults)
+    end
+    local function sync_keybind_visibility()
+        library.KeybindFrame.Visible = toggles[ids.show_keybind_states].Value
+    end
+    local function should_queue_on_teleport()
+        if toggles[ids.auto_execute_on_teleport].Value then
+            return true
+        end
+        if type(is_queue_on_teleport_forced) == 'function' then
+            local ok, forced = pcall(is_queue_on_teleport_forced)
+            if ok and forced then
+                return true
+            end
+        end
+        return false
+    end
+    local function sync_queue_on_teleport()
+        if should_queue_on_teleport() then
+            if not __kicia_hook_genv.KiciaHookCaps.gate('Auto Execute', 'queue_on_teleport') then
+                return
+            end
+            if queue_on_teleport_connection then return end
+            queue_on_teleport_connection = local_player.OnTeleport:Connect(function(state)
+                if state == Enum.TeleportState.InProgress then
+                    queue_loader()
+                end
+            end)
+        else
+            disconnect_queue_on_teleport()
+        end
+    end
+    local function BindAutoSaveObject(id, object)
+        if type(object) ~= 'table' or not AUTO_SAVE_SUPPORTED_TYPES[object.Type] then
+            return
+        end
+        if save_manager and save_manager.Ignore and save_manager.Ignore[id] then
+            return
+        end
+        if auto_save_wrappers[object] == object.Changed then
+            return
+        end
+        local previous_changed = object.Changed
+        object.Changed = function(...)
+            if type(previous_changed) == 'function' then
+                previous_changed(...)
+            end
+            settings:schedule_auto_save(id)
+        end
+        auto_save_wrappers[object] = object.Changed
+    end
+    function settings:get_config_names()
+        local copy = {}
+        for _, config_name in ipairs(config_names) do
+            table.insert(copy, ResolveConfigFileName(config_name))
+        end
+        return copy
+    end
+    function settings:resolve_save_config_name()
+        return ResolveConfigFileName(ResolveConfigSelectionValue(ids.load_config_name, persisted_defaults.load_config_name))
+    end
+    function settings:resolve_load_config_name()
+        return settings:resolve_save_config_name()
+    end
+    function settings:should_auto_save_config()
+        return toggles[ids.auto_save_config].Value and settings:resolve_save_config_name() ~= nil
+    end
+    function settings:schedule_auto_save(id)
+        if shutting_down or config_load_suppression_count > 0 or not settings:should_auto_save_config() then
+            return
+        end
+        auto_save_token = auto_save_token + 1
+        local token = auto_save_token
+        task.delay(AUTO_SAVE_DEBOUNCE_SECONDS, function()
+            if shutting_down or token ~= auto_save_token or config_load_suppression_count > 0 or not settings:should_auto_save_config() then
+                return
+            end
+            if on_save then
+                on_save(settings:resolve_save_config_name())
+            end
+        end)
+    end
+    function settings:refresh_auto_save_bindings()
+        for id, toggle in pairs(toggles) do
+            BindAutoSaveObject(id, toggle)
+        end
+        for id, option in pairs(options) do
+            BindAutoSaveObject(id, option)
+        end
+    end
+    function settings:with_config_load_suspended(callback)
+        config_load_suppression_count = config_load_suppression_count + 1
+        local ok, result, err = pcall(callback)
+        task.delay(1, function()
+            config_load_suppression_count = math.max(0, config_load_suppression_count - 1)
+        end)
+        if not ok then
+            error(result, 2)
+        end
+        return result, err
+    end
+    function settings:register_callbacks()
+        toggles[ids.auto_show]:OnChanged(persist_ui_settings)
+        toggles[ids.show_notification]:OnChanged(persist_ui_settings)
+        toggles[ids.show_keybind_states]:OnChanged(function()
+            persist_ui_settings()
+            sync_keybind_visibility()
+        end)
+        toggles[ids.auto_execute_on_teleport]:OnChanged(function()
+            persist_ui_settings()
+            sync_queue_on_teleport()
+        end)
+        toggles[ids.auto_load_config]:OnChanged(persist_ui_settings)
+        toggles[ids.auto_save_config]:OnChanged(persist_ui_settings)
+        options[ids.load_config_name]:OnChanged(persist_ui_settings)
+        if persist_menu_keybind then
+            options.MenuKeybind:OnChanged(persist_ui_settings)
+        end
+        settings:refresh_auto_save_bindings()
+        if not auto_save_binding_loop_started then
+            auto_save_binding_loop_started = true
+            task.spawn(function()
+                while not shutting_down do
+                    task.wait(1)
+                    settings:refresh_auto_save_bindings()
+                end
+            end)
+        end
+    end
+    function settings:sync_queue_on_teleport()
+        sync_queue_on_teleport()
+    end
+    function settings:should_auto_load_config()
+        return toggles[ids.auto_load_config].Value and settings:resolve_load_config_name() ~= nil
+    end
+    function settings:shutdown_for_unload()
+        if shutting_down then
+            return
+        end
+        shutting_down = true
+        for toggle_id, toggle in pairs(toggles) do
+            if not preserved_ids[toggle_id]
+                and type(toggle) == 'table'
+                and type(toggle.SetValue) == 'function'
+                and type(toggle.Value) == 'boolean'
+                and toggle.Value == true
+            then
+                pcall(toggle.SetValue, toggle, false)
+            end
+        end
+        disconnect_queue_on_teleport()
+    end
+    function settings:reconcile_loaded_ui_settings()
+        persist_ui_settings()
+        sync_keybind_visibility()
+        sync_queue_on_teleport()
+        settings:refresh_auto_save_bindings()
+        theme_manager:LoadDefault()
+    end
+    function settings:notify_loaded(duration)
+        if toggles[ids.show_notification].Value then
+            local menuKeybindValue = ResolveMenuKeybindValue()
+            library:Notify({ Title = 'Loaded', Description = 'Loaded - ' .. menuKeybindValue .. ' to toggle menu', Time = duration or 5 })
+        end
+    end
+    return settings
+end
+return module
+end
 __kicia_hook_shared.rivals_ragebot_kernel = function()
 return {
     init = function(ctx)
@@ -874,7 +965,6 @@ return {
                 RandomBaseRadius = function() return optValue('P8S4S4', 100) end,
                 RandomRadiusFactor = function() return optValue('P8S4S5', 0.5) end,
                 RandomAnchorFromCharacter = function() return togValue('P8S4T8', false) end,
-                MeleeAttempts = function() return optValue('P8S4S7', 2) end,
                 RepositionInterval = function() return 0.3 end,
             }
             local PB_DEPTH_FORWARD = { Min = 0, Max = 4 }
@@ -944,36 +1034,6 @@ return {
                     return cachedUpdateStateRemote
                 end
                 return nil
-            end
-            local cachedUtilityModule = nil
-            local function resolveUtilityModule()
-                if cachedUtilityModule then
-                    return cachedUtilityModule
-                end
-                local candidates = {
-                    findChild(ReplicatedStorageRB, 'Modules', 'Utility'),
-                    findChild(ReplicatedStorageRB, 'Modules', 'utility'),
-                }
-                for _, mod in ipairs(candidates) do
-                    if mod then
-                        local ok, result = pcall(require, mod)
-                        if ok and type(result) == 'table' then
-                            cachedUtilityModule = result
-                            return result
-                        end
-                    end
-                end
-                return nil
-            end
-            local function encodeCombatCFrame(cf)
-                local utility = resolveUtilityModule()
-                if utility and type(utility.EncodeCFrame) == 'function' then
-                    local ok, encoded = pcall(utility.EncodeCFrame, utility, cf)
-                    if ok and encoded ~= nil then
-                        return encoded
-                    end
-                end
-                return cf
             end
             local cachedCameraRotationRemote = nil
             local function resolveCameraRotationRemote()
@@ -1065,33 +1125,6 @@ return {
                 end
                 rbFireServerNative(remote, objectId, token, { ['\1'] = { ['\0'] = a, ['\1'] = b, ['\2'] = c, ['\3'] = d }, ['\2'] = anim }, nil)
             end
-            local function fireMeleeAutoshoot(objectId, shootPos, targetPos, hitPart, attempts)
-                local remote = resolveUseItemRemote()
-                local token = enc('StartShooting')
-                if not remote or not token or not objectId or typeof(shootPos) ~= 'Vector3' or typeof(targetPos) ~= 'Vector3' or not hitPart then
-                    return false
-                end
-                local direction = targetPos - shootPos
-                if direction.Magnitude < 0.001 then
-                    return false
-                end
-                local shotCFrame = CFrame.new(shootPos, targetPos)
-                local data = {
-                    ['\1'] = {
-                        ['\0'] = encodeCombatCFrame(shotCFrame),
-                        ['\1'] = encodeCombatCFrame(shotCFrame),
-                        ['\2'] = hitPart,
-                        ['\3'] = encodeCombatCFrame(CFrame.new(0.43, 0.25, 0.42)),
-                    },
-                }
-                local count = math.clamp(math.floor(tonumber(attempts) or 2), 1, 3)
-                for _ = 1, count do
-                    pcall(function()
-                        rbFireServerNative(remote, objectId, token, data, nil)
-                    end)
-                end
-                return true
-            end
             local function fireMeleeHeavy(objectId, a, b, c, d)
                 local remote = resolveUseItemRemote()
                 local token = enc('StartAiming')
@@ -1111,28 +1144,15 @@ return {
                 rbFireServerNative(remote, objectId, start, { ['\1'] = reload, ['\2'] = reload }, nil)
             end
             local function itemObjectId(item)
-                if type(item) ~= 'table' then
-                    return nil
-                end
-                local direct = rawget(item, 'ObjectID') or rawget(item, 'ObjectId')
-                if direct ~= nil then
-                    return direct
-                end
                 local data = rawget(item, 'Data')
-                if type(data) == 'table' then
-                    return rawget(data, 'ObjectID') or rawget(data, 'ObjectId') or rawget(data, 'ItemID')
-                end
-                return nil
+                return data and rawget(data, 'ObjectID') or nil
             end
             local function itemInfo(item)
                 return rawget(item, 'Info')
             end
             local function itemType(item)
                 local info = itemInfo(item)
-                if type(info) ~= 'table' then
-                    return nil
-                end
-                return rawget(info, 'Type') or rawget(info, 'Class')
+                return info and rawget(info, 'Type') or nil
             end
             local function itemIsRaycast(item)
                 local info = itemInfo(item)
@@ -1150,7 +1170,7 @@ return {
                 local data = rawget(item, 'Data')
                 local reserve = data and rawget(data, 'AmmoReserve')
                 if type(reserve) ~= 'number' then
-                    return 0
+                    return math.huge
                 end
                 return reserve
             end
@@ -1169,36 +1189,15 @@ return {
                 return type(maxAmmo) == 'number' and maxAmmo <= itemAmmo(item)
             end
             local function itemIsEquipped(item)
-                return type(item) == 'table' and rawget(item, 'IsEquipped') == true
+                return rawget(item, 'IsEquipped')
             end
-            local function resolveItemIndex(item, fighter, fallback)
-                if type(item) == 'table' then
-                    local data = rawget(item, 'Data')
-                    local index = type(data) == 'table' and tonumber(rawget(data, 'ItemIndex')) or nil
-                    if index then
-                        return index
-                    end
-                end
-                if type(fighter) == 'table' then
-                    local items = rawget(fighter, 'Items')
-                    if type(items) == 'table' then
-                        for slotIndex, candidate in pairs(items) do
-                            if candidate == item then
-                                return tonumber(slotIndex) or slotIndex
-                            end
-                        end
-                    end
-                end
-                return fallback
-            end
-            local function equipItem(item, index, fighter)
-                if not item or itemIsEquipped(item) then
+            local function equipItem(item, index)
+                if itemIsEquipped(item) then
                     return
                 end
-                local clientFighter = rawget(item, 'ClientFighter') or fighter
-                local resolvedIndex = resolveItemIndex(item, fighter, index)
-                if clientFighter and resolvedIndex and type(clientFighter.EquipItem) == 'function' then
-                    pcall(function() clientFighter:EquipItem(resolvedIndex) end)
+                local clientFighter = rawget(item, 'ClientFighter')
+                if clientFighter and index and type(clientFighter.EquipItem) == 'function' then
+                    pcall(function() clientFighter:EquipItem(index) end)
                 end
             end
             local function reloadItem(item)
@@ -1277,9 +1276,7 @@ return {
                 end
             end
             function RootDesync:SetServerCFrame(cf)
-                if cf == nil or typeof(cf) == 'CFrame' then
-                    self._cframe = cf
-                end
+                self._cframe = cf
             end
             function RootDesync:GetServerCFrame()
                 return self._cframe or self._rootPart.CFrame
@@ -1288,11 +1285,6 @@ return {
                 return self._oldCFrame or self._rootPart.CFrame
             end
             function RootDesync:HeartbeatUpdate()
-                if not self._rootPart or not self._rootPart.Parent then
-                    self._cframe = nil
-                    self._oldCFrame = nil
-                    return
-                end
                 local cf = self._cframe
                 if cf ~= nil then
                     self._oldCFrame = self._rootPart.CFrame
@@ -1300,12 +1292,6 @@ return {
                 end
             end
             function RootDesync:Destroy()
-                local old = self._oldCFrame
-                if old ~= nil and self._rootPart ~= nil and self._rootPart.Parent ~= nil then
-                    pcall(function() self._rootPart.CFrame = old end)
-                end
-                self._oldCFrame = nil
-                self._cframe = nil
                 pcall(function() RunService:UnbindFromRenderStep(self._boundId) end)
             end
             local function encodeSingle(n)
@@ -1538,59 +1524,93 @@ return {
                     rbFireServerNative(remote, token, offValue, nil)
                 end
             end
+            local VOID_CFRAME = CFrame.new(
+                math.random(-100000, -10000),
+                100000,
+                math.random(-100000, 10000)
+            )
             local PartGlue = {}
             PartGlue.__index = PartGlue
-            local function readPhysicsRepRootPart(part)
-                if type(gethiddenproperty) == 'function' then
-                    local ok, value = pcall(gethiddenproperty, part, 'PhysicsRepRootPart')
-                    if ok then
-                        return value
-                    end
-                end
-                return nil
-            end
             function PartGlue.new()
-                return setmetatable({ _bindings = {}, _originalPhysicsRepRoot = {} }, PartGlue)
+                return setmetatable({ _gluedParts = {}, _bindings = {} }, PartGlue)
             end
-            function PartGlue:Acquire(ourPart, hitboxPart)
-                if ourPart == nil or hitboxPart == nil then
-                    return ourPart and ourPart.CFrame or CFrame.identity
+            function PartGlue:_SetupGlue(part)
+                local entry = self._gluedParts[part]
+                if entry ~= nil then
+                    entry.refCount = entry.refCount + 1
+                    return
                 end
+                local weld = part:FindFirstChildOfClass('WeldConstraint')
+                local originalPart1 = nil
+                if weld ~= nil then
+                    originalPart1 = weld.Part1
+                    if originalPart1 ~= nil then
+                        weld.Part1 = nil
+                    end
+                    part.Anchored = true
+                end
+                self._gluedParts[part] = { refCount = 1, weld = weld, originalPart1 = originalPart1 }
+            end
+            function PartGlue:_ReleaseGlue(part)
+                local entry = self._gluedParts[part]
+                if entry == nil then
+                    return
+                end
+                entry.refCount = entry.refCount - 1
+                if 0 < entry.refCount then
+                    return
+                end
+                local weld = entry.weld
+                if weld ~= nil and entry.originalPart1 ~= nil then
+                    weld.Part1 = entry.originalPart1
+                    entry.originalPart1.Anchored = false
+                end
+                self._gluedParts[part] = nil
+            end
+            function PartGlue:Acquire(ourPart, hitboxPart, useRotation)
+                local prev = rbGetThreadIdentity()
+                rbSetThreadIdentity(8)
+                pcall(rbSetHidden, ourPart, 'PhysicsRepRootPart', hitboxPart)
+                rbSetThreadIdentity(prev)
                 local bound = self._bindings[ourPart]
                 if bound ~= hitboxPart then
-                    if bound == nil then
-                        self._originalPhysicsRepRoot[ourPart] = readPhysicsRepRootPart(ourPart)
+                    if bound ~= nil then
+                        self:_ReleaseGlue(bound)
                     end
-                    local prev = rbGetThreadIdentity()
-                    rbSetThreadIdentity(8)
-                    pcall(rbSetHidden, ourPart, 'PhysicsRepRootPart', hitboxPart)
-                    rbSetThreadIdentity(prev)
+                    self:_SetupGlue(hitboxPart)
                     self._bindings[ourPart] = hitboxPart
                 end
-                return ourPart.CFrame
+                local cf = CFrame.new(VOID_CFRAME.Position)
+                if useRotation then
+                    cf = cf * hitboxPart.CFrame.Rotation
+                end
+                hitboxPart.CFrame = cf
+                return VOID_CFRAME
             end
             function PartGlue:Free(ourPart)
-                if self._bindings[ourPart] == nil then
+                local bound = self._bindings[ourPart]
+                if bound == nil then
                     return
                 end
                 self._bindings[ourPart] = nil
-                local original = self._originalPhysicsRepRoot[ourPart]
-                self._originalPhysicsRepRoot[ourPart] = nil
+                self:_ReleaseGlue(bound)
                 local prev = rbGetThreadIdentity()
                 rbSetThreadIdentity(8)
-                pcall(rbSetHidden, ourPart, 'PhysicsRepRootPart', original)
+                pcall(rbSetHidden, ourPart, 'PhysicsRepRootPart', nil)
                 rbSetThreadIdentity(prev)
             end
             function PartGlue:Destroy()
-                for ourPart in pairs(self._bindings) do
-                    local original = self._originalPhysicsRepRoot[ourPart]
-                    local prev = rbGetThreadIdentity()
-                    rbSetThreadIdentity(8)
-                    pcall(rbSetHidden, ourPart, 'PhysicsRepRootPart', original)
-                    rbSetThreadIdentity(prev)
+                for _, entry in pairs(self._gluedParts) do
+                    local weld = entry.weld
+                    if weld ~= nil and entry.originalPart1 ~= nil then
+                        pcall(function()
+                            weld.Part1 = entry.originalPart1
+                            entry.originalPart1.Anchored = false
+                        end)
+                    end
                 end
+                table.clear(self._gluedParts)
                 table.clear(self._bindings)
-                table.clear(self._originalPhysicsRepRoot)
             end
             local function isEnemyPlayer(player)
                 if player == nil or player == LPRB then
@@ -1610,116 +1630,31 @@ return {
                 local data = entity and rawget(entity, 'Data')
                 return data ~= nil and rawget(data, 'IsInvincible') == true
             end
-            local HACKER_HIGH_Y = 500
-            local HACKER_LOW_Y = -1000
-            local HACKER_JUMP_Y = 500
-            local HACKER_EXTREME_JUMP_Y = 2000000000
-            local HACKER_HISTORY_TTL = 3
-            local HackerMotionHistory = setmetatable({}, { __mode = 'k' })
-            local function finiteNumber(v)
-                return type(v) == 'number' and v == v and v > -math.huge and v < math.huge
-            end
-            local function finiteY(v)
-                return typeof(v) == 'Vector3' and finiteNumber(v.Y)
-            end
-            local function finiteVector3(v)
-                return typeof(v) == 'Vector3' and finiteNumber(v.X) and finiteNumber(v.Y) and finiteNumber(v.Z)
-            end
-            local function isProjectileGunItem(item)
-                if type(item) ~= 'table' then
-                    return false
-                end
-                local info = itemInfo(item)
-                if type(info) ~= 'table' then
-                    return false
-                end
-                local kind = itemType(item) or rawget(info, 'Class')
-                if kind == 'Melee' then
-                    return false
-                end
-                if rawget(info, 'IsRaycast') == false then
-                    return true
-                end
-                for _, key in ipairs({ 'Projectile', 'ProjectileSpeed', 'ProjectileGravity', 'ProjectileLifetime', 'ProjectileCount', 'ProjectileAcceleration', 'ProjectileRadius', 'ProjectileDrag' }) do
-                    if rawget(info, key) ~= nil then
-                        return true
-                    end
-                end
-                return false
-            end
-            local function hackerHistoryKey(player, fighter, model)
-                if player ~= nil then return player end
-                if fighter ~= nil then return fighter end
-                return model
-            end
-            local function readLocalRootPosition()
-                local character = LPRB.Character
-                local root = character and character:FindFirstChild('HumanoidRootPart')
-                return root and root.Position or nil
-            end
-            local function updateHackerMotion(player, fighter, model, rootPart)
-                local position = rootPart and rootPart.Position or nil
-                if not finiteY(position) then
-                    return true, math.huge, math.huge, 'nonfinite_y'
-                end
-                local key = hackerHistoryKey(player, fighter, model)
-                local now = os.clock()
-                local previous = HackerMotionHistory[key]
-                if previous and previous.model ~= model then
-                    previous = nil
-                end
-                local jumpY = 0
-                local jumpSpeedY = 0
-                local reason = nil
-                if previous and finiteNumber(previous.y) and finiteNumber(previous.time) then
-                    local elapsed = now - previous.time
-                    if elapsed >= 0 and elapsed <= HACKER_HISTORY_TTL then
-                        elapsed = math.max(elapsed, 1 / 240)
-                        jumpY = math.abs(position.Y - previous.y)
-                        jumpSpeedY = jumpY / elapsed
-                        if jumpY >= HACKER_EXTREME_JUMP_Y then
-                            reason = 'extreme_y_jump'
-                        elseif jumpY >= HACKER_JUMP_Y then
-                            reason = 'y_jump'
-                        end
-                    end
-                end
-                local hacker = reason ~= nil
-                if not hacker and position.Y > HACKER_HIGH_Y then
-                    hacker = true
-                    reason = 'high_y'
-                end
-                if not hacker and position.Y < HACKER_LOW_Y then
-                    hacker = true
-                    reason = 'low_y'
-                end
-                local severity = math.max(math.abs(position.Y), jumpY)
-                local record = { y = position.Y, time = now, model = model }
-                HackerMotionHistory[key] = record
-                return hacker, severity, jumpSpeedY, reason
-            end
             local function collectEnemies()
                 local out = {}
                 local controller = resolveFighterController()
                 local objects = controller and rawget(controller, 'Objects') or nil
-                if type(objects) ~= 'table' then return out end
+                if type(objects) ~= 'table' then
+                    return out
+                end
                 for _, fighter in ipairs(objects) do
                     local ok, entry = pcall(function()
                         local player = rawget(fighter, 'Player')
                         local entity = rawget(fighter, 'Entity')
                         local model = entity and rawget(entity, 'Model') or nil
-                        if not model then return nil end
-                        if player ~= nil and not isEnemyPlayer(player) then return nil end
+                        if not model then
+                            return nil
+                        end
+                        if player ~= nil and not isEnemyPlayer(player) then
+                            return nil
+                        end
                         local hitboxHead = model:FindFirstChild('HitboxHead')
                         local hitboxBody = model:FindFirstChild('HitboxBody')
                         local rootPart = model:FindFirstChild('HumanoidRootPart') or hitboxBody
-                        if not (hitboxHead and rootPart) then return nil end
-                        if not finiteVector3(rootPart.Position) or not finiteVector3(hitboxHead.Position) then return nil end
+                        if not (hitboxHead and rootPart) then
+                            return nil
+                        end
                         local humanoid = model:FindFirstChildOfClass('Humanoid')
-                        local observer = rawget(fighter, 'itemObserver') or rawget(fighter, 'ItemObserver')
-                        local equippedItem = resolveFighterEquippedItem(fighter)
-                        local projectileEquipped = isProjectileGunItem(equippedItem)
-                        local hacker, hackerSeverity, hackerSpeed, hackerReason = updateHackerMotion(player, fighter, model, rootPart)
                         return {
                             fighter = fighter,
                             player = player,
@@ -1728,19 +1663,16 @@ return {
                             hitboxHead = hitboxHead,
                             hitboxBody = hitboxBody,
                             rootPart = rootPart,
-                            itemObserver = observer,
-                            equippedItem = equippedItem,
+                            itemObserver = rawget(fighter, 'itemObserver') or rawget(fighter, 'ItemObserver'),
                             alive = humanoid == nil or humanoid.Health > 0,
                             invincible = isTargetInvincible(entity),
-                            hacker = hacker,
-                            hackerSeverity = hackerSeverity,
-                            hackerSpeed = hackerSpeed,
-                            hackerReason = hackerReason,
-                            equippedGunProjectile = projectileEquipped,
-                            equippedAmmoState = equippedItem == nil or ((itemType(equippedItem) or (itemInfo(equippedItem) and rawget(itemInfo(equippedItem), 'Class'))) ~= 'Gun') or itemAmmo(equippedItem) > 0,
+                            hacker = false,
+                            equippedGunProjectile = false,
                         }
                     end)
-                    if ok and entry then out[#out + 1] = entry end
+                    if ok and entry then
+                        out[#out + 1] = entry
+                    end
                 end
                 return out
             end
@@ -1749,39 +1681,24 @@ return {
             end
             local function selectTarget()
                 local enemies = collectEnemies()
-                if Setting.PrioritizeHackers() then
-                    local hackerTargets = {}
+                local prioritizeHackers = Setting.PrioritizeHackers()
+                if prioritizeHackers then
                     for _, entry in ipairs(enemies) do
                         if entry.hacker and isValidTarget(entry) then
-                            hackerTargets[#hackerTargets + 1] = entry
+                            return entry
                         end
                     end
-                    table.sort(hackerTargets, function(a, b)
-                        local as = tonumber(a.hackerSeverity) or 0
-                        local bs = tonumber(b.hackerSeverity) or 0
-                        if as == bs then return (tonumber(a.hackerSpeed) or 0) > (tonumber(b.hackerSpeed) or 0) end
-                        return as > bs
-                    end)
-                    if hackerTargets[1] then return hackerTargets[1] end
                 end
-                local best, bestDistance = nil, math.huge
-                local localPosition = readLocalRootPosition()
                 for _, entry in ipairs(enemies) do
-                    if isValidTarget(entry) then
-                        local distance = math.huge
-                        if localPosition and finiteVector3(entry.rootPart.Position) then
-                            distance = (entry.rootPart.Position - localPosition).Magnitude
-                        end
-                        if distance < bestDistance then
-                            bestDistance, best = distance, entry
-                        end
+                    if not (prioritizeHackers and entry.hacker) and isValidTarget(entry) then
+                        return entry
                     end
                 end
-                return best
+                return nil
             end
             local function hasTargets()
                 for _, entry in ipairs(collectEnemies()) do
-                    if isValidTarget(entry) and finiteVector3(entry.rootPart.Position) then
+                    if isValidTarget(entry) then
                         return true
                     end
                 end
@@ -1807,46 +1724,6 @@ return {
                 end
                 return false
             end
-            local function resolveFighterEquippedItem(fighter)
-                if type(fighter) ~= 'table' then
-                    return nil
-                end
-                local equipped = rawget(fighter, 'EquippedItem')
-                if type(equipped) == 'table' then
-                    return equipped
-                end
-                local observer = rawget(fighter, 'itemObserver') or rawget(fighter, 'ItemObserver')
-                if observer and type(observer.GetEquippedItem) == 'function' then
-                    local ok, value = pcall(observer.GetEquippedItem, observer)
-                    if ok and type(value) == 'table' then
-                        return value
-                    end
-                end
-                local data = rawget(fighter, 'Data')
-                local equippedId = type(data) == 'table' and (rawget(data, 'EquippedItemID') or rawget(data, 'EquippedItemId')) or nil
-                local items = rawget(fighter, 'Items')
-                if equippedId ~= nil and type(items) == 'table' then
-                    for _, item in pairs(items) do
-                        if type(item) == 'table' and itemObjectId(item) == equippedId then
-                            return item
-                        end
-                    end
-                end
-                return nil
-            end
-            local function resolveRageTargetPart(target, preferHead)
-                if not target then return nil end
-                if preferHead and target.hitboxHead and target.hitboxHead.Parent then
-                    return target.hitboxHead
-                end
-                if target.hitboxBody and target.hitboxBody.Parent then
-                    return target.hitboxBody
-                end
-                if target.hitboxHead and target.hitboxHead.Parent then
-                    return target.hitboxHead
-                end
-                return target.rootPart
-            end
             local function getAction(fighter)
                 if not fighter then
                     return nil
@@ -1856,129 +1733,56 @@ return {
                     return nil
                 end
                 local onEmpty = Setting.OnEmpty()
-                local priority = { Primary = 1, Secondary = 2, Melee = 3 }
-                local enabled = {
-                    Primary = Setting.WeaponPrimary(),
-                    Secondary = Setting.WeaponSecondary(),
-                    Melee = Setting.WeaponMelee(),
-                }
-                local equipped = rawget(fighter, 'EquippedItem')
-                local entries = {}
-                for slotKey, item in pairs(items) do
+                local priorityList = {}
+                local bestAttack, bestAttackPri, bestAttackIndex = nil, math.huge, nil
+                local bestSwap, bestSwapPri, bestSwapIndex = nil, math.huge, nil
+                local anyEnabled = false
+                for slotKey, item in next, items do
                     if type(item) == 'table' then
-                        local data = rawget(item, 'Data')
-                        local rawIndex = type(data) == 'table' and tonumber(rawget(data, 'ItemIndex')) or nil
-                        local index = rawIndex or (tonumber(slotKey) or nil)
-                        local category = nil
-                        if index == 1 then
-                            category = 'Primary'
-                        elseif index == 2 then
-                            category = 'Secondary'
-                        elseif index == 3 then
-                            category = 'Melee'
-                        elseif itemType(item) == 'Melee' or (itemInfo(item) and rawget(itemInfo(item), 'Class') == 'Melee') then
-                            category = 'Melee'
-                        elseif itemType(item) == 'Gun' or (itemInfo(item) and rawget(itemInfo(item), 'Class') == 'Gun') then
-                            local name = itemName(item)
-                            if name == 'Primary' then
-                                category = 'Primary'
-                            elseif name == 'Secondary' then
-                                category = 'Secondary'
+                        local category = itemCategory(slotKey)
+                        if category ~= nil and isCategoryEnabled(category) then
+                            anyEnabled = true
+                            local priority = table.find(priorityList, category) or math.huge
+                            if itemType(item) == 'Gun' and itemAmmo(item) == 0 then
+                                if itemAmmoReserve(item) > 0 and priority < bestSwapPri then
+                                    if onEmpty == 'Reload' then
+                                        bestAttackPri = priority
+                                        bestAttack = item
+                                        bestAttackIndex = slotKey
+                                    else
+                                        bestSwap = item
+                                        bestSwapPri = priority
+                                        bestSwapIndex = slotKey
+                                    end
+                                end
+                            elseif bestAttack == nil or priority < bestAttackPri then
+                                bestAttackPri = priority
+                                bestAttack = item
+                                bestAttackIndex = slotKey
                             end
                         end
-                        if category and enabled[category] then
-                            entries[#entries + 1] = {
-                                item = item,
-                                category = category,
-                                index = resolveItemIndex(item, fighter, index),
-                                priority = priority[category],
-                                effectiveType = (category == 'Melee') and 'Melee' or 'Gun',
-                            }
-                        end
                     end
                 end
-                if equipped and type(equipped) == 'table' then
-                    local found = false
-                    for _, entry in ipairs(entries) do
-                        if entry.item == equipped then
-                            found = true
-                            break
-                        end
-                    end
-                    if not found then
-                        local info = itemInfo(equipped)
-                        local kind = itemType(equipped) or (info and rawget(info, 'Class'))
-                        local category = kind == 'Melee' and 'Melee' or nil
-                        local data = rawget(equipped, 'Data')
-                        local index = type(data) == 'table' and tonumber(rawget(data, 'ItemIndex')) or nil
-                        if not category and kind == 'Gun' then
-                            if index == 2 then category = 'Secondary' else category = 'Primary' end
-                        end
-                        if category and enabled[category] then
-                            entries[#entries + 1] = {
-                                item = equipped,
-                                category = category,
-                                index = resolveItemIndex(equipped, fighter, index),
-                                priority = priority[category],
-                                effectiveType = category == 'Melee' and 'Melee' or 'Gun',
-                            }
-                        end
-                    end
-                end
-                if #entries == 0 then
+                if not anyEnabled then
                     return nil
                 end
-                table.sort(entries, function(a, b)
-                    return a.priority < b.priority
-                end)
-                local equippedEntry = nil
-                for _, entry in ipairs(entries) do
-                    if entry.item == equipped or itemIsEquipped(entry.item) then
-                        equippedEntry = entry
-                        break
-                    end
-                end
-                if equippedEntry then
-                    local item = equippedEntry.item
-                    if (equippedEntry.category == 'Primary' or equippedEntry.category == 'Secondary') and itemAmmo(item) <= 0 then
-                        if onEmpty == 'Reload' or onEmpty == 'SwapOrReload' then
-                            if itemAmmoReserve(item) > 0 then
-                                return { type = 'Reload', item = item, itemType = equippedEntry.effectiveType, index = equippedEntry.index }
-                            end
-                        end
-                        if onEmpty == 'Swap' or onEmpty == 'SwapOrReload' then
-                            for _, entry in ipairs(entries) do
-                                if entry.item ~= item and itemAmmo(entry.item) > 0 then
-                                    return { type = 'Swap', item = entry.item, itemType = entry.effectiveType, index = entry.index }
-                                end
-                            end
-                        end
+                if bestAttack == nil then
+                    if onEmpty == 'Swap' or bestSwap == nil then
                         return nil
                     end
-                    local resolvedType = itemType(item) or equippedEntry.effectiveType
-                    if resolvedType == 'Melee' or (itemInfo(item) and rawget(itemInfo(item), 'Class') == 'Melee') then
-                        return { type = 'Attack', item = item, itemType = 'Melee', index = equippedEntry.index }
+                    if itemIsEquipped(bestSwap) then
+                        return { type = 'Reload', item = bestSwap, itemType = itemType(bestSwap), index = bestSwapIndex }
                     end
-                    if itemAmmo(item) > 0 or resolvedType ~= 'Gun' then
-                        return { type = 'Attack', item = item, itemType = equippedEntry.effectiveType or resolvedType, index = equippedEntry.index }
-                    end
+                    return { type = 'Swap', item = bestSwap, itemType = itemType(bestSwap), index = bestSwapIndex }
                 end
-                for _, entry in ipairs(entries) do
-                    local item = entry.item
-                    if entry.item ~= equipped and itemIsEquipped(item) then
-                        continue
-                    end
-                    local resolvedType = itemType(item)
-                    local isGun = resolvedType == 'Gun' or (itemInfo(item) and rawget(itemInfo(item), 'Class') == 'Gun')
-                    if isGun and itemAmmo(item) <= 0 then
-                        if itemAmmoReserve(item) > 0 and (onEmpty == 'Reload' or onEmpty == 'SwapOrReload') then
-                            return { type = 'Reload', item = item, itemType = entry.effectiveType or resolvedType, index = entry.index }
-                        end
-                    else
-                        return { type = 'Swap', item = item, itemType = entry.effectiveType or resolvedType, index = entry.index }
-                    end
+                local emptyGun = itemType(bestAttack) == 'Gun' and itemAmmo(bestAttack) == 0
+                if not itemIsEquipped(bestAttack) then
+                    return { type = 'Swap', item = bestAttack, itemType = itemType(bestAttack), index = bestAttackIndex }
                 end
-                return nil
+                if emptyGun then
+                    return { type = 'Reload', item = bestAttack, itemType = itemType(bestAttack), index = bestAttackIndex }
+                end
+                return { type = 'Attack', item = bestAttack, itemType = itemType(bestAttack), index = bestAttackIndex }
             end
             local ShootLock = {}
             ShootLock.__index = ShootLock
@@ -1986,19 +1790,15 @@ return {
                 return setmetatable({ _lockedUntil = nil }, ShootLock)
             end
             function ShootLock:ShouldFire(canFire, lockDuration)
-                if not canFire then
-                    return false
-                end
                 local now = os.clock()
-                if self._lockedUntil ~= nil and now < self._lockedUntil then
-                    return false
+                local locked = self._lockedUntil ~= nil and now < self._lockedUntil
+                if canFire then
+                    self._lockedUntil = now + lockDuration
                 end
-                local duration = tonumber(lockDuration) or 0
-                if duration < 0 then
-                    duration = 0
+                if not locked then
+                    locked = canFire
                 end
-                self._lockedUntil = now + duration
-                return true
+                return locked
             end
             function ShootLock:Reset()
                 self._lockedUntil = nil
@@ -2010,7 +1810,7 @@ return {
             local SpatialLimitGate = {}
             SpatialLimitGate.__index = SpatialLimitGate
             function SpatialLimitGate.new()
-                return setmetatable({ _measurements = setmetatable({}, { __mode = 'k' }) }, SpatialLimitGate)
+                return setmetatable({ _measurements = {} }, SpatialLimitGate)
             end
             function SpatialLimitGate:Tick(target)
                 local key = target.fighter or target
@@ -2083,8 +1883,6 @@ return {
                     )
             end
             local function scatterFar(pos, anchorFromCharacter, baseRadius, radiusFactor)
-                baseRadius = math.clamp(tonumber(baseRadius) or PB_FALLBACK_BASE_RADIUS, 5, 100000000)
-                radiusFactor = math.clamp(tonumber(radiusFactor) or PB_FALLBACK_RADIUS_FACTOR, 0, 1)
                 local extra = baseRadius * radiusFactor
                 local anchor = anchorFromCharacter and pos or Vector3.new(0, pos.Y, 0)
                 local ring = ringPoint(anchor, baseRadius, baseRadius + extra)
@@ -2168,24 +1966,13 @@ return {
             end
             function ProjectileBreaker:BindEnvironment(envId)
                 self._poolEnvironmentID = envId
-                self._nextPositionCooldown = -1
                 self._pool = {}
                 self._processedParts = {}
-                self._lastBreakSurface = nil
             end
             function ProjectileBreaker:_HasProjectileThreat()
                 for _, entry in ipairs(collectEnemies()) do
-                    if isValidTarget(entry) then
-                        local item = entry.equippedItem
-                        if entry.equippedGunProjectile or isProjectileGunItem(item) then
-                            return true
-                        end
-                        if type(entry.fighter) == 'table' then
-                            local info = rawget(entry.fighter, 'Data')
-                            if type(info) == 'table' and (rawget(info, 'EquippedItemIsProjectile') == true or rawget(info, 'IsProjectile') == true) then
-                                return true
-                            end
-                        end
+                    if entry.equippedGunProjectile then
+                        return true
                     end
                 end
                 return false
@@ -2196,7 +1983,7 @@ return {
                 local forwardMid = depthForwardMax * 0.5
                 local scanned = 0
                 local function consider(part)
-                    if not (part and part:IsA('BasePart') and part.Parent and not self._processedParts[part]) then
+                    if not (part:IsA('BasePart') and not self._processedParts[part]) then
                         return
                     end
                     self._processedParts[part] = true
@@ -2207,28 +1994,7 @@ return {
                     end
                     self._pool[#self._pool + 1] = surface
                 end
-                local tags = {}
-                local wantedPrefix = 'RaycastWhitelist' .. tostring(envId)
-                local taggedList = CollectionServiceRB:GetTagged(wantedPrefix)
-                for _, instance in ipairs(taggedList) do
-                    tags[#tags + 1] = instance
-                end
-                if #tags == 0 then
-                    for _, tagName in ipairs(CollectionServiceRB:GetTags()) do
-                        if tostring(tagName):sub(1, 16) == 'RaycastWhitelist' then
-                            for _, instance in ipairs(CollectionServiceRB:GetTagged(tagName)) do
-                                tags[#tags + 1] = instance
-                                if 64 <= scanned or 30 <= #self._pool then
-                                    break
-                                end
-                            end
-                        end
-                        if 64 <= scanned or 30 <= #self._pool then
-                            break
-                        end
-                    end
-                end
-                for _, tagged in ipairs(tags) do
+                for _, tagged in ipairs(CollectionServiceRB:GetTagged('RaycastWhitelist' .. tostring(envId))) do
                     if not isBoundaryPart(tagged) then
                         consider(tagged)
                         if 64 <= scanned or 30 <= #self._pool then
@@ -2260,20 +2026,19 @@ return {
                 return self._pool[rbRandom:NextInteger(1, #self._pool)]
             end
             function ProjectileBreaker:Compute(clientCF)
-                if not self:_HasProjectileThreat() then
-                    self._lastBreakSurface = nil
-                    self._nextPositionCooldown = -1
-                    return clientCF
-                end
                 if os.clock() < self._nextPositionCooldown then
                     local last = self._lastBreakSurface
                     if last ~= nil then
                         return surfaceCFrame(last, depthOsc(PB_DEPTH_UP, PB_DEPTH_UP_FREQ), depthOsc(PB_DEPTH_FORWARD, PB_DEPTH_FORWARD_FREQ))
                     end
                 end
+                if not self:_HasProjectileThreat() then
+                    self._lastBreakSurface = nil
+                    return scatterFar(clientCF.Position, PB_FALLBACK_ANCHOR_FROM_CHARACTER, PB_FALLBACK_BASE_RADIUS, PB_FALLBACK_RADIUS_FACTOR)
+                end
                 local breakLine = self:_BreakLine()
                 if breakLine == nil then
-                    return clientCF
+                    return scatterFar(clientCF.Position, PB_FALLBACK_ANCHOR_FROM_CHARACTER, PB_FALLBACK_BASE_RADIUS, PB_FALLBACK_RADIUS_FACTOR)
                 end
                 self._lastBreakSurface = breakLine
                 return surfaceCFrame(breakLine, depthOsc(PB_DEPTH_UP, PB_DEPTH_UP_FREQ), depthOsc(PB_DEPTH_FORWARD, PB_DEPTH_FORWARD_FREQ))
@@ -2281,8 +2046,13 @@ return {
             function ProjectileBreaker:ResetState()
                 self._nextPositionCooldown = -1
                 self._lastBreakSurface = nil
-                self._pool = {}
-                self._processedParts = {}
+            end
+            local function farMiss()
+                return CFrame.new(
+                    math.random(-1000000, 1000000),
+                    math.random(5000, 10000),
+                    math.random(-1000000, 1000000)
+                )
             end
             local HitscanStrategy = {}
             HitscanStrategy.__index = HitscanStrategy
@@ -2290,23 +2060,19 @@ return {
                 return setmetatable({ _partGlue = partGlue, _shootLock = ShootLock.new() }, HitscanStrategy)
             end
             function HitscanStrategy:Plan(dt, target, item, ourRootPart, canFire)
-                if not self._shootLock:ShouldFire(canFire, math.max(dt, 1 / 240) * Setting.ShootFrames()) then
-                    self:ClearGlue()
-                    return ourRootPart.CFrame, nil
-                end
-                local hitPart = resolveRageTargetPart(target, false)
-                if not hitPart then
-                    return ourRootPart.CFrame, nil
-                end
+                local hitboxHead = target.hitboxHead
                 local above = isAbove(target)
                 local offset = above and OFFSET_ABOVE or OFFSET_BELOW
-                local void = self._partGlue:Acquire(ourRootPart, hitPart)
+                local void = self._partGlue:Acquire(ourRootPart, hitboxHead)
                 self._gluedOurPart = ourRootPart
                 local cframe
                 if above then
                     cframe = void + offset
                 else
-                    cframe = CFrame.new(void.Position + offset, hitPart.Position)
+                    cframe = CFrame.new(void.Position + offset, hitboxHead.Position)
+                end
+                if not self._shootLock:ShouldFire(canFire, dt * Setting.ShootFrames()) then
+                    return farMiss(), nil
                 end
                 local _, oy, oz = target.rootPart.CFrame:ToOrientation()
                 local pitch = above and PITCH_ABOVE or PITCH_BELOW
@@ -2315,16 +2081,9 @@ return {
                 local objectId = itemObjectId(item)
                 local isRaycast = itemIsRaycast(item)
                 local function weaponAction()
-                    fireGun(objectId, isRaycast, aim1, aim2, hitPart, AIM_EXTRA)
+                    fireGun(objectId, isRaycast, aim1, aim2, hitboxHead, AIM_EXTRA)
                 end
                 return cframe, weaponAction
-            end
-            function HitscanStrategy:ClearGlue()
-                local glued = self._gluedOurPart
-                if glued ~= nil then
-                    self._partGlue:Free(glued)
-                    self._gluedOurPart = nil
-                end
             end
             function HitscanStrategy:ResetState()
                 self._shootLock:Reset()
@@ -2344,7 +2103,6 @@ return {
                     _shootLock = ShootLock.new(),
                     _hitboxWindowUntil = -1,
                     _attackCooldown = -1,
-                    _backstabFired = false,
                 }, MeleeStrategy)
             end
             local function meleeViewAngles(px, oy)
@@ -2354,80 +2112,49 @@ return {
                 local now = os.clock()
                 self._hitboxWindowUntil = now + BACKSTAB_WINDOW
                 self._attackCooldown = now + BACKSTAB_COOLDOWN
-                self._backstabFired = false
             end
             function MeleeStrategy:Plan(dt, target, item, ourRootPart, canFire)
-                local now = os.clock()
-                local weaponName = itemName(item)
-                local isKnife = weaponName == 'Knife'
-                local targetHead = target.hitboxHead
-                local targetBody = target.hitboxBody or target.rootPart
-                local targetPart = isKnife and (targetHead or targetBody) or targetBody
-                if not targetPart or not targetPart.Parent or not finiteVector3(targetPart.Position) then
-                    self:ClearGlue()
-                    return ourRootPart.CFrame, nil, nil
-                end
-                local inBackstabWindow = now < self._hitboxWindowUntil
-                if not inBackstabWindow then
-                    if not self._shootLock:ShouldFire(canFire, math.max(dt, 1 / 240) * Setting.ShootFrames()) then
-                        self:ClearGlue()
-                        return ourRootPart.CFrame, nil, nil
-                    end
-                    if now < self._attackCooldown then
-                        return ourRootPart.CFrame, nil, nil
-                    end
-                elseif isKnife and self._backstabFired then
-                    return ourRootPart.CFrame, nil, nil
-                end
+                local hitboxHead = target.hitboxHead
                 local above = isAbove(target)
                 local offset = above and OFFSET_ABOVE or OFFSET_BELOW
-                local void = self._partGlue:Acquire(ourRootPart, targetPart)
+                local void = self._partGlue:Acquire(ourRootPart, hitboxHead)
                 self._gluedOurPart = ourRootPart
-                local cframe = above and (void + offset) or CFrame.new(void.Position + offset, targetPart.Position)
-                local px, oy = target.rootPart.CFrame:ToOrientation()
+                local cframe
+                if above then
+                    cframe = void + offset
+                else
+                    cframe = CFrame.new(void.Position + offset, hitboxHead.Position)
+                end
+                local px, oy, oz = target.rootPart.CFrame:ToOrientation()
                 local pitch = above and PITCH_ABOVE or PITCH_BELOW
-                local aim1 = buildAim(above and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, pitch, oy, 0)
-                local aim2 = buildAim(above and AIM_ABOVE_END or AIM_BELOW_END, pitch, oy, 0)
+                local aim1 = buildAim(above and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, pitch, oy, oz)
+                local aim2 = buildAim(above and AIM_ABOVE_END or AIM_BELOW_END, pitch, oy, oz)
                 local objectId = itemObjectId(item)
-                if not objectId then
-                    return cframe, isKnife and meleeViewAngles(px, oy) or nil, nil
-                end
-                if isKnife then
-                    if inBackstabWindow then
-                        self._backstabFired = true
-                        return cframe, meleeViewAngles(px, oy), function()
-                            fireMeleeHeavy(objectId, aim1, aim2, targetPart, AIM_EXTRA)
-                        end
-                    end
-                    self:_RecordBackstab()
-                    self._backstabFired = true
+                local now = os.clock()
+                if now < self._hitboxWindowUntil then
                     return cframe, meleeViewAngles(px, oy), function()
-                        fireMeleeHeavy(objectId, aim1, aim2, targetPart, AIM_EXTRA)
+                        fireMeleeHeavy(objectId, aim1, aim2, hitboxHead, AIM_EXTRA)
                     end
                 end
-                local shootPos = ourRootPart.Position
-                local distance = (targetPart.Position - shootPos).Magnitude
-                local lead = math.clamp(0.045 + distance / 1400, 0.045, 0.11)
-                local velocity = targetPart.AssemblyLinearVelocity
-                local targetPos = targetPart.Position + velocity * lead
-                return cframe, nil, function()
-                    local fired = fireMeleeAutoshoot(objectId, shootPos, targetPos, targetPart, Setting.MeleeAttempts())
-                    if fired == false then
-                        fireMeleeAttack(objectId, aim1, aim2, targetPart, AIM_EXTRA)
+                if not self._shootLock:ShouldFire(canFire, dt * Setting.ShootFrames()) then
+                    return farMiss(), nil, nil
+                end
+                if now < self._attackCooldown then
+                    return farMiss(), nil, nil
+                end
+                if itemName(item) ~= 'Knife' then
+                    return cframe, nil, function()
+                        fireMeleeAttack(objectId, aim1, aim2, hitboxHead, AIM_EXTRA)
                     end
                 end
-            end
-            function MeleeStrategy:ClearGlue()
-                local glued = self._gluedOurPart
-                if glued ~= nil then
-                    self._partGlue:Free(glued)
-                    self._gluedOurPart = nil
+                self:_RecordBackstab()
+                return cframe, meleeViewAngles(px, oy), function()
+                    fireMeleeHeavy(objectId, aim1, aim2, hitboxHead, AIM_EXTRA)
                 end
             end
             function MeleeStrategy:ResetState()
                 self._hitboxWindowUntil = -1
                 self._attackCooldown = -1
-                self._backstabFired = false
                 self._shootLock:Reset()
                 local glued = self._gluedOurPart
                 if glued ~= nil then
@@ -2463,12 +2190,8 @@ return {
                     _stateHook = StateHook.new(),
                     _characterController = nil,
                     _boundRootPart = nil,
-                    _projectileEnvironmentID = nil,
                     _lastTargetWorld = nil,
                     _lastDefensiveViewAngles = nil,
-                    _weaponTransitionUntil = 0,
-                    _lastEquippedItem = nil,
-                    _lastClientCFrame = nil,
                 }, Controller)
             end
             function Controller:SetEnabled(enabled)
@@ -2514,126 +2237,42 @@ return {
                 end
                 return { cframe = self._projectileBreaker:Compute(clientCF), shouldSkipDefense = true }
             end
-            function Controller:_Plan(dt, action, target, ourRootPart, clientCF, mode, fighter, characterController)
+            function Controller:_Plan(dt, action, target, ourRootPart, clientCF, mode)
                 local canFire = true
                 if target ~= nil then
                     canFire = not self._spatialLimitGate:Tick(target)
                 end
                 if action == nil then
-                    self._hitscanStrategy:ClearGlue()
-                    self._meleeStrategy:ClearGlue()
-                    if mode == 'ProjectileBreaker' then
-                        return { cframe = self._projectileBreaker:Compute(clientCF), shouldSkipDefense = true }
-                    end
-                    if mode == 'Translocate' then
-                        return { cframe = translocateEvade(clientCF, hasTargets()), shouldSkipDefense = true }
-                    end
-                    return { cframe = clientCF }
+                    return self:_EvadePlan(clientCF, mode)
                 end
                 if action.type == 'Swap' then
-                    self._hitscanStrategy:ClearGlue()
-                    self._meleeStrategy:ClearGlue()
+                    local plan = self:_EvadePlan(clientCF, mode)
                     local item = action.item
                     local index = action.index
-                    return {
-                        kind = 'weapon',
-                        cframe = clientCF,
-                        weaponAction = function()
-                            if characterController then
-                                characterController:SetServerCFrame(clientCF)
-                                characterController:HeartbeatUpdate()
-                            end
-                            equipItem(item, index, fighter)
-                        end,
-                        shouldSkipDefense = true,
-                    }
+                    plan.weaponAction = function() equipItem(item, index) end
+                    return plan
                 end
                 if action.type == 'Reload' then
-                    self._hitscanStrategy:ClearGlue()
-                    self._meleeStrategy:ClearGlue()
+                    local plan = self:_EvadePlan(clientCF, mode)
                     local item = action.item
-                    return {
-                        kind = 'weapon',
-                        cframe = clientCF,
-                        weaponAction = function()
-                            if characterController then
-                                characterController:SetServerCFrame(clientCF)
-                                characterController:HeartbeatUpdate()
-                            end
-                            reloadItem(item)
-                        end,
-                        shouldSkipDefense = true,
-                    }
+                    plan.weaponAction = function() reloadItem(item) end
+                    return plan
                 end
                 if target == nil then
-                    self._hitscanStrategy:ClearGlue()
-                    self._meleeStrategy:ClearGlue()
-                    if mode == 'ProjectileBreaker' then
-                        return { cframe = self._projectileBreaker:Compute(clientCF), shouldSkipDefense = true }
-                    end
-                    if mode == 'Translocate' then
-                        return { cframe = translocateEvade(clientCF, hasTargets()), shouldSkipDefense = true }
-                    end
-                    return { cframe = clientCF }
-                end
-                local currentlyEquipped = resolveFighterEquippedItem(fighter)
-                if currentlyEquipped ~= action.item and not itemIsEquipped(action.item) then
-                    self._hitscanStrategy:ClearGlue()
-                    self._meleeStrategy:ClearGlue()
-                    local index = action.index
-                    return {
-                        kind = 'weapon',
-                        cframe = clientCF,
-                        weaponAction = function()
-                            if characterController then
-                                characterController:SetServerCFrame(clientCF)
-                                characterController:HeartbeatUpdate()
-                            end
-                            equipItem(action.item, index, fighter)
-                        end,
-                        shouldSkipDefense = true,
-                    }
+                    return self:_EvadePlan(clientCF, mode)
                 end
                 if action.itemType == 'Melee' then
-                    self._hitscanStrategy:ClearGlue()
                     local cframe, viewAngles, weaponAction = self._meleeStrategy:Plan(dt, target, action.item, ourRootPart, canFire)
-                    if mode == 'ProjectileBreaker' then
-                        cframe = self._projectileBreaker:Compute(clientCF)
-                    end
-                    return { kind = 'attack', cframe = cframe, viewAngles = viewAngles, weaponAction = weaponAction, shouldSkipDefense = true, shouldForceCrouch = true }
+                    return { cframe = cframe, viewAngles = viewAngles, weaponAction = weaponAction, shouldSkipDefense = true, shouldForceCrouch = true }
                 end
                 if action.itemType ~= 'Gun' then
-                    self._hitscanStrategy:ClearGlue()
-                    self._meleeStrategy:ClearGlue()
                     return {}
                 end
                 if itemIsReloading(action.item) then
-                    self._hitscanStrategy:ClearGlue()
-                    self._meleeStrategy:ClearGlue()
-                    return { cframe = clientCF, shouldSkipDefense = true }
+                    return self:_EvadePlan(clientCF, mode)
                 end
-                self._meleeStrategy:ClearGlue()
                 local cframe, weaponAction = self._hitscanStrategy:Plan(dt, target, action.item, ourRootPart, canFire)
-                if mode == 'ProjectileBreaker' then
-                    cframe = self._projectileBreaker:Compute(clientCF)
-                end
-                return { kind = 'attack', cframe = cframe, weaponAction = weaponAction, shouldForceCrouch = true, isAimPose = weaponAction ~= nil }
-            end
-            function Controller:_RefreshProjectileEnvironment(fighter)
-                local character = GetChar()
-                local environmentId = character and character:GetAttribute('EnvironmentID') or nil
-                if environmentId == nil and type(fighter) == 'table' then
-                    local data = rawget(fighter, 'Data')
-                    environmentId = type(data) == 'table' and rawget(data, 'EnvironmentID') or nil
-                end
-                if environmentId ~= self._projectileEnvironmentID then
-                    self._projectileEnvironmentID = environmentId
-                    if environmentId ~= nil then
-                        self._projectileBreaker:BindEnvironment(environmentId)
-                    else
-                        self._projectileBreaker:ResetState()
-                    end
-                end
+                return { cframe = cframe, weaponAction = weaponAction, shouldForceCrouch = true, isAimPose = weaponAction ~= nil }
             end
             function Controller:_ApplyPlan(plan, target, characterController, fighter)
                 local cframe = plan.cframe
@@ -2647,7 +2286,7 @@ return {
                 if plan.isAimPose or plan.shouldDefendInPlace then
                     self._lastDefensiveViewAngles = getDefensiveViewAngles(stance)
                 end
-                characterController:SendViewAngles(20, plan.viewAngles or (plan.isAimPose and self._lastDefensiveViewAngles or nil))
+                characterController:SendViewAngles(20, plan.viewAngles or self._lastDefensiveViewAngles)
             end
             function Controller:Update(dt)
                 local fighter = resolveLocalFighter()
@@ -2660,53 +2299,23 @@ return {
                     self:_Reset()
                     return
                 end
-                self:_RefreshProjectileEnvironment(fighter)
                 local ourRootPart = self._boundRootPart
                 local clientCF = characterController:GetClientCFrame()
                 local mode = Setting.EvasionMode()
-                local target = selectTarget()
-                if target ~= nil and (not isValidTarget(target) or not target.rootPart or target.rootPart.Parent == nil or not finiteVector3(target.rootPart.Position)) then
-                    target = nil
-                end
-                local action = getAction(fighter)
-                local equippedNow = resolveFighterEquippedItem(fighter)
-                if self._lastEquippedItem ~= nil and equippedNow ~= nil and equippedNow ~= self._lastEquippedItem then
-                    self._hitscanStrategy:ClearGlue()
-                    self._meleeStrategy:ClearGlue()
-                    self._hitscanStrategy:ResetState()
-                    self._meleeStrategy:ResetState()
-                    self._weaponTransitionUntil = math.max(self._weaponTransitionUntil, os.clock() + 0.20)
-                    characterController:SetServerCFrame(clientCF)
-                    characterController:HeartbeatUpdate()
-                end
-                self._lastEquippedItem = equippedNow or self._lastEquippedItem
-                self._lastClientCFrame = clientCF
-                self._lastTargetWorld = target ~= nil and target.rootPart.Position or nil
-                if os.clock() < self._weaponTransitionUntil then
-                    self._hitscanStrategy:ClearGlue()
-                    self._meleeStrategy:ClearGlue()
+                if mode == 'Translocate' then
                     self:_ApplyForcedCrouch(false)
-                    characterController:SetServerCFrame(clientCF)
-                    characterController:SendViewAngles(20, nil)
+                    characterController:SetServerCFrame(translocateEvade(clientCF, hasTargets()))
                     characterController:HeartbeatUpdate()
                     return
                 end
-                local plan = self:_Plan(dt, action, target, ourRootPart, clientCF, mode, fighter, characterController)
+                local target = selectTarget()
+                local action = getAction(fighter)
+                self._lastTargetWorld = target ~= nil and target.rootPart.Position or nil
+                local plan = self:_Plan(dt, action, target, ourRootPart, clientCF, mode)
                 self:_ApplyPlan(plan, target, characterController, fighter)
                 self:_ApplyForcedCrouch(plan.shouldForceCrouch == true)
                 if plan.weaponAction ~= nil then
-                    if plan.kind == 'weapon' then
-                        self._weaponTransitionUntil = os.clock() + 0.35
-                        self._hitscanStrategy:ResetState()
-                        self._meleeStrategy:ResetState()
-                        characterController:SetServerCFrame(clientCF)
-                        characterController:HeartbeatUpdate()
-                    end
                     plan.weaponAction()
-                    if plan.kind == 'weapon' then
-                        characterController:SetServerCFrame(clientCF)
-                        characterController:HeartbeatUpdate()
-                    end
                 end
                 characterController:HeartbeatUpdate()
             end
@@ -2716,15 +2325,10 @@ return {
             function Controller:_Reset()
                 self._lastTargetWorld = nil
                 self._lastDefensiveViewAngles = nil
-                self._weaponTransitionUntil = 0
-                self._lastEquippedItem = nil
-                self._lastClientCFrame = nil
                 self:_ApplyForcedCrouch(false)
                 self._meleeStrategy:ResetState()
                 self._hitscanStrategy:ResetState()
                 self._projectileBreaker:ResetState()
-                self._partGlue:Destroy()
-                self._projectileEnvironmentID = nil
                 if self._characterController then
                     self._characterController:SetServerCFrame(nil)
                     self._characterController:SendViewAngles(20, nil)
@@ -2772,12 +2376,6 @@ return {
             function KiciaRagebot.Update(dt)
                 local controller = ensureController()
                 local enabled = KiciaRagebot.IsEnabled()
-                local mode = optValue('P8S4D3', 'Default')
-                if enabled and mode == 'Under' then
-                    startUnderground()
-                elseif undergroundEnabled or undergroundConn or undergroundRestoreConn or undergroundSnapshot then
-                    stopUnderground()
-                end
                 if controller._enabled ~= enabled then
                     controller:SetEnabled(enabled)
                 end
@@ -2893,6 +2491,8 @@ local function safe_is_a(instance, class)
     return cloneref(instance):IsA(class)
 end
 local __game_ok, __game_err = xpcall(function()
+Library.NotifyOnError = false
+Library.ShowCustomCursor = false
 do
     local OriginalNotify = rawget(Library, 'Notify')
     if type(OriginalNotify) == 'function' then
@@ -2933,6 +2533,8 @@ do
         end
     end
 end
+local Toggles = Library.Toggles
+local Options = Library.Options
 local ScriptPaths = RequireSharedModule('script_paths')
 SaveManager:SetLibrary(Library)
 SaveManager:SetIgnoreIndexes({ "MenuKeybind" })
@@ -15106,16 +14708,6 @@ ErrorReporter.set_game(GameName)
                 end
             end
             RivalsRuntimeBridge.UpdateCameraAim = function(deltaTime)
-                local ragebotActive = false
-                local ragebot = RivalsRuntimeBridge.KiciaRagebot
-                if ragebot and type(ragebot.IsEnabled) == 'function' then
-                    local ok, value = pcall(ragebot.IsEnabled)
-                    ragebotActive = ok and value == true
-                end
-                if ragebotActive then
-                    AimbotBridge.ResetCameraAimRandomState()
-                    return
-                end
                 if RivalsRuntimeBridge.MovementRecorder.IsCameraClaimed()
                     or RivalsRuntimeBridge.IsFlickbotCameraClaimed()
                     or not AimbotBridge.IsCameraAimEnabled()
@@ -15126,10 +14718,6 @@ ErrorReporter.set_game(GameName)
                     return
                 end
                 local camera = Workspace.CurrentCamera
-                if not camera then
-                    AimbotBridge.ResetCameraAimRandomState()
-                    return
-                end
                 local ignoreFov = AimbotBridge.IsAimbotIgnoreFovEnabled()
                 local targetInfo = GetBestAimbotTarget(true, ignoreFov)
                 local configuredAimPart = Options.P2S1D2 and Options.P2S1D2.Value or 'Auto'
@@ -15155,13 +14743,30 @@ ErrorReporter.set_game(GameName)
                 else
                     AimbotBridge.ResetCameraAimRandomState()
                 end
-                if not targetInfo or not targetInfo.part or not targetInfo.part.Parent or not targetInfo.worldPosition then
+                local targetPart = targetInfo and targetInfo.part or nil
+                local worldPosition = targetInfo and targetInfo.worldPosition or nil
+                if not camera or not targetPart or not targetPart.Parent or not worldPosition then
                     return
                 end
                 if targetInfo.player and IsRivalsSpawnShieldActive(targetInfo.player.Character) then
                     return
                 end
-                RivalsRuntimeBridge.PrimeAimbotAim(targetInfo, AimbotBridge.ResolveAimbotEquippedItem())
+                local cameraController = RivalsModsState.ResolveCameraController()
+                if not cameraController or type(cameraController.SetRotation) ~= 'function' then
+                    return
+                end
+                local currentRotation = rawget(cameraController, 'Rotation')
+                if typeof(currentRotation) ~= 'Vector2' then
+                    return
+                end
+                local aimSpeed = Options.P2S2S1 and Options.P2S2S1.Value or 35
+                local frameDelta = math.clamp(type(deltaTime) == 'number' and deltaTime or (1 / 60), 0, 0.1)
+                local blendAlpha = math.clamp(1 - math.exp(-frameDelta * (2 + (aimSpeed * 0.58))), 0, 1)
+                local pitch, yaw = CFrame.lookAt(camera.CFrame.Position, worldPosition):ToOrientation()
+                cameraController:SetRotation(Vector2.new(
+                    currentRotation.X + (pitch - currentRotation.X) * blendAlpha,
+                    currentRotation.Y + ((yaw - currentRotation.Y + math.pi) % (2 * math.pi) - math.pi) * blendAlpha
+                ))
             end
             local GetBestTriggerbotTarget = function()
                 EnsureAimbotTargetTracking()
@@ -24808,7 +24413,7 @@ ErrorReporter.set_game(GameName)
                     end))
                 end
                 do
-                    local Rage = Tabs.Ragebot:AddGroupbox("Combat Automation", "zap")
+                    local Rage = Tabs.Combat:AddRightGroupbox("Combat Automation", "zap")
                     local RageToggle = Rage:AddToggle("P8S4T1", {
                         Text = "Ragebot",
                         Default = false,
@@ -24840,14 +24445,6 @@ ErrorReporter.set_game(GameName)
                         Rounding = 0,
                         Compact = true,
                     })
-                    Rage:AddSlider("P8S4S7", {
-                        Text = "Melee Attempts",
-                        Default = 2,
-                        Min = 1,
-                        Max = 3,
-                        Rounding = 0,
-                        Compact = true,
-                    })
                     Rage:AddToggle("P8S4T5", { Text = "Use Primary", Default = true })
                     Rage:AddToggle("P8S4T6", { Text = "Use Secondary", Default = true })
                     Rage:AddToggle("P8S4T7", { Text = "Use Melee", Default = true })
@@ -24863,58 +24460,6 @@ ErrorReporter.set_game(GameName)
                         Multi = false,
                         Text = "Evasion Mode",
                     })
-                    Rage:AddDropdown("P8S4D3", {
-                        Values = { "Default", "Under" },
-                        Default = "Default",
-                        Multi = false,
-                        Text = "Mode",
-                        Callback = function(value)
-                            if value == "Under" then
-                                startUnderground()
-                            else
-                                stopUnderground()
-                            end
-                        end,
-                    })
-                    local RageUnderground = Rage:AddDependencyBox()
-                    RageUnderground:AddSlider("P8S4S6", {
-                        Text = "Under",
-                        Default = 2.5,
-                        Min = 0,
-                        Max = 15,
-                        Rounding = 1,
-                        Suffix = " studs",
-                        Compact = true,
-                        Callback = function(value)
-                            undergroundDepth = math.clamp(tonumber(value) or 2.5, 0, 15)
-                        end,
-                    })
-                    RageUnderground:AddInput("P8S4I1", {
-                        Text = "XYZ Offset",
-                        Default = "0,0,0",
-                        Placeholder = "1, 10, 5",
-                        AllowEmpty = false,
-                        EmptyReset = "0,0,0",
-                        Finished = true,
-                        Callback = function(value)
-                            local x, y, z = tostring(value):match("^%s*([%-+]?%d*%.?%d+)%s*,%s*([%-+]?%d*%.?%d+)%s*,%s*([%-+]?%d*%.?%d+)%s*$")
-                            x, y, z = tonumber(x), tonumber(y), tonumber(z)
-                            if x and y and z then
-                                undergroundOffset = Vector3.new(x, y, z)
-                                undergroundDepth = math.clamp(y, 0, 15)
-                                if Options.P8S4S6 then
-                                    Options.P8S4S6:SetValue(undergroundDepth)
-                                end
-                            else
-                                Library:Notify({ Title = "RIVALS", Description = "XYZ Offset must use X,Y,Z format, e.g. 1,10,5", Time = 3 })
-                                if Options.P8S4I1 then
-                                    local v = undergroundOffset or Vector3.zero
-                                    Options.P8S4I1:SetValue(string.format("%.2f,%.2f,%.2f", v.X, v.Y, v.Z))
-                                end
-                            end
-                        end,
-                    })
-                    RageUnderground:SetupDependencies({ { Options.P8S4D3, "Under" } })
                     local RandomEvasion = Rage:AddDependencyBox()
                     RandomEvasion:AddToggle("P8S4T8", {
                         Text = "Character Origin",
@@ -27099,9 +26644,6 @@ local RivalsRuntime = {}
                     { idx = 'P8S4T7', type = 'Toggle', value = true },
                     { idx = 'P8S4D1', type = 'Dropdown', value = 'SwapOrReload' },
                     { idx = 'P8S4D2', type = 'Dropdown', value = 'Random' },
-                    { idx = 'P8S4D3', type = 'Dropdown', value = 'Default' },
-                    { idx = 'P8S4S6', type = 'Slider', value = 2.5 },
-                    { idx = 'P8S4I1', type = 'Input', value = '0,0,0' },
                     { idx = 'P8S4T8', type = 'Toggle', value = false },
                     { idx = 'P8S4S4', type = 'Slider', value = 100 },
                     { idx = 'P8S4S5', type = 'Slider', value = 0.5 },

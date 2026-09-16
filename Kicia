@@ -10,12 +10,6 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local Options = Library.Options
 local Toggles = Library.Toggles
-local function safeRequire(moduleScript)
-    if not moduleScript then return nil end
-    local ok, result = pcall(require, moduleScript)
-    if ok then return result end
-    return nil
-end
 Library.ForceCheckbox = false
 Library.ShowToggleFrameInKeybinds = true
 Library.NotifyOnError = true
@@ -99,7 +93,6 @@ local undergroundRestoreConn = nil
 local undergroundRealCF = nil
 local undergroundRealVel = nil
 local undergroundRealAngVel = nil
-local undergroundServerCF = nil
 local undergroundSnapshot = nil
 local undergroundSnapshotCharacter = nil
 local undergroundFirstRun = true
@@ -109,23 +102,22 @@ local undergroundRemoteList = {}
 local undergroundPhysForces = {}
 local undergroundFallHeight = -500
 local undergroundSafeBuffer = 100
-local undergroundRagebotRequested = false
-local undergroundMovementRequested = false
 
 local function ugGetCharacter()
-    return lp.Character
+    local char = lp.Character
+    return char
 end
 
 local function ugGetHrp()
     local char = ugGetCharacter()
     if not char then return nil end
-    return char:FindFirstChild('HumanoidRootPart')
+    return char:FindFirstChild("HumanoidRootPart")
 end
 
 local function ugUpdateFallHeight()
     pcall(function()
         local fh = Workspace.FallenPartsDestroyHeight
-        if type(fh) == 'number' and fh == fh then
+        if type(fh) == "number" then
             undergroundFallHeight = fh
         end
     end)
@@ -137,22 +129,8 @@ local function ugClampY(y)
     return y
 end
 
-local function ugReadSettings()
-    local usingMovement = undergroundMovementRequested and not undergroundRagebotRequested
-    if undergroundRagebotRequested then
-        local depth = Options and Options.P8S4S6 and Options.P8S4S6.Value
-        local amp = Options and Options.P8S4S9 and Options.P8S4S9.Value
-        return math.clamp(tonumber(depth) or 2.5, 0, 15), math.clamp(tonumber(amp) or 0, 0, 1e8), 'ragebot'
-    end
-    if usingMovement then
-        local depth = Options and Options.P10S8S1 and Options.P10S8S1.Value
-        local amp = Options and Options.P10S8S2 and Options.P10S8S2.Value
-        return math.clamp(tonumber(depth) or 2.5, 0, 15), math.clamp(tonumber(amp) or 0, 0, 1e8), 'movement'
-    end
-    return math.clamp(tonumber(undergroundDepth) or 2.5, 0, 15), 0, 'manual'
-end
-
-local function ugComputeFakeY(hrp, char, depth)
+local function ugComputeFakeY(hrp, char)
+    local depth = math.clamp(tonumber(undergroundDepth) or 2.5, -15, 30)
     local params = RaycastParams.new()
     params.FilterDescendantsInstances = { char }
     params.FilterType = Enum.RaycastFilterType.Exclude
@@ -167,13 +145,13 @@ local function ugCollectRemotes()
     local function scan(container)
         if not container then return end
         for _, obj in ipairs(container:GetDescendants()) do
-            if (obj:IsA('RemoteEvent') or obj:IsA('RemoteFunction') or obj:IsA('UnreliableRemoteEvent')) and not seen[obj] then
+            if (obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") or obj:IsA("UnreliableRemoteEvent")) and not seen[obj] then
                 seen[obj] = true
                 table.insert(undergroundRemoteList, obj)
             end
         end
     end
-    pcall(scan, game:GetService('ReplicatedStorage'))
+    pcall(scan, game:GetService("ReplicatedStorage"))
 end
 
 local function ugCleanupForces()
@@ -185,7 +163,7 @@ end
 
 local function ugCaptureSnapshot()
     local char = ugGetCharacter()
-    local hrp = char and char:FindFirstChild('HumanoidRootPart')
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not char or not hrp then return false end
     local camera = Workspace.CurrentCamera
     local snap = {
@@ -200,13 +178,13 @@ local function ugCaptureSnapshot()
         parts = {},
         joints = {},
     }
-    local hum = char:FindFirstChildOfClass('Humanoid')
+    local hum = char:FindFirstChildOfClass("Humanoid")
     if hum then
         pcall(function() snap.humanoidState = hum:GetState() end)
         pcall(function() snap.humanoidAutoRotate = hum.AutoRotate end)
     end
     for _, obj in ipairs(char:GetDescendants()) do
-        if obj:IsA('BasePart') then
+        if obj:IsA("BasePart") then
             snap.parts[obj] = {
                 cframe = obj.CFrame,
                 velocity = obj.AssemblyLinearVelocity,
@@ -216,7 +194,7 @@ local function ugCaptureSnapshot()
                 touch = obj.CanTouch,
                 query = obj.CanQuery,
             }
-        elseif obj:IsA('Motor6D') then
+        elseif obj:IsA("Motor6D") then
             snap.joints[obj] = {
                 transform = obj.Transform,
                 c0 = obj.C0,
@@ -224,7 +202,7 @@ local function ugCaptureSnapshot()
                 part0 = obj.Part0,
                 part1 = obj.Part1,
             }
-        elseif obj:IsA('Weld') then
+        elseif obj:IsA("Weld") then
             snap.joints[obj] = {
                 c0 = obj.C0,
                 c1 = obj.C1,
@@ -242,10 +220,15 @@ end
 local function ugRestoreSnapshot()
     local snap = undergroundSnapshot
     local char = ugGetCharacter()
-    if not snap or not char or snap.character ~= char then return false end
-    local hrp = char:FindFirstChild('HumanoidRootPart')
+    if not snap or not char or snap.character ~= char then
+        return false
+    end
+
+    local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return false end
+
     pcall(function() char:PivotTo(snap.pivot) end)
+
     for joint, state in pairs(snap.joints) do
         if joint and joint.Parent then
             pcall(function()
@@ -253,10 +236,11 @@ local function ugRestoreSnapshot()
                 if state.part1 then joint.Part1 = state.part1 end
                 if state.c0 then joint.C0 = state.c0 end
                 if state.c1 then joint.C1 = state.c1 end
-                if state.transform and joint:IsA('Motor6D') then joint.Transform = state.transform end
+                if state.transform and joint:IsA("Motor6D") then joint.Transform = state.transform end
             end)
         end
     end
+
     for part, state in pairs(snap.parts) do
         if part and part.Parent then
             pcall(function()
@@ -270,25 +254,35 @@ local function ugRestoreSnapshot()
             end)
         end
     end
+
     pcall(function()
         hrp.CFrame = snap.hrpCFrame
         hrp.AssemblyLinearVelocity = snap.hrpVelocity
         hrp.AssemblyAngularVelocity = snap.hrpAngularVelocity
-        local hum = char:FindFirstChildOfClass('Humanoid')
+        local hum = char:FindFirstChildOfClass("Humanoid")
         if hum then
-            if snap.humanoidAutoRotate ~= nil then hum.AutoRotate = snap.humanoidAutoRotate end
-            if snap.humanoidState then pcall(function() hum:ChangeState(snap.humanoidState) end) end
+            if snap.humanoidAutoRotate ~= nil then
+                hum.AutoRotate = snap.humanoidAutoRotate
+            end
+            if snap.humanoidState then
+                pcall(function() hum:ChangeState(snap.humanoidState) end)
+            end
         end
     end)
+
     pcall(function()
         local camera = Workspace.CurrentCamera
         if camera and snap.camera then camera.CFrame = snap.camera end
     end)
+
     return true
 end
 
 local function ugStartRestoreWindow()
-    if undergroundRestoreConn then undergroundRestoreConn:Disconnect() undergroundRestoreConn = nil end
+    if undergroundRestoreConn then
+        undergroundRestoreConn:Disconnect()
+        undergroundRestoreConn = nil
+    end
     local remaining = 12
     undergroundRestoreConn = RunService.Heartbeat:Connect(function()
         if ugRestoreSnapshot() then
@@ -308,34 +302,63 @@ local function ugStartRestoreWindow()
     end)
 end
 
-local function ugEnsureConnections()
-    if undergroundConn then return end
+local function ugSafeTeleport(hrp)
+    if not hrp then return end
+    local pos = hrp.Position
+    local minY = undergroundFallHeight + undergroundSafeBuffer + 50
+    if pos.Y < minY then
+        pcall(function()
+            hrp.CFrame = CFrame.new(pos.X, minY, pos.Z)
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+        end)
+    end
+end
+
+startUnderground = function()
+    local currentCharacter = ugGetCharacter()
+    if undergroundConn then
+        if undergroundSnapshotCharacter ~= currentCharacter and currentCharacter ~= nil then
+            ugCaptureSnapshot()
+        end
+        return
+    end
+    if undergroundRestoreConn then
+        undergroundRestoreConn:Disconnect()
+        undergroundRestoreConn = nil
+    end
+    if not ugCaptureSnapshot() then
+        undergroundEnabled = false
+        return
+    end
+    pcall(function() RunService:UnbindFromRenderStep("UndergroundSync") end)
+    pcall(function() RunService:UnbindFromRenderStep("UndergroundSync2") end)
+    pcall(function() RunService:UnbindFromRenderStep("UndergroundSync3") end)
+    undergroundEnabled = true
+    undergroundTick = 0
+    undergroundChaosSeed = math.random(1, 1e9)
+    ugUpdateFallHeight()
+    ugCollectRemotes()
+
     undergroundConn = RunService.Heartbeat:Connect(function(dt)
         if not undergroundEnabled then return end
-        undergroundTick = undergroundTick + (dt or 0)
+        undergroundTick = undergroundTick + dt
         pcall(function()
             local char = ugGetCharacter()
-            local hrp = char and char:FindFirstChild('HumanoidRootPart')
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
             if not char or not hrp or char ~= undergroundSnapshotCharacter then return end
-            local depth, amp = ugReadSettings()
-            undergroundDepth = depth
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then
+                pcall(function() hum:ChangeState(Enum.HumanoidStateType.Physics) end)
+            end
             undergroundRealCF = hrp.CFrame
             undergroundRealVel = hrp.AssemblyLinearVelocity
             undergroundRealAngVel = hrp.AssemblyAngularVelocity
-            local fakeY = ugComputeFakeY(hrp, char, depth)
-            local chaos1, chaos2 = 0, 0
-            if amp >= 1e7 then
-                local a = 1048576
-                chaos1 = ((math.floor(undergroundTick * 60) % 2 == 0) and 1 or -1) * a
-                chaos2 = ((math.floor(undergroundTick * 74) % 2 == 0) and 1 or -1) * a
-            elseif amp > 0 then
-                chaos1 = math.sin(undergroundTick * 180 + undergroundChaosSeed) * amp
-                chaos2 = math.cos(undergroundTick * 220 + undergroundChaosSeed) * amp
-            end
-            local base = undergroundRealCF.Position
-            local fakeCF = CFrame.new(base.X + chaos1 + undergroundOffset.X, fakeY, base.Z + chaos2 + undergroundOffset.Z)
-            undergroundServerCF = fakeCF
-            hrp.CFrame = fakeCF
+            local fakeY = ugComputeFakeY(hrp, char)
+            local chaos1 = math.sin(undergroundTick * 180 + undergroundChaosSeed) * 100
+            local chaos2 = math.cos(undergroundTick * 220 + undergroundChaosSeed) * 100
+            local base = undergroundRealCF and undergroundRealCF.Position or hrp.Position
+            hrp.CFrame = CFrame.new(base.X + chaos1 + undergroundOffset.X, fakeY, base.Z + chaos2 + undergroundOffset.Z)
             hrp.AssemblyLinearVelocity = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
         end)
@@ -343,9 +366,19 @@ local function ugEnsureConnections()
 
     undergroundSteppedConn = RunService.Stepped:Connect(function()
         if not undergroundEnabled then return end
+        pcall(function()
+            local char = ugGetCharacter()
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if not char or not hrp or char ~= undergroundSnapshotCharacter then return end
+            local fakeY = ugClampY(ugComputeFakeY(hrp, char))
+            local base = undergroundRealCF and undergroundRealCF.Position or hrp.Position
+            hrp.CFrame = CFrame.new(base.X + undergroundOffset.X, fakeY, base.Z + undergroundOffset.Z)
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+        end)
     end)
 
-    undergroundRenderConn = RunService:BindToRenderStep('UndergroundSync', Enum.RenderPriority.First.Value, function()
+    undergroundRenderConn = RunService:BindToRenderStep("UndergroundSync", Enum.RenderPriority.First.Value, function()
         if undergroundEnabled and undergroundRealCF then
             pcall(function()
                 local hrp = ugGetHrp()
@@ -357,8 +390,27 @@ local function ugEnsureConnections()
         end
     end)
 
-    undergroundRenderConn2 = nil
-    undergroundRenderConn3 = nil
+    undergroundRenderConn2 = RunService:BindToRenderStep("UndergroundSync2", Enum.RenderPriority.Camera.Value, function()
+        if not undergroundEnabled then return end
+        pcall(function()
+            local hrp = ugGetHrp()
+            if hrp and undergroundSnapshotCharacter == lp.Character then
+                local base = undergroundRealCF and undergroundRealCF.Position or hrp.Position
+                hrp.CFrame = CFrame.new(base.X + undergroundOffset.X, ugClampY(ugComputeFakeY(hrp, lp.Character)), base.Z + undergroundOffset.Z)
+            end
+        end)
+    end)
+
+    undergroundRenderConn3 = RunService:BindToRenderStep("UndergroundSync3", Enum.RenderPriority.Last.Value, function()
+        if not undergroundEnabled then return end
+        pcall(function()
+            local hrp = ugGetHrp()
+            if not hrp or undergroundSnapshotCharacter ~= lp.Character then return end
+            local base = undergroundRealCF and undergroundRealCF.Position or hrp.Position
+            local pos = hrp.Position
+            hrp.CFrame = CFrame.new(base.X + undergroundOffset.X, ugClampY(pos.Y), base.Z + undergroundOffset.Z)
+        end)
+    end)
 
     undergroundOwnershipConn = RunService.Heartbeat:Connect(function()
         if not undergroundEnabled then return end
@@ -379,7 +431,7 @@ local function ugEnsureConnections()
         if not undergroundEnabled then return end
         pcall(function()
             local char = ugGetCharacter()
-            local hrp = char and char:FindFirstChild('HumanoidRootPart')
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
             if not char or not hrp or undergroundSnapshotCharacter ~= char then return end
             ugCleanupForces()
         end)
@@ -390,17 +442,14 @@ local function ugEnsureConnections()
         ugUpdateFallHeight()
         pcall(function()
             local char = ugGetCharacter()
-            local hrp = char and char:FindFirstChild('HumanoidRootPart')
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
             if not char or not hrp or undergroundSnapshotCharacter ~= char then return end
-            if undergroundServerCF and undergroundServerCF.Position.Y < undergroundFallHeight + undergroundSafeBuffer then
-                local p = undergroundServerCF.Position
-                undergroundServerCF = CFrame.new(p.X, undergroundFallHeight + undergroundSafeBuffer + 5, p.Z)
-            end
+            ugSafeTeleport(hrp)
         end)
     end)
 end
 
-local function ugStopRuntime(skipRestoreWindow)
+stopUnderground = function()
     undergroundEnabled = false
     if undergroundConn then undergroundConn:Disconnect() undergroundConn = nil end
     if undergroundSteppedConn then undergroundSteppedConn:Disconnect() undergroundSteppedConn = nil end
@@ -408,9 +457,9 @@ local function ugStopRuntime(skipRestoreWindow)
     if undergroundJointConn then undergroundJointConn:Disconnect() undergroundJointConn = nil end
     if undergroundPhysicsConn then undergroundPhysicsConn:Disconnect() undergroundPhysicsConn = nil end
     if undergroundSafeConn then undergroundSafeConn:Disconnect() undergroundSafeConn = nil end
-    pcall(function() RunService:UnbindFromRenderStep('UndergroundSync') end)
-    pcall(function() RunService:UnbindFromRenderStep('UndergroundSync2') end)
-    pcall(function() RunService:UnbindFromRenderStep('UndergroundSync3') end)
+    pcall(function() RunService:UnbindFromRenderStep("UndergroundSync") end)
+    pcall(function() RunService:UnbindFromRenderStep("UndergroundSync2") end)
+    pcall(function() RunService:UnbindFromRenderStep("UndergroundSync3") end)
     undergroundRenderConn = nil
     undergroundRenderConn2 = nil
     undergroundRenderConn3 = nil
@@ -418,12 +467,13 @@ local function ugStopRuntime(skipRestoreWindow)
     if undergroundFloodConn then pcall(function() task.cancel(undergroundFloodConn) end) undergroundFloodConn = nil end
     if undergroundRestoreConn then undergroundRestoreConn:Disconnect() undergroundRestoreConn = nil end
     ugCleanupForces()
+
     local restored = ugRestoreSnapshot()
-    if restored and not skipRestoreWindow then
+    if restored then
         ugStartRestoreWindow()
-    elseif not restored then
+    else
         local char = ugGetCharacter()
-        local hrp = char and char:FindFirstChild('HumanoidRootPart')
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
         if hrp and undergroundRealCF then
             pcall(function()
                 hrp.CFrame = undergroundRealCF
@@ -432,54 +482,12 @@ local function ugStopRuntime(skipRestoreWindow)
             end)
         end
     end
+
     undergroundRemoteList = {}
-    undergroundServerCF = nil
     undergroundRealCF = nil
     undergroundRealVel = nil
     undergroundRealAngVel = nil
     undergroundFirstRun = true
-end
-
-startUnderground = function(owner)
-    owner = owner or 'manual'
-    if owner == 'ragebot' then
-        undergroundRagebotRequested = true
-    elseif owner == 'movement' then
-        undergroundMovementRequested = true
-    else
-        undergroundRagebotRequested = true
-    end
-    if undergroundEnabled then return end
-    if undergroundRestoreConn then undergroundRestoreConn:Disconnect() undergroundRestoreConn = nil end
-    RunService.Heartbeat:Wait()
-    if not ugCaptureSnapshot() then
-        undergroundRagebotRequested = owner == 'ragebot' and false or undergroundRagebotRequested
-        undergroundMovementRequested = owner == 'movement' and false or undergroundMovementRequested
-        return
-    end
-    undergroundEnabled = true
-    undergroundTick = 0
-    undergroundChaosSeed = math.random(1, 1e9)
-    ugUpdateFallHeight()
-    ugCollectRemotes()
-    ugEnsureConnections()
-end
-
-stopUnderground = function(skipRestoreWindow, owner)
-    if owner == 'ragebot' then
-        undergroundRagebotRequested = false
-    elseif owner == 'movement' then
-        undergroundMovementRequested = false
-    else
-        undergroundRagebotRequested = false
-        undergroundMovementRequested = false
-    end
-    if undergroundRagebotRequested or undergroundMovementRequested then
-        return
-    end
-    if undergroundEnabled or undergroundConn or undergroundRestoreConn or undergroundSnapshot then
-        ugStopRuntime(skipRestoreWindow)
-    end
 end
 
 local __kicia_hook_genv = ResolveGlobalEnv()
@@ -868,6 +876,7 @@ return {
                 RandomBaseRadius = function() return optValue('P8S4S4', 100) end,
                 RandomRadiusFactor = function() return optValue('P8S4S5', 0.5) end,
                 RandomAnchorFromCharacter = function() return togValue('P8S4T8', false) end,
+                MeleeAttempts = function() return optValue('P8S4S7', 2) end,
                 RepositionInterval = function() return 0.3 end,
             }
             local PB_DEPTH_FORWARD = { Min = 0, Max = 4 }
@@ -1178,6 +1187,13 @@ return {
                 return type(item) == 'table' and rawget(item, 'IsEquipped') == true
             end
             local function resolveItemIndex(item, fighter, fallback)
+                if type(item) == 'table' then
+                    local data = rawget(item, 'Data')
+                    local index = type(data) == 'table' and tonumber(rawget(data, 'ItemIndex')) or nil
+                    if index then
+                        return index
+                    end
+                end
                 if type(fighter) == 'table' then
                     local items = rawget(fighter, 'Items')
                     if type(items) == 'table' then
@@ -1190,13 +1206,6 @@ return {
                                 return slotIndex
                             end
                         end
-                    end
-                end
-                if type(item) == 'table' then
-                    local data = rawget(item, 'Data')
-                    local index = type(data) == 'table' and tonumber(rawget(data, 'ItemIndex')) or nil
-                    if index then
-                        return index
                     end
                 end
                 return fallback
@@ -2143,34 +2152,21 @@ return {
                         rbRandom:NextNumber(0, 2 * math.pi)
                     )
             end
-            local SCATTER_INF_THRESHOLD = 1e7
             local function scatterFar(pos, anchorFromCharacter, baseRadius, radiusFactor)
-                baseRadius = tonumber(baseRadius) or PB_FALLBACK_BASE_RADIUS
-                if baseRadius >= SCATTER_INF_THRESHOLD then
-                    local s = (math.floor(os.clock() * 120) % 2 == 0) and 1 or -1
-                    return CFrame.new(FAR_AXIS * s, FAR_AXIS, FAR_AXIS * s)
-                        * CFrame.fromOrientation(
-                            rbRandom:NextNumber(0, math.pi * 2),
-                            rbRandom:NextNumber(0, math.pi * 2),
-                            rbRandom:NextNumber(0, math.pi * 2)
-                        )
-                end
-                baseRadius = math.clamp(baseRadius, 5, SCATTER_INF_THRESHOLD - 1)
+                baseRadius = math.clamp(tonumber(baseRadius) or PB_FALLBACK_BASE_RADIUS, 5, 100000000)
                 radiusFactor = math.clamp(tonumber(radiusFactor) or PB_FALLBACK_RADIUS_FACTOR, 0, 1)
                 local extra = baseRadius * radiusFactor
                 local anchor = anchorFromCharacter and pos or Vector3.new(0, pos.Y, 0)
                 local ring = ringPoint(anchor, baseRadius, baseRadius + extra)
                 local ringPos = ring.Position
                 local x, y, z = ringPos.X, ringPos.Y, ringPos.Z
-                local axisPool = { 1, 2, 3 }
-                local numAxes = (baseRadius >= 1e5) and 2 or 1
-                for _ = 1, numAxes do
-                    local idx = rbRandom:NextInteger(1, #axisPool)
-                    local axis = axisPool[idx]
-                    table.remove(axisPool, idx)
-                    if axis == 1 then x = FAR_AXIS
-                    elseif axis == 2 then y = FAR_AXIS
-                    else z = FAR_AXIS end
+                local pick = rbRandom:NextInteger(1, 3)
+                if pick == 1 then
+                    x = FAR_AXIS
+                elseif pick == 2 then
+                    y = FAR_AXIS
+                else
+                    z = FAR_AXIS
                 end
                 return ring - ringPos + Vector3.new(x, y, z)
             end
@@ -2485,7 +2481,7 @@ return {
                 local velocity = targetPart.AssemblyLinearVelocity
                 local targetPos = targetPart.Position + velocity * lead
                 return cframe, nil, function()
-                    local fired = fireMeleeAutoshoot(objectId, shootPos, targetPos, targetPart, 1)
+                    local fired = fireMeleeAutoshoot(objectId, shootPos, targetPos, targetPart, Setting.MeleeAttempts())
                     if fired == false then
                         fireMeleeAttack(objectId, aim1, aim2, targetPart, AIM_EXTRA)
                     end
@@ -2713,22 +2709,15 @@ return {
                     end
                 end
             end
-            local function getUndergroundServerCFrame(fallback)
-                if undergroundEnabled and undergroundServerCF and typeof(undergroundServerCF) == 'CFrame' then
-                    return undergroundServerCF
-                end
-                return fallback
-            end
             function Controller:_ApplyPlan(plan, target, characterController, fighter)
                 local cframe = plan.cframe
                 if cframe == nil or target == nil or plan.shouldSkipDefense then
-                    characterController:SetServerCFrame(getUndergroundServerCFrame(cframe))
+                    characterController:SetServerCFrame(cframe)
                     characterController:SendViewAngles(20, plan.viewAngles)
                     return
                 end
                 local stance = localShieldStance(fighter)
-                local defensiveCF = getDefensiveCFrame(cframe, stance, target.rootPart)
-                characterController:SetServerCFrame(getUndergroundServerCFrame(defensiveCF))
+                characterController:SetServerCFrame(getDefensiveCFrame(cframe, stance, target.rootPart))
                 if plan.isAimPose or plan.shouldDefendInPlace then
                     self._lastDefensiveViewAngles = getDefensiveViewAngles(stance)
                 end
@@ -2744,34 +2733,12 @@ return {
                 self:_RefreshProjectileEnvironment(fighter)
                 local ourRootPart = self._boundRootPart
                 local clientCF = characterController:GetClientCFrame()
-                -- ── UNDERGROUND GUARD ─────────────────────────────────────────────
-                -- Underground's Heartbeat may run before or after ragebot's, and
-                -- GetClientCFrame() reads _rootPart.CFrame when _oldCFrame is nil.
-                -- If underground just set hrp.CFrame = fakePos, we get the fake Y
-                -- as clientCF.  This causes weapon-switch, reload, and plan calls
-                -- to send the underground (or INF-scatter) position to the server,
-                -- which the server treats as a void-level position → character dies.
-                -- Fix: always prefer the live undergroundRealCF (true client pos).
-                if undergroundEnabled and undergroundRealCF
-                    and typeof(undergroundRealCF) == 'CFrame'
-                    and undergroundSnapshotCharacter == lp.Character then
-                    clientCF = undergroundRealCF
+                if clientCF == nil or typeof(clientCF) ~= 'CFrame' then
+                    return
                 end
-                -- Hard sanity: bail if clientCF is nil, NaN, or suspiciously far
-                if clientCF == nil or typeof(clientCF) ~= 'CFrame' then return end
-                do
-                    local p = clientCF.Position
-                    local px, py, pz = p.X, p.Y, p.Z
-                    if px ~= px or py ~= py or pz ~= pz then
-                        return
-                    end
-                    if math.abs(px) > 5000000 or math.abs(py) > 500000 or math.abs(pz) > 5000000 then
-                        if undergroundRealCF and typeof(undergroundRealCF) == 'CFrame' then
-                            clientCF = undergroundRealCF
-                        else
-                            return
-                        end
-                    end
+                local clientPos = clientCF.Position
+                if clientPos.X ~= clientPos.X or clientPos.Y ~= clientPos.Y or clientPos.Z ~= clientPos.Z then
+                    return
                 end
                 local mode = Setting.EvasionMode()
                 local target = selectTarget()
@@ -2786,7 +2753,7 @@ return {
                     self._hitscanStrategy:ResetState()
                     self._meleeStrategy:ResetState()
                     self._weaponTransitionUntil = math.max(self._weaponTransitionUntil, os.clock() + 0.20)
-                    characterController:SetServerCFrame(getUndergroundServerCFrame(clientCF))
+                    characterController:SetServerCFrame(clientCF)
                     characterController:HeartbeatUpdate()
                 end
                 self._lastEquippedItem = equippedNow or self._lastEquippedItem
@@ -2796,7 +2763,7 @@ return {
                     self._hitscanStrategy:ClearGlue()
                     self._meleeStrategy:ClearGlue()
                     self:_ApplyForcedCrouch(false)
-                    characterController:SetServerCFrame(getUndergroundServerCFrame(clientCF))
+                    characterController:SetServerCFrame(clientCF)
                     characterController:SendViewAngles(20, nil)
                     characterController:HeartbeatUpdate()
                     return
@@ -2809,17 +2776,17 @@ return {
                         self._weaponTransitionUntil = os.clock() + 0.35
                         self._hitscanStrategy:ResetState()
                         self._meleeStrategy:ResetState()
-                        characterController:SetServerCFrame(getUndergroundServerCFrame(clientCF))
+                        characterController:SetServerCFrame(clientCF)
                         characterController:HeartbeatUpdate()
                     end
                     plan.weaponAction()
                     if plan.kind == 'weapon' then
-                        characterController:SetServerCFrame(getUndergroundServerCFrame(clientCF))
+                        characterController:SetServerCFrame(clientCF)
                         characterController:HeartbeatUpdate()
                     end
                 end
                 characterController:HeartbeatUpdate()
-                characterController:SetServerCFrame(getUndergroundServerCFrame(clientCF))
+                characterController:SetServerCFrame(clientCF)
             end
             function Controller:GetLastTargetWorld()
                 return self._lastTargetWorld
@@ -2885,13 +2852,6 @@ return {
             function KiciaRagebot.Update(dt)
                 local controller = ensureController()
                 local enabled = KiciaRagebot.IsEnabled()
-                local mode = optValue('P8S4D3', 'Default')
-                local wantUnderground = enabled and mode == 'Under'
-                if wantUnderground then
-                    startUnderground('ragebot')
-                elseif undergroundRagebotRequested then
-                    stopUnderground(false, 'ragebot')
-                end
                 if controller._enabled ~= enabled then
                     controller:SetEnabled(enabled)
                 end
@@ -3155,23 +3115,6 @@ do
         end)
     end
 end
-
-local function CleanupKiciaAntiAfk()
-    local slot = __kicia_hook_genv and __kicia_hook_genv.__KiciaHookAntiAfk
-    if type(slot) == 'table' then
-        if slot.Connection then
-            pcall(function() slot.Connection:Disconnect() end)
-        end
-        slot.Connection = nil
-        slot.Token = nil
-    end
-    if __kicia_hook_genv then
-        __kicia_hook_genv.__KiciaHookAntiAfk = nil
-    end
-end
-
-Library:OnUnload(CleanupKiciaAntiAfk)
-
 local queue_on_teleport = type(queue_on_teleport) == 'function' and queue_on_teleport or function() end
 local GameId = game.GameId
 local GameName = "Unknown"
@@ -6945,13 +6888,15 @@ ErrorReporter.set_game(GameName)
                         and AimbotBridge.IsExplicitAimbotEnabled()
                 end
                 AimbotBridge.IsCameraAimEnabled = function()
-                    if AimbotBridge.ResolveAimbotMode() ~= 'Camera' then
-                        return false
-                    end
-                    if not AimbotBridge.IsExplicitAimbotEnabled() then
+                    if AimbotBridge.ResolveAimbotMode() ~= 'Camera'
+                        or not AimbotBridge.IsExplicitAimbotEnabled() then
                         return false
                     end
                     if AimbotInputState.SyntheticInputBlocked() then
+                        return false
+                    end
+                    if not IsTouchAimbotDevice()
+                        and not AimbotInputState.RightMouse then
                         return false
                     end
                     return true
@@ -6972,20 +6917,16 @@ ErrorReporter.set_game(GameName)
                     return true
                 end
                 AimbotBridge.IsAimbotIgnoreFovEnabled = function()
-                    if AimbotBridge.ResolveAimbotMode() ~= 'Silent' then
-                        return false
-                    end
                     return Toggles.P2S1T3 and Toggles.P2S1T3.Value == true
                 end
                 AimbotBridge.UpdateAimbotFovCircle = function(active, gameReady, usesFov)
-                    local mode = AimbotBridge.ResolveAimbotMode()
-                    local showFov = mode == 'Silent' and Toggles.P2S1T5 and Toggles.P2S1T5.Value == true
-                    if mode ~= 'Silent' or not active or not gameReady or not usesFov or not showFov then
+                    local showFov = Toggles.P2S1T5 and Toggles.P2S1T5.Value
+                    if not active or not gameReady or not usesFov or not showFov then
                         AimbotFovCircle.Visible = false
                         return
                     end
                     AimbotFovCircle.Position = AimbotBridge.GetAimbotPointerPosition()
-                    AimbotFovCircle.Radius = Options.P2S1S2 and Options.P2S1S2.Value or 282
+                    AimbotFovCircle.Radius = Options.P2S1S2 and Options.P2S1S2.Value or 170
                     AimbotFovCircle.Visible = true
                 end
                 AimbotBridge.IsAimbotShootInputHeld = function()
@@ -8680,7 +8621,7 @@ ErrorReporter.set_game(GameName)
                 if not world.OwnedSky or world.OwnedSky.Parent == nil or world.ActiveSkyName ~= presetName then
                     local previous = world.OwnedSky
                     world.OwnedSky = nil
-                    if typeof(previous) == 'Instance' then
+                    if previous then
                         pcall(function()
                             previous:Destroy()
                         end)
@@ -15238,163 +15179,63 @@ ErrorReporter.set_game(GameName)
                     end
                 end
             end
-            local CameraAimbot = {
-                enabled = false,
-                visCheck = true,
-                teamCheck = true,
-                fov = 360,
-                maxDist = 10000000,
-                prediction = 0,
-                smoothing = 0,
-                hitPart = "Head",
-                _cc = nil,
-            }
-            function CameraAimbot:getCC()
-                if not self._cc then
-                    self._cc = safeRequire(lp.PlayerScripts.Controllers.CameraController)
-                end
-                return self._cc
-            end
-            function CameraAimbot:setEnabled(v)
-                self.enabled = v == true
-            end
-            function CameraAimbot:setVisibleCheck(v)
-                self.visCheck = v == true
-            end
-            function CameraAimbot:setTeamCheck(v)
-                self.teamCheck = v == true
-            end
-            function CameraAimbot:setFOV(v)
-                self.fov = math.clamp(tonumber(v) or 360, 1, 360)
-            end
-            function CameraAimbot:setMaxDist(v)
-                self.maxDist = math.clamp(tonumber(v) or 10000000, 50, 10000000)
-            end
-            function CameraAimbot:setPrediction(v)
-                self.prediction = math.clamp(tonumber(v) or 0, 0, 0.5)
-            end
-            function CameraAimbot:setSmoothing(v)
-                self.smoothing = math.clamp(tonumber(v) or 0, 0, 100)
-            end
-            function CameraAimbot:setHitPart(v)
-                self.hitPart = tostring(v or "Head")
-            end
-            function CameraAimbot:_getBestTarget()
-                local cam = Workspace.CurrentCamera
-                if not cam then return nil end
-                local myPos = cam.CFrame.Position
-                local myTeam = lp:GetAttribute("TeamID")
-                local myEnv = lp:GetAttribute("EnvironmentID")
-                local viewport = cam.ViewportSize
-                local center = Vector2.new(viewport.X / 2, viewport.Y / 2)
-                local best, bestScore = nil, math.huge
-                for _, p in ipairs(Players:GetPlayers()) do
-                    if p == lp then continue end
-                    if p:GetAttribute("EnvironmentID") ~= myEnv then continue end
-                    if self.teamCheck and myTeam ~= nil and p:GetAttribute("TeamID") == myTeam then continue end
-                    local char = p.Character
-                    if not char then continue end
-                    local part = char:FindFirstChild(self.hitPart)
-                    if not part then
-                        part = char:FindFirstChild("Head")
-                    end
-                    local hum = char:FindFirstChildOfClass("Humanoid")
-                    if not part or not hum or hum.Health <= 0 then continue end
-                    local aimPos = part.Position
-                    if self.prediction > 0 then
-                        local vel = part.AssemblyLinearVelocity
-                        if vel.Magnitude < 500 then
-                            aimPos += vel * self.prediction
-                        end
-                    end
-                    local delta = aimPos - myPos
-                    local dist = delta.Magnitude
-                    if dist > self.maxDist or dist <= 0 then continue end
-                    local screen, onScreen = cam:WorldToViewportPoint(aimPos)
-                    if not onScreen then continue end
-                    local screenDelta = Vector2.new(screen.X, screen.Y) - center
-                    local fovDist = screenDelta.Magnitude
-                    if fovDist > self.fov then continue end
-                    if self.visCheck then
-                        local params = RaycastParams.new()
-                        params.FilterDescendantsInstances = { lp.Character, char }
-                        params.FilterType = Enum.RaycastFilterType.Exclude
-                        local hit = Workspace:Raycast(myPos, delta, params)
-                        if hit and not hit.Instance:IsDescendantOf(char) then continue end
-                    end
-                    local score = fovDist * 0.7 + (dist / 1000) * 0.3
-                    if score < bestScore then
-                        bestScore = score
-                        best = {
-                            character = char,
-                            part = part,
-                            position = aimPos,
-                            screenPos = Vector2.new(screen.X, screen.Y),
-                        }
-                    end
-                end
-                return best
-            end
-            function CameraAimbot:_updateNormal(dt, target)
-                if not target then return end
-                local cam = Workspace.CurrentCamera
-                local cc = self:getCC()
-                if not cam or not cc then return end
-                local targetCF = CFrame.lookAt(cam.CFrame.Position, target.position)
-                local smoothing = math.clamp(tonumber(self.smoothing) or 0, 0, 100)
-                local alpha
-                if smoothing <= 0 then
-                    alpha = 1
-                else
-                    local responsiveness = 100 / math.max(smoothing, 1)
-                    alpha = math.clamp(1 - math.exp(-dt * responsiveness), 0, 1)
-                end
-                targetCF = cam.CFrame:Lerp(targetCF, alpha)
-                local pitch, yaw = targetCF:ToOrientation()
-                local applied = false
-                if type(cc.SetRotation) == "function" then
-                    applied = pcall(function()
-                        cc:SetRotation(Vector2.new(pitch, yaw))
-                    end)
-                end
-                if not applied and type(cc.MimicRotation) == "function" then
-                    applied = pcall(function()
-                        cc:MimicRotation(targetCF.Rotation)
-                    end)
-                end
-                if not applied then
-                    pcall(function()
-                        cam.CFrame = targetCF
-                    end)
-                end
-            end
-            function CameraAimbot:update(dt)
-                if not self.enabled then return end
-                dt = tonumber(dt) or 0.016
-                local target = self:_getBestTarget()
-                if target then
-                    self:_updateNormal(dt, target)
-                end
-            end
-
             RivalsRuntimeBridge.UpdateCameraAim = function(deltaTime)
+                local ragebotActive = false
+                local ragebot = RivalsRuntimeBridge.KiciaRagebot
+                if ragebot and type(ragebot.IsEnabled) == 'function' then
+                    local ok, value = pcall(ragebot.IsEnabled)
+                    ragebotActive = ok and value == true
+                end
+                if ragebotActive then
+                    AimbotBridge.ResetCameraAimRandomState()
+                    return
+                end
                 if RivalsRuntimeBridge.MovementRecorder.IsCameraClaimed()
+                    or RivalsRuntimeBridge.IsFlickbotCameraClaimed()
                     or not AimbotBridge.IsCameraAimEnabled()
                     or not IsAimbotGameReady()
                     or not IsAimbotCameraReady()
-                    or (RivalsRuntimeBridge.IsLocalReadyToFight and not RivalsRuntimeBridge.IsLocalReadyToFight()) then
-                    CameraAimbot:setEnabled(false)
+                    or not RivalsRuntimeBridge.IsReadyToFight() then
+                    AimbotBridge.ResetCameraAimRandomState()
                     return
                 end
-                CameraAimbot:setEnabled(true)
-                CameraAimbot:setVisibleCheck(not (Toggles.P2S1T14 and Toggles.P2S1T14.Value == false))
-                CameraAimbot:setTeamCheck(not (Toggles.P2S1T15 and Toggles.P2S1T15.Value == false))
-                CameraAimbot:setFOV(Options.P2S2S2 and Options.P2S2S2.Value or 360)
-                CameraAimbot:setMaxDist(Options.P2S1S13 and Options.P2S1S13.Value or 10000000)
-                CameraAimbot:setSmoothing(Options.P2S2S1 and Options.P2S2S1.Value or 0)
-                CameraAimbot:setPrediction(Options.P2S1S14 and Options.P2S1S14.Value or 0)
-                CameraAimbot:setHitPart(Options.P2S1D5 and Options.P2S1D5.Value or 'Head')
-                CameraAimbot:update(deltaTime)
+                local camera = Workspace.CurrentCamera
+                if not camera then
+                    AimbotBridge.ResetCameraAimRandomState()
+                    return
+                end
+                local ignoreFov = AimbotBridge.IsAimbotIgnoreFovEnabled()
+                local targetInfo = GetBestAimbotTarget(true, ignoreFov)
+                local configuredAimPart = Options.P2S1D2 and Options.P2S1D2.Value or 'Auto'
+                if configuredAimPart == 'Random' and targetInfo then
+                    local targetIdentity = targetInfo.player or targetInfo.instance
+                    local stablePart = AimbotSilentConnections.CameraAimRandomPart
+                    if AimbotSilentConnections.CameraAimRandomTarget == targetIdentity
+                        and stablePart and stablePart.Parent then
+                        local stableAimPart = IsHeadAimbotTargetPart(stablePart) and 'Head' or 'HumanoidRootPart'
+                        local stableTargetInfo = RivalsRuntimeBridge.RefreshAimbotTargetInfo(
+                            targetInfo,
+                            stableAimPart,
+                            AimbotBridge.GetAimbotPointerPosition(),
+                            DEFAULT_ESP_MAX_DISTANCE,
+                            AIMBOT_VISIBILITY_CACHE_PROFILE
+                        )
+                        if stableTargetInfo then
+                            targetInfo = stableTargetInfo
+                        end
+                    end
+                    AimbotSilentConnections.CameraAimRandomTarget = targetIdentity
+                    AimbotSilentConnections.CameraAimRandomPart = targetInfo.part
+                else
+                    AimbotBridge.ResetCameraAimRandomState()
+                end
+                if not targetInfo or not targetInfo.part or not targetInfo.part.Parent or not targetInfo.worldPosition then
+                    return
+                end
+                if targetInfo.player and IsRivalsSpawnShieldActive(targetInfo.player.Character) then
+                    return
+                end
+                RivalsRuntimeBridge.PrimeAimbotAim(targetInfo, AimbotBridge.ResolveAimbotEquippedItem())
             end
             local GetBestTriggerbotTarget = function()
                 EnsureAimbotTargetTracking()
@@ -15541,7 +15382,7 @@ ErrorReporter.set_game(GameName)
                 local aimbotGameReady = enabled and IsAimbotGameReady()
                 local triggerbotGameReady = triggerbotEnabled and IsAimbotGameReady()
                 local cameraAimActive = AimbotBridge.IsCameraAimEnabled()
-                local cameraAimGameReady = cameraAimActive and IsAimbotGameReady() and IsAimbotCameraReady()
+                local cameraAimGameReady = cameraAimActive and IsAimbotGameReady()
                 local gameReady = aimbotGameReady or triggerbotGameReady
                 local silentAimUsesFov = enabled and aimAssistActive and not AimbotBridge.IsAimbotIgnoreFovEnabled()
                 local cameraAimUsesFov = cameraAimActive and not AimbotBridge.IsAimbotIgnoreFovEnabled()
@@ -16039,56 +15880,48 @@ ErrorReporter.set_game(GameName)
                 RivalsRuntimeBridge.LogDiagnosticEvent('Ready', 'Loaded -- ready to fight (' .. tostring(source) .. ')')
             end
             RivalsRuntimeBridge.IsLocalReadyToFight = function()
+                if not IsAimbotGameReady() then
+                    return false
+                end
+                local duel = FighterDataCache.LocalDuel
+                if duel and duel.Seeded and duel.IsInShootingRange == true then
+                    RivalsRuntimeBridge.NotifyLocalReadyOnce('shooting range')
+                    return true
+                end
+                local state = RivalsRuntimeBridge.LocalReadyState
+                if state.ShieldSeen then
+                    return true
+                end
                 local fighter = ResolveLocalFighter()
                 if not fighter then
                     return false
                 end
+                if type(fighter.Data) == 'table' and fighter.Data.IsInShootingRange == true then
+                    RivalsRuntimeBridge.NotifyLocalReadyOnce('shooting range (sync)')
+                    return true
+                end
+                if state.LastSeenFighter ~= fighter then
+                    state.LastSeenFighter = fighter
+                end
                 local entity = fighter.Entity
-                local model = entity and entity.Model
-                if not model or model ~= LP.Character then
-                    return false
-                end
-                local duel = FighterDataCache.LocalDuel
-                if duel and duel.Seeded then
-                    if duel.IsInDuel == true then
-                        return true
-                    end
-                    if duel.IsInShootingRange == true then
-                        return true
-                    end
-                end
-                if ReadFighterValue(fighter, 'IsInDuel') == true or ReadFighterValue(fighter, 'IsInShootingRange') == true then
-                    return true
-                end
-                local data = type(fighter.Data) == 'table' and fighter.Data or nil
-                if data and (rawget(data, 'IsInDuel') == true or rawget(data, 'IsInShootingRange') == true) then
-                    return true
-                end
-                local state = RivalsRuntimeBridge.LocalReadyState
-                if state and state.ShieldSeen then
-                    return true
-                end
                 if entity and type(entity.Data) == 'table' and entity.Data.IsInvincible == true then
-                    if state then
-                        state.ShieldSeen = true
-                        state.LastSeenFighter = fighter
-                    end
+                    state.ShieldSeen = true
+                    RivalsRuntimeBridge.NotifyLocalReadyOnce('spawn shield')
                     return true
                 end
                 if FighterDataCache.Cache[fighter] == true then
-                    if state then
-                        state.ShieldSeen = true
-                        state.LastSeenFighter = fighter
-                    end
+                    state.ShieldSeen = true
+                    RivalsRuntimeBridge.NotifyLocalReadyOnce('spawn shield (cache)')
                     return true
                 end
-                if type(entity) == 'table' and rawget(entity, '_is_in_world') == true and rawget(fighter, 'EquippedItem') ~= nil then
-                    if state and state.InitialLifeAdoptionOpen then
+                if state.InitialLifeAdoptionOpen then
+                    if type(entity) == 'table' and rawget(entity, '_is_in_world') == true
+                        and rawget(fighter, 'EquippedItem') ~= nil then
                         state.InitialLifeAdoptionOpen = false
                         state.ShieldSeen = true
-                        state.LastSeenFighter = fighter
+                        RivalsRuntimeBridge.NotifyLocalReadyOnce('mid-life adopt (equipped item)')
+                        return true
                     end
-                    return true
                 end
                 return false
             end
@@ -16679,7 +16512,7 @@ ErrorReporter.set_game(GameName)
                 return picked
             end
             function RivalsRagebot.IsBaitModeEnabled()
-                return Toggles.P9S4T1 and Toggles.P9S4T1.Value == true
+                return Toggles.P8S4T3 and Toggles.P8S4T3.Value == true
             end
             function RivalsRagebot.UpdateHostileTeleportTracker(now)
                 local minDt = RivalsRagebot.HostileTrackerSampleMinDt
@@ -16956,7 +16789,7 @@ ErrorReporter.set_game(GameName)
             end
             function RivalsRagebot.Update(deltaTime)
                 local now = tick()
-                if RivalsRagebot.IsEnabled() and RivalsRagebot.IsBaitModeEnabled() then
+                if RivalsRagebot.IsBaitModeEnabled() then
                     RivalsRagebot.UpdateHostileTeleportTracker(now)
                     if RivalsRagebot.IsHostileCheating() then
                         if RivalsRuntimeBridge.ResetKiciaRagebot then
@@ -17010,11 +16843,7 @@ ErrorReporter.set_game(GameName)
                     end
                     return
                 end
-                local readyToFight = true
-                if RivalsRuntimeBridge.IsLocalReadyToFight then
-                    local ok, ready = pcall(RivalsRuntimeBridge.IsLocalReadyToFight)
-                    readyToFight = ok and ready == true
-                end
+                local readyToFight = RivalsRuntimeBridge.IsReadyToFight()
                 RivalsRuntimeBridge.RecordCharacterLoadingCheckpoint('Ragebot', readyToFight, true)
                 if RivalsRuntimeBridge.UpdateKiciaRagebot then
                     RivalsRuntimeBridge.UpdateKiciaRagebot(deltaTime)
@@ -23542,7 +23371,9 @@ ErrorReporter.set_game(GameName)
                     RivalsCosmetics.ApplyWrapToModel(model, nil)
                 end
                 RivalsCosmeticsState.OriginalWrapProperties = setmetatable({}, { __mode = 'k' })
-                pcall(RivalsEmotes.RestoreEquippedEmotes)
+                if not RivalsEmotes.IsEnabled() then
+                    RivalsEmotes.RestoreEquippedEmotes()
+                end
                 RivalsCosmetics.RestoreWeaponViewModels()
                 RivalsCosmetics.RestoreInjectedWeaponData()
                 RivalsCosmeticsState.PendingSkinSelectionByWeapon = {}
@@ -23554,11 +23385,15 @@ ErrorReporter.set_game(GameName)
                 RivalsCosmeticsState.SpawnedWorldCosmeticEntries = setmetatable({}, { __mode = 'k' })
                 RivalsCosmeticsState.SpawnedWorldCosmeticApplyTokens = setmetatable({}, { __mode = 'k' })
                 RivalsCosmeticsState.SpawnedWorldCosmeticRetagging = setmetatable({}, { __mode = 'k' })
-                pcall(RivalsCosmetics.RestorePlayerDataHook)
-                pcall(RivalsCosmetics.RestoreNativeUiBindings)
+                if not RivalsEmotes.IsEnabled() then
+                    RivalsCosmetics.RestorePlayerDataHook()
+                    RivalsCosmetics.RestoreNativeUiBindings()
+                end
                 RivalsCosmetics.RestoreClientViewModelHook()
                 RivalsCosmetics.RestoreFinisherHook()
-                pcall(RivalsEmotes.RestoreEmoteControllerHook)
+                if not RivalsEmotes.IsEnabled() then
+                    RivalsEmotes.RestoreEmoteControllerHook()
+                end
                 pcall(RivalsCosmetics.RefreshNativeCosmeticsScene)
                 return true
             end
@@ -24503,20 +24338,6 @@ ErrorReporter.set_game(GameName)
                     EspPreviewOrbit.ModelRadius = math.max(size.X, size.Y, size.Z) * 0.5
                 end
                 local UpdateEspPreviewOverlayRect = nil
-local StandaloneUnloadConnections = {}
-local function RegisterStandaloneUnloadConnection(connection)
-    if connection then
-        StandaloneUnloadConnections[#StandaloneUnloadConnections + 1] = connection
-    end
-    return connection
-end
-local function DisconnectStandaloneUnloadConnections()
-    for i = #StandaloneUnloadConnections, 1, -1 do
-        local connection = StandaloneUnloadConnections[i]
-        pcall(function() connection:Disconnect() end)
-        StandaloneUnloadConnections[i] = nil
-    end
-end
                 local function UpdateEspPreviewCamera(camera)
                     local distance = math.max(EspPreviewOrbit.ModelRadius * 2.4 * EspPreviewOrbit.DistanceMultiplier, 4)
                     local elevation = math.clamp(EspPreviewOrbit.Elevation, -math.pi / 2 + 0.1, math.pi / 2 - 0.1)
@@ -24581,23 +24402,23 @@ end
                 orbitButton.Parent = viewportFrame
                 local orbitDragging = false
                 local orbitLastPosition = nil
-                RegisterStandaloneUnloadConnection(orbitButton.MouseEnter:Connect(GuardRivalsCallback('EspPreview_HoverScroll', function()
+                orbitButton.MouseEnter:Connect(GuardRivalsCallback('EspPreview_HoverScroll', function()
                     for _, side in ipairs(groupbox.Tab.Sides) do
                         side.ScrollingEnabled = false
                     end
-                end)))
-                RegisterStandaloneUnloadConnection(orbitButton.MouseLeave:Connect(GuardRivalsCallback('EspPreview_HoverScroll', function()
+                end))
+                orbitButton.MouseLeave:Connect(GuardRivalsCallback('EspPreview_HoverScroll', function()
                     for _, side in ipairs(groupbox.Tab.Sides) do
                         side.ScrollingEnabled = true
                     end
-                end)))
-                RegisterStandaloneUnloadConnection(orbitButton.InputBegan:Connect(GuardRivalsCallback('EspPreview_OrbitDrag', function(input)
+                end))
+                orbitButton.InputBegan:Connect(GuardRivalsCallback('EspPreview_OrbitDrag', function(input)
                     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
                         orbitDragging = true
                         orbitLastPosition = nil
                     end
-                end)))
-                RegisterStandaloneUnloadConnection(orbitButton.InputChanged:Connect(GuardRivalsCallback('EspPreview_OrbitZoom', function(input)
+                end))
+                orbitButton.InputChanged:Connect(GuardRivalsCallback('EspPreview_OrbitZoom', function(input)
                     if input.UserInputType ~= Enum.UserInputType.MouseWheel then
                         return
                     end
@@ -24607,7 +24428,7 @@ end
                     end
                     EspPreviewOrbit.DistanceMultiplier = math.clamp(EspPreviewOrbit.DistanceMultiplier * 0.85 ^ (-direction), 0.2, 6)
                     UpdateEspPreviewCamera(viewport.Camera)
-                end)))
+                end))
                 Library:GiveSignal(UserInputService.InputChanged:Connect(GuardRivalsCallback('EspPreview_OrbitDrag', function(input)
                     if not orbitDragging then
                         return
@@ -24675,7 +24496,7 @@ end
                     target.Size = UDim2.fromOffset(math.round(maxX - minX), math.round(maxY - minY))
                 end
                 UpdateEspPreviewOverlayRect()
-                RegisterStandaloneUnloadConnection(viewportFrame:GetPropertyChangedSignal('AbsoluteSize'):Connect(GuardRivalsCallback('EspPreview_Layout', UpdateEspPreviewOverlayRect)))
+                viewportFrame:GetPropertyChangedSignal('AbsoluteSize'):Connect(GuardRivalsCallback('EspPreview_Layout', UpdateEspPreviewOverlayRect))
                 local boxSegments = table.create(8)
                 for segmentIndex = 1, 8 do
                     boxSegments[segmentIndex] = CreateEspPreviewSegment(target)
@@ -24902,46 +24723,125 @@ end
             end
                 do
                     local Combat = Tabs.Combat:AddLeftGroupbox("Aimbot", "crosshair")
-                    local aimbotToggle = Combat:AddToggle("P2S1T1", { Text = "Aimbot", Default = true })
-                    local aimbotKeypicker = aimbotToggle:AddKeyPicker("P2S1T1K", { Default = "Unknown", Mode = "Always", Text = "Aimbot", NoUI = false })
+                    local aimbotToggle = Combat:AddToggle("P2S1T1", {
+                        Text = "Aimbot",
+                        Default = true,
+                        Tooltip = "Enables the selected Silent or Camera aiming mode.",
+                    })
+                    local aimbotKeypicker = aimbotToggle:AddKeyPicker("P2S1T1K", {
+                        Default = "Unknown",
+                        Mode = "Always",
+                        Text = "Aimbot",
+                        NoUI = false,
+                    })
                     RefreshAimbotEnabledToggleKeypickerState = AimbotBridge.SyncAimbotToggleKeypickerToUi(aimbotToggle, aimbotKeypicker)
                     Combat:AddDropdown("P2S1D1", {
-                        Values = { "Camera", "Silent" },
-                        Default = "Camera",
+                        Values = { "Silent", "Camera" },
+                        Default = "Silent",
                         Multi = false,
                         Text = "Mode",
-                        Callback = function()
-                            AimbotBridge.ResetCameraAimRandomState()
-                            AimbotBridge.ResetAimbotRuntimeState()
+                        Tooltip = "Silent aims without moving your view. Camera smoothly turns your view toward the target.",
+                    })
+                    local CameraAimSettings = Combat:AddDependencyBox()
+                    CameraAimSettings:AddSlider("P2S2S1", {
+                        Text = "Aim Speed",
+                        Default = 35,
+                        Min = 1,
+                        Max = 100,
+                        Rounding = 0,
+                        Compact = true,
+                    })
+                    CameraAimSettings:SetupDependencies({ { Options.P2S1D1, "Camera" } })
+                    Combat:AddToggle("P2S1T3", {
+                        Text = "Ignore FOV",
+                        Default = true,
+                        Tooltip = "Allows targets anywhere around you, even when they are off-screen.",
+                    })
+                    local DepFovRadius = Combat:AddDependencyBox()
+                    DepFovRadius:AddSlider("P2S1S2", {
+                        Text = "FOV Radius",
+                        Default = 282,
+                        Min = 25,
+                        Max = 500,
+                        Rounding = 0,
+                        Compact = true,
+                    })
+                    DepFovRadius:SetupDependencies({ { Toggles.P2S1T3, false } })
+                    Combat:AddToggle("P2S1T5", {
+                        Text = "Show FOV",
+                        Default = true,
+                    })
+                    Combat:AddDropdown("P2S1D2", {
+                        Values = { "Auto", "Head", "Random" },
+                        Default = "Auto",
+                        Multi = false,
+                        Text = "Aim Part",
+                    })
+                    local Flickbot = Combat:AddToggle("P2S1T12", {
+                        Text = "Flickbot",
+                        Default = false,
+                        Tooltip = "Flicks to the selected target.",
+                        Callback = function(value)
+                            if not value then
+                                RivalsRuntimeBridge.ResetFlickbot()
+                            end
                         end,
                     })
-                    local CameraSettings = Combat:AddDependencyBox()
-                    CameraSettings:AddSlider("P2S2S2", { Text = "FOV", Default = 360, Min = 1, Max = 360, Rounding = 0, Compact = true })
-                    CameraSettings:AddSlider("P2S1S13", { Text = "Max Distance", Default = 10000000, Min = 50, Max = 10000000, Rounding = 0, Compact = true })
-                    CameraSettings:AddSlider("P2S2S1", { Text = "Smoothing", Default = 0, Min = 0, Max = 100, Rounding = 2, Compact = true })
-                    CameraSettings:AddSlider("P2S1S14", { Text = "Prediction", Default = 0, Min = 0, Max = 0.5, Rounding = 2, Compact = true })
-                    CameraSettings:AddToggle("P2S1T14", { Text = "Visible Check", Default = true })
-                    CameraSettings:AddToggle("P2S1T15", { Text = "Team Check", Default = true })
-                    CameraSettings:AddDropdown("P2S1D5", {
-                        Values = { "Head", "HumanoidRootPart", "UpperTorso", "LowerTorso" },
-                        Default = "Head",
-                        Multi = false,
-                        Text = "Hit Part",
+                    Flickbot:AddKeyPicker("P2S1T12K", {
+                        Default = "Unknown",
+                        Mode = "Hold",
+                        Text = "Flickbot",
+                        NoUI = false,
                     })
-                    CameraSettings:SetupDependencies({ { Options.P2S1D1, "Camera" } })
-                    local SilentSettings = Combat:AddDependencyBox()
-                    SilentSettings:AddToggle("P2S1T3", { Text = "Ignore FOV", Default = true })
-                    local SilentFovBox = SilentSettings:AddDependencyBox()
-                    SilentFovBox:AddSlider("P2S1S2", { Text = "FOV", Default = 282, Min = 25, Max = 500, Rounding = 0, Compact = true })
-                    SilentFovBox:AddToggle("P2S1T5", { Text = "Show FOV", Default = true })
-                    SilentFovBox:SetupDependencies({ { Toggles.P2S1T3, false } })
-                    SilentSettings:AddDropdown("P2S1D6", {
-                        Values = { "Head", "HumanoidRootPart", "UpperTorso", "LowerTorso" },
-                        Default = "Head",
-                        Multi = false,
-                        Text = "Hit Part",
+                    local FlickbotSettings = Combat:AddDependencyBox()
+                    FlickbotSettings:AddToggle("P2S1T13", {
+                        Text = "Shoot",
+                        Default = false,
                     })
-                    SilentSettings:SetupDependencies({ { Options.P2S1D1, "Silent" } })
+                    FlickbotSettings:AddSlider("P2S1S8", {
+                        Text = "Shot Delay",
+                        Default = 0,
+                        Min = 0,
+                        Max = 250,
+                        Rounding = 0,
+                        Suffix = " ms",
+                        Compact = true,
+                    })
+                    FlickbotSettings:AddSlider("P2S1S9", {
+                        Text = "Cooldown",
+                        Default = 250,
+                        Min = 0,
+                        Max = 2000,
+                        Rounding = 0,
+                        Suffix = " ms",
+                        Compact = true,
+                    })
+                    FlickbotSettings:AddSlider("P2S1S10", {
+                        Text = "Flick Duration",
+                        Default = 110,
+                        Min = 30,
+                        Max = 400,
+                        Rounding = 0,
+                        Suffix = " ms",
+                        Compact = true,
+                    })
+                    FlickbotSettings:AddSlider("P2S1S11", {
+                        Text = "Curvature",
+                        Default = 12,
+                        Min = 0,
+                        Max = 50,
+                        Rounding = 0,
+                        Compact = true,
+                    })
+                    FlickbotSettings:AddSlider("P2S1S12", {
+                        Text = "Humanness",
+                        Default = 30,
+                        Min = 0,
+                        Max = 100,
+                        Rounding = 0,
+                        Compact = true,
+                    })
+                    FlickbotSettings:SetupDependencies({ { Toggles.P2S1T12, true } })
                     local Triggerbot = Combat:AddToggle("P2S1T7", {
                         Text = "Triggerbot",
                         Default = false,
@@ -25016,6 +24916,17 @@ end
                         Rounding = 0,
                         Compact = true,
                     })
+                    Rage:AddToggle("P8S4T5", { Text = "Use Primary", Default = true })
+                    Rage:AddToggle("P8S4T6", { Text = "Use Secondary", Default = true })
+                    Rage:AddToggle("P8S4T7", { Text = "Use Melee", Default = true })
+                    Rage:AddSlider("P8S4S7", {
+                        Text = "Melee Attempts",
+                        Default = 2,
+                        Min = 1,
+                        Max = 3,
+                        Rounding = 0,
+                        Compact = true,
+                    })
                     Rage:AddDropdown("P8S4D1", {
                         Values = { "Swap", "Reload", "SwapOrReload" },
                         Default = "SwapOrReload",
@@ -25028,73 +24939,6 @@ end
                         Multi = false,
                         Text = "Evasion Mode",
                     })
-                    Rage:AddDropdown("P8S4D3", {
-                        Values = { "Default", "Under" },
-                        Default = "Default",
-                        Multi = false,
-                        Text = "Mode",
-                        Tooltip = "Under: hides your character below the floor.",
-                    })
-                    Options.P8S4D3:OnChanged(GuardRivalsCallback("Ragebot_ModeChanged", function()
-                        local value = Options.P8S4D3 and Options.P8S4D3.Value
-                        local rageBotOn = Toggles.P8S4T1 and Toggles.P8S4T1.Value
-                        if value == "Under" and rageBotOn then
-                            startUnderground('ragebot')
-                        elseif value ~= "Under" and undergroundRagebotRequested then
-                            stopUnderground(false, 'ragebot')
-                        end
-                    end))
-                    local RageUnderground = Rage:AddDependencyBox()
-                    RageUnderground:AddSlider("P8S4S6", {
-                        Text = "Under",
-                        Default = 2.5,
-                        Min = 0,
-                        Max = 15,
-                        Rounding = 1,
-                        Suffix = " studs",
-                        Compact = true,
-                        Callback = function(value)
-                            undergroundDepth = math.clamp(tonumber(value) or 2.5, 0, 15)
-                        end,
-                    })
-                    RageUnderground:AddInput("P8S4I1", {
-                        Text = "XYZ Offset",
-                        Default = "0,0,0",
-                        Placeholder = "1, 10, 5",
-                        AllowEmpty = false,
-                        EmptyReset = "0,0,0",
-                        Finished = true,
-                        Callback = function(value)
-                            local x, y, z = tostring(value):match("^%s*([%-+]?%d*%.?%d+)%s*,%s*([%-+]?%d*%.?%d+)%s*,%s*([%-+]?%d*%.?%d+)%s*$")
-                            x, y, z = tonumber(x), tonumber(y), tonumber(z)
-                            if x and y and z then
-                                undergroundOffset = Vector3.new(x, y, z)
-                                undergroundDepth = math.clamp(y, 0, 15)
-                                if Options.P8S4S6 then
-                                    Options.P8S4S6:SetValue(undergroundDepth)
-                                end
-                            else
-                                Library:Notify({ Title = "RIVALS", Description = "XYZ Offset must use X,Y,Z format, e.g. 1,10,5", Time = 3 })
-                                if Options.P8S4I1 then
-                                    local v = undergroundOffset or Vector3.zero
-                                    Options.P8S4I1:SetValue(string.format("%.2f,%.2f,%.2f", v.X, v.Y, v.Z))
-                                end
-                            end
-                        end,
-                    })
-                    RageUnderground:AddSlider("P8S4S9", {
-                        Text = "Chaos Amplitude",
-                        Default = 100,
-                        Min = 0,
-                        Max = 100000000,
-                        Rounding = 0,
-                        Compact = true,
-                        Tooltip = "XZ scatter width in studs. Set >= 10,000,000 for full INF mode (all 3 axes).",
-                        FormatDisplayValue = function(_, v)
-                            if v >= 1e7 then return "INF" end
-                        end,
-                    })
-                    RageUnderground:SetupDependencies({ { Options.P8S4D3, "Under" } })
                     local RandomEvasion = Rage:AddDependencyBox()
                     RandomEvasion:AddToggle("P8S4T8", {
                         Text = "Character Origin",
@@ -25127,15 +24971,6 @@ end
                         Compact = true,
                     })
                     Translocate:SetupDependencies({ { Options.P8S4D2, "Translocate" } })
-
-                    local WeaponStrategies = Tabs.Ragebot:AddGroupbox("Weapon Strategies", "crosshair")
-                    WeaponStrategies:AddLabel("Hitscan Strategy")
-                    WeaponStrategies:AddToggle("P8S4T5", { Text = "Use Primary", Default = true })
-                    WeaponStrategies:AddToggle("P8S4T6", { Text = "Use Secondary", Default = true })
-                    WeaponStrategies:AddDivider()
-                    WeaponStrategies:AddLabel("Melee Strategy")
-                    WeaponStrategies:AddToggle("P8S4T7", { Text = "Use Melee", Default = true })
-
                 do
                     local Mods = Tabs.Combat:AddRightGroupbox("Weapon Mods", "swords")
                     Mods:AddToggle("P4S1T1", {
@@ -25146,9 +24981,9 @@ end
                     local Speed = Mods:AddDependencyBox()
                     Speed:AddSlider("P4S1S4", {
                         Text = "Speed Boost",
-                        Default = 200,
+                        Default = 85,
                         Min = 0,
-                        Max = 200,
+                        Max = 85,
                         Rounding = 0,
                         Suffix = "%",
                         Compact = true,
@@ -25788,49 +25623,6 @@ local P1 = Tabs.ESP
                         Compact = true,
                     })
                     LongJumpSettings:SetupDependencies({ { Toggles.P10S3T7, true } })
-
-                    -- ── Standalone Underground (Movement tab) ─────────────────────
-                    -- Provides underground access without requiring Ragebot to be on.
-                    local UnderGroup = Tabs.Movement:AddLeftGroupbox("Underground", "arrow-down-to-line")
-                    local UgToggle = UnderGroup:AddToggle("P10S8T1", {
-                        Text = "Underground",
-                        Risky = true,
-                        Default = false,
-                        Tooltip = "Hides your character below the map floor on the server.",
-                    })
-                    local UgSettings = UnderGroup:AddDependencyBox()
-                    UgSettings:AddSlider("P10S8S1", {
-                        Text = "Depth",
-                        Default = 2.5,
-                        Min = 0,
-                        Max = 15,
-                        Rounding = 1,
-                        Suffix = " studs",
-                        Compact = true,
-                        Callback = function(v)
-                            undergroundDepth = math.clamp(tonumber(v) or 2.5, 0, 15)
-                        end,
-                    })
-                    UgSettings:AddSlider("P10S8S2", {
-                        Text = "Chaos Amplitude",
-                        Default = 100,
-                        Min = 0,
-                        Max = 100000000,
-                        Rounding = 0,
-                        Compact = true,
-                        Tooltip = "XZ scatter width. >= 10,000,000 = INF mode.",
-                        FormatDisplayValue = function(_, v)
-                            if v >= 1e7 then return "INF" end
-                        end,
-                    })
-                    UgSettings:SetupDependencies({ { Toggles.P10S8T1, true } })
-                    Toggles.P10S8T1:OnChanged(GuardRivalsCallback("Movement_Underground", function()
-                        if Toggles.P10S8T1.Value then
-                            startUnderground('movement')
-                        elseif undergroundMovementRequested then
-                            stopUnderground(false, 'movement')
-                        end
-                    end))
                     local Animation = Tabs.Movement:AddRightGroupbox("Animation Player", "play")
                     Animation:AddToggle("P10S6T1", {
                         Text = "Animation Player",
@@ -25871,73 +25663,23 @@ local P1 = Tabs.ESP
                         Compact = true,
                     })
                     local Recorder = Tabs.Movement:AddRightGroupbox("Movement Recorder", "video")
-                    Recorder:AddToggle("P10S4T1", {
-                        Text = "Movement Recorder",
-                        Default = false,
-                        Tooltip = "Records and replays your movement path.",
-                    })
-
-                    local RecorderSettings = Recorder:AddDependencyBox()
-                    RecorderSettings:AddToggle("P10S4T2", { Text = "Hide UI", Default = false, Tooltip = "Hides the main menu while recording/replaying." })
-                    RecorderSettings:AddToggle("P10S4T3", { Text = "Hide Notifications", Default = false })
-                    RecorderSettings:AddSlider("P10S4S1", { Text = "Open Distance", Default = 3, Min = 1, Max = 25, Rounding = 1, Compact = true, Tooltip = "Distance in studs to nearest recording node that auto-starts replay." })
-                    RecorderSettings:AddSlider("P10S4S2", { Text = "Render Distance", Default = 50, Min = 10, Max = 250, Rounding = 0, Compact = true })
-                    RecorderSettings:AddSlider("P10S4S3", { Text = "Look Align Speed", Default = 180, Min = 1, Max = 720, Rounding = 0, Compact = true, Tooltip = "Degrees/s camera rotates toward recorded look direction." })
-                    RecorderSettings:AddSlider("P10S4S4", { Text = "Look Smoothness", Default = 35, Min = 0, Max = 100, Rounding = 0, Compact = true })
-                    RecorderSettings:AddSlider("P10S4S5", { Text = "Align Snap Distance", Default = 0.2, Min = 0.1, Max = 5, Rounding = 1, Compact = true })
-                    RecorderSettings:AddSlider("P10S4S6", {
-                        Text = "Playback Speed",
-                        Default = 1,
-                        Min = 0.1,
-                        Max = 4,
-                        Rounding = 1,
-                        Compact = true,
-                        Suffix = "x",
-                        Tooltip = "Speed multiplier applied during replay.",
-                    })
-                    RecorderSettings:AddToggle("P10S4T6", {
-                        Text = "Loop Replay",
-                        Default = false,
-                        Tooltip = "Automatically restarts replay from the beginning when it ends.",
-                    })
-                    RecorderSettings:SetupDependencies({ { Toggles.P10S4T1, true } })
-
-                    local RecorderControls = Recorder:AddDependencyBox()
-                    RecorderControls:AddToggle("P10S4T4", { Text = "Record", Default = false }):AddKeyPicker("P10S4T4K", { Default = "Unknown", Mode = "Toggle", Text = "Record", NoUI = false, SyncToggleState = true })
-                    RecorderControls:AddToggle("P10S4T5", { Text = "Replay", Default = false }):AddKeyPicker("P10S4T5K", { Default = "Unknown", Mode = "Toggle", Text = "Replay", NoUI = false, SyncToggleState = true })
-                    RecorderControls:AddInput("P10S4I1", {
-                        Text = "Recording Name",
-                        Default = "",
-                        Placeholder = "my recording",
-                        AllowEmpty = true,
-                        EmptyReset = "",
-                        Finished = true,
-                    })
-                    RecorderControls:AddButton({
-                        Text = "Save Recording",
-                        Tooltip = "Saves the last recorded session to disk.",
-                        Func = GuardRivalsCallback("MovementRecorder_Save", function()
-                            local name = Options.P10S4I1 and Options.P10S4I1.Value
-                            if not name or name == "" then
-                                name = os.date("recording_%H%M%S")
-                            end
-                            local ok, err = pcall(RivalsRuntimeBridge.MovementRecorder.SaveLastRecording, name)
-                            if ok then
-                                Library:Notify({ Title = "Recorder", Description = "Saved: " .. tostring(name), Time = 3 })
-                                pcall(RivalsRuntimeBridge.MovementRecorder.RefreshRecordingOptions)
-                            else
-                                Library:Notify({ Title = "Recorder", Description = "Save failed: " .. tostring(err), Time = 4 })
-                            end
-                        end),
-                    })
-                    RecorderControls:SetupDependencies({ { Toggles.P10S4T1, true } })
-
+                    Recorder:AddToggle("P10S4T1", { Text = "Movement Recorder", Default = false })
+                    Recorder:AddToggle("P10S4T2", { Text = "Hide UI", Default = false })
+                    Recorder:AddToggle("P10S4T3", { Text = "Hide Notifications", Default = false })
+                    Recorder:AddSlider("P10S4S1", { Text = "Open Distance", Default = 3, Min = 1, Max = 25, Rounding = 1, Compact = true })
+                    Recorder:AddSlider("P10S4S2", { Text = "Render Distance", Default = 50, Min = 10, Max = 250, Rounding = 0, Compact = true })
+                    Recorder:AddSlider("P10S4S3", { Text = "Look Align Speed", Default = 180, Min = 45, Max = 720, Rounding = 0, Compact = true })
+                    Recorder:AddSlider("P10S4S4", { Text = "Look Smoothness", Default = 35, Min = 0, Max = 100, Rounding = 0, Compact = true })
+                    Recorder:AddSlider("P10S4S5", { Text = "Align Snap Distance", Default = 0.2, Min = 0.1, Max = 5, Rounding = 1, Compact = true })
+                    Recorder:AddToggle("P10S4T4", { Text = "Record", Default = false }):AddKeyPicker("P10S4T4K", { Default = "Unknown", Mode = "Toggle", Text = "Record", NoUI = false, SyncToggleState = true })
+                    Recorder:AddToggle("P10S4T5", { Text = "Replay", Default = false }):AddKeyPicker("P10S4T5K", { Default = "Unknown", Mode = "Toggle", Text = "Replay", NoUI = false, SyncToggleState = true })
+                    Recorder:AddInput("P10S4I1", { Text = "Recording Name", Default = "", Placeholder = "my recording", AllowEmpty = true, EmptyReset = "", Finished = true })
+                    Recorder:AddButton({ Text = "Save Recording", Func = GuardRivalsCallback("MovementRecorder_Save", function() RivalsRuntimeBridge.MovementRecorder.SaveLastRecording(Options.P10S4I1 and Options.P10S4I1.Value) end) })
                     local Recordings = Tabs.Movement:AddRightGroupbox("Recordings", "folder-open")
                     RivalsRuntimeBridge.MovementRecorder.LoadPersistence()
-                    local initialMapNames = RivalsRuntimeBridge.MovementRecorder.GetMapNames()
                     Recordings:AddDropdown("P10S4D1", {
-                        Values = #initialMapNames > 0 and initialMapNames or { "(none)" },
-                        Default = #initialMapNames > 0 and 1 or nil,
+                        Values = RivalsRuntimeBridge.MovementRecorder.GetMapNames(),
+                        Default = nil,
                         Multi = false,
                         Text = "Map",
                     })
@@ -25946,47 +25688,26 @@ local P1 = Tabs.ESP
                         Default = nil,
                         Multi = false,
                         Text = "Config",
-                        Disabled = true,
-                        DisabledTooltip = "No recordings loaded yet. Select a Map first.",
                     })
                     Recordings:AddButton({
                         Text = "Delete Recording",
                         DoubleClick = true,
-                        Tooltip = "Double-click to permanently delete the selected recording.",
                         Func = GuardRivalsCallback("MovementRecorder_Delete", function()
-                            local selected = Options.P10S4D2 and Options.P10S4D2.Value
-                            if not selected or selected == "" then
-                                Library:Notify({ Title = "Recorder", Description = "No recording selected.", Time = 3 })
-                                return
-                            end
-                            local ok, err = pcall(RivalsRuntimeBridge.MovementRecorder.DeleteRecording, selected)
-                            if ok then
-                                Library:Notify({ Title = "Recorder", Description = "Deleted: " .. tostring(selected), Time = 3 })
-                                pcall(RivalsRuntimeBridge.MovementRecorder.RefreshRecordingOptions)
-                            else
-                                Library:Notify({ Title = "Recorder", Description = "Delete failed: " .. tostring(err), Time = 4 })
-                            end
+                            RivalsRuntimeBridge.MovementRecorder.DeleteRecording(Options.P10S4D2 and Options.P10S4D2.Value)
                         end),
                     })
                     Recordings:AddButton({
                         Text = "Refresh Recordings",
                         Func = GuardRivalsCallback("MovementRecorder_Refresh", function()
-                            pcall(function()
-                                RivalsRuntimeBridge.MovementRecorder.PersistenceLoaded = false
-                            end)
-                            pcall(RivalsRuntimeBridge.MovementRecorder.LoadPersistence)
-                            pcall(RivalsRuntimeBridge.MovementRecorder.RefreshRecordingOptions)
+                            RivalsRuntimeBridge.MovementRecorder.PersistenceLoaded = false
+                            RivalsRuntimeBridge.MovementRecorder.LoadPersistence()
+                            RivalsRuntimeBridge.MovementRecorder.RefreshRecordingOptions()
                         end),
                     })
                     Toggles.P10S4T1:OnChanged(GuardRivalsCallback("MovementRecorder_Enabled", RivalsRuntimeBridge.MovementRecorder.OnEnabledToggled))
                     Toggles.P10S4T4:OnChanged(GuardRivalsCallback("MovementRecorder_Record", RivalsRuntimeBridge.MovementRecorder.OnRecordToggled))
                     Toggles.P10S4T5:OnChanged(GuardRivalsCallback("MovementRecorder_Replay", RivalsRuntimeBridge.MovementRecorder.OnReplayToggled))
-                    Options.P10S4D1:OnChanged(GuardRivalsCallback("MovementRecorder_Map", function()
-                        local mapVal = Options.P10S4D1 and Options.P10S4D1.Value
-                        if mapVal and mapVal ~= "(none)" then
-                            RivalsRuntimeBridge.MovementRecorder.RefreshRecordingOptions()
-                        end
-                    end))
+                    Options.P10S4D1:OnChanged(GuardRivalsCallback("MovementRecorder_Map", RivalsRuntimeBridge.MovementRecorder.RefreshRecordingOptions))
                     RivalsRuntimeBridge.MovementRecorder.RefreshRecordingOptions()
                 end
                 do
@@ -26769,7 +26490,7 @@ RivalsCosmeticsState.CosmeticsUiLoaded = true
                     Tooltip = 'Reports readiness-gate transitions and refusals.',
                 })
                 local DebugExperimental = Tabs.Debug:AddLeftGroupbox('Experimental')
-                DebugExperimental:AddToggle('P9S4T1', {
+                DebugExperimental:AddToggle('P8S4T3', {
                     Text = 'OOB Bait Mode',
                     Default = false,
                     Tooltip = 'Experimental OOB bait mode.',
@@ -26792,28 +26513,6 @@ MenuGroup:AddToggle('ShowCustomCursor', {
         Library.ShowCustomCursor = value
     end,
 })
-MenuGroup:AddToggle('AlwaysOnTop', {
-    Text = 'Always On Top',
-    Default = Window.AlwaysOnTop or false,
-    Callback = function(value)
-        Window:SetAlwaysOnTop(value)
-    end,
-})
-MenuGroup:AddToggle('WindowGlow', {
-    Text = 'Window Glow',
-    Default = false,
-    Callback = function(value)
-        Window:SetGlow(value)
-    end,
-})
-MenuGroup:AddDropdown('DPIScale', {
-    Text = 'DPI Scale',
-    Values = { '75%', '100%', '125%', '150%', '175%' },
-    Default = '100%',
-    Callback = function(value)
-        Library:SetDPIScale(tonumber((value:gsub('%%', ''))))
-    end,
-})
 MenuGroup:AddDropdown('NotificationSide', {
     Values = { 'Left', 'Right' },
     Default = 'Right',
@@ -26832,8 +26531,6 @@ MenuGroup:AddSlider('UICornerSlider', {
         Window:SetCornerRadius(value)
     end,
 })
-MenuGroup:AddDivider()
-MenuGroup:AddButton('Unload', function() Library:Unload() end)
 MenuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', {
     Default = 'RightShift',
     NoUI = true,
@@ -26904,50 +26601,7 @@ local function PrepareSharedConfig(args)
     return true
 end
 local RivalsRuntime = {}
-            local function ResetFighterDataCacheState()
-                for fighter in pairs(FighterDataCache.Connections) do
-                    pcall(function() FighterDataCache.Untrack(fighter) end)
-                end
-                FighterDataCache.Cache = {}
-                local localDuel = FighterDataCache.LocalDuel
-                for _, key in ipairs({'DuelConn', 'ShootingConn'}) do
-                    local connection = localDuel[key]
-                    if connection and type(connection.Disconnect) == 'function' then
-                        pcall(function() connection:Disconnect() end)
-                    end
-                    localDuel[key] = nil
-                end
-                localDuel.AttachedFighter = nil
-                localDuel.IsInDuel = false
-                localDuel.IsInShootingRange = false
-                localDuel.Seeded = false
-                FighterDataCache.LocalLoadout.EquippedItem = nil
-                FighterDataCache.LocalLoadout.Seeded = false
-                TrackedFightersByPlayer = {}
-            end
-
-            local function ResetWeaponInfoObservers()
-                for player in pairs(WeaponInfoConnections) do
-                    pcall(function() DisconnectWeaponInfoConnections(player) end)
-                end
-                WeaponInfoConnections = {}
-            end
-
-            local function ResetStandaloneRuntimeConnections()
-                pcall(stopUnderground, true)
-                pcall(CleanupKiciaAntiAfk)
-                pcall(ResetFighterDataCacheState)
-                pcall(ResetWeaponInfoObservers)
-                pcall(DisconnectStandaloneUnloadConnections)
-                local antiAfkSlot = __kicia_hook_genv and __kicia_hook_genv.__KiciaHookAntiAfk
-                if type(antiAfkSlot) == 'table' then
-                    antiAfkSlot.Token = nil
-                    antiAfkSlot.Connection = nil
-                end
-            end
-
             function RivalsRuntime.ResetState()
-                ResetStandaloneRuntimeConnections()
                 RivalsRuntimeBridge.WorldVisuals.Destroy()
                 RivalsRuntimeBridge.ViewmodelVisuals.Destroy()
                 RivalsRuntimeBridge.NativeRemovals.Destroy()
@@ -27074,7 +26728,8 @@ local RivalsRuntime = {}
                 Connections:register('AnimationPlayer_Render', RunService.RenderStepped:Connect(GuardRivalsCallback('AnimationPlayer_Render', RivalsRuntimeBridge.AnimationPlayer.Update)))
                 Connections:register('CameraModifiers_Render', RunService.RenderStepped:Connect(GuardRivalsCallback('CameraModifiers_Render', RivalsModsState.UpdateCameraModifiers)))
                 Connections:register('MovementRecorder_Render', RunService.RenderStepped:Connect(GuardRivalsCallback('MovementRecorder_Render', RivalsRuntimeBridge.MovementRecorder.UpdateRender)))
-                Connections:register('CameraAim_Heartbeat', RunService.Heartbeat:Connect(GuardRivalsCallback('CameraAim_Heartbeat', RivalsRuntimeBridge.UpdateCameraAim)))
+                Connections:register('Flickbot_Render', RunService.RenderStepped:Connect(GuardRivalsCallback('Flickbot_Render', RivalsRuntimeBridge.UpdateFlickbot)))
+                Connections:register('CameraAim_Render', RunService.RenderStepped:Connect(GuardRivalsCallback('CameraAim_Render', RivalsRuntimeBridge.UpdateCameraAim)))
                 Connections:register('Aimbot_Render', RunService.Heartbeat:Connect(GuardRivalsCallback('Aimbot_Render', RivalsRuntimeBridge.UpdateAimbot)))
                 Connections:register('Ragebot_Heartbeat', RunService.Heartbeat:Connect(GuardRivalsCallback('Ragebot_Heartbeat', RivalsRuntimeBridge.UpdateRagebot)))
                 Connections:register('TripmineAutomation_Heartbeat', RunService.Heartbeat:Connect(GuardRivalsCallback('TripmineAutomation_Heartbeat', RivalsRuntimeBridge.UpdateTripmineAutomation)))
@@ -27403,17 +27058,18 @@ local RivalsRuntime = {}
                     { idx = 'P1S27T8', type = 'Toggle', value = false },
                     { idx = 'P2S1T1', type = 'Toggle', value = true },
                     { idx = 'P2S1T1K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
-                    { idx = 'P2S1D1', type = 'Dropdown', value = 'Camera' },
+                    { idx = 'P2S1D1', type = 'Dropdown', value = 'Silent' },
                     { idx = 'P2S1T3', type = 'Toggle', value = true },
                     { idx = 'P2S1T5', type = 'Toggle', value = true },
                     { idx = 'P2S1D2', type = 'Dropdown', value = 'Auto' },
-                    { idx = 'P2S1S13', type = 'Slider', value = 10000000 },
-                    { idx = 'P2S2S2', type = 'Slider', value = 360 },
-                    { idx = 'P2S2S1', type = 'Slider', value = 0 },
-                    { idx = 'P2S1S14', type = 'Slider', value = 0 },
-                    { idx = 'P2S1T14', type = 'Toggle', value = true },
-                    { idx = 'P2S1T15', type = 'Toggle', value = true },
-                    { idx = 'P2S1D5', type = 'Dropdown', value = 'Head' },
+                    { idx = 'P2S1T12', type = 'Toggle', value = false },
+                    { idx = 'P2S1T12K', type = 'KeyPicker', mode = 'Hold', key = 'Unknown', modifiers = {} },
+                    { idx = 'P2S1T13', type = 'Toggle', value = false },
+                    { idx = 'P2S1S8', type = 'Slider', value = 0 },
+                    { idx = 'P2S1S9', type = 'Slider', value = 250 },
+                    { idx = 'P2S1S10', type = 'Slider', value = 110 },
+                    { idx = 'P2S1S11', type = 'Slider', value = 12 },
+                    { idx = 'P2S1S12', type = 'Slider', value = 30 },
                     { idx = 'P2S1S2', type = 'Slider', value = 282 },
                     { idx = 'P2S1T6', type = 'Toggle', value = false },
                     { idx = 'P2S1T7K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
@@ -27426,6 +27082,7 @@ local RivalsRuntime = {}
                         ['Grenade Launcher'] = true,
                         RPG = true,
                     } },
+                    { idx = 'P2S2S1', type = 'Slider', value = 35 },
                     { idx = 'P4S1T1', type = 'Toggle', value = true },
                     { idx = 'P4S1S4', type = 'Slider', value = 85 },
                     { idx = 'P4S1T2', type = 'Toggle', value = true },
@@ -27456,7 +27113,7 @@ local RivalsRuntime = {}
                     { idx = 'P8S1T2', type = 'Toggle', value = true },
                     { idx = 'P8S8T1', type = 'Toggle', value = false },
                     { idx = 'P8S8T2', type = 'Toggle', value = false },
-                    { idx = 'P9S4T1', type = 'Toggle', value = false },
+                    { idx = 'P8S4T3', type = 'Toggle', value = false },
                     { idx = 'P8S4T1K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
                     { idx = 'P8S4T4', type = 'Toggle', value = false },
                     { idx = 'P8S4S1', type = 'Slider', value = 0.15 },
@@ -27466,10 +27123,6 @@ local RivalsRuntime = {}
                     { idx = 'P8S4T7', type = 'Toggle', value = true },
                     { idx = 'P8S4D1', type = 'Dropdown', value = 'SwapOrReload' },
                     { idx = 'P8S4D2', type = 'Dropdown', value = 'Random' },
-                    { idx = 'P8S4D3', type = 'Dropdown', value = 'Default' },
-                    { idx = 'P8S4S6', type = 'Slider', value = 2.5 },
-                    { idx = 'P8S4I1', type = 'Input', value = '0,0,0' },
-                    { idx = 'P8S4S9', type = 'Slider', value = 100 },
                     { idx = 'P8S4T8', type = 'Toggle', value = false },
                     { idx = 'P8S4S4', type = 'Slider', value = 100 },
                     { idx = 'P8S4S5', type = 'Slider', value = 0.5 },
