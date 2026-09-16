@@ -37,7 +37,7 @@ local Window = Library:CreateWindow({
         KeyPicker = true,
         SubTabUnderline = true,
     },
-    TabTransitionTime = 0.001,
+    TabTransitionTime = 0.22,
     TabSwipeOffset = 26,
     TabSwipeFrom = "right",
 })
@@ -814,7 +814,7 @@ end
 return module
 end
 __kicia_hook_shared.rivals_ragebot_kernel = function()
-return {}
+return {
     init = function(ctx)
         local RivalsRuntimeBridge = ctx.RivalsRuntimeBridge
         local Options = ctx.Options
@@ -1687,7 +1687,6 @@ return {}
                             end
                         end
                     end
-                end
                 return out
             end
             local function isValidTarget(entry)
