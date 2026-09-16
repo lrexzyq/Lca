@@ -1574,6 +1574,39 @@ return {
                 local data = entity and rawget(entity, 'Data')
                 return data ~= nil and rawget(data, 'IsInvincible') == true
             end
+            local function isFiniteVector3(v)
+                return typeof(v) == 'Vector3'
+                    and v.X == v.X and v.Y == v.Y and v.Z == v.Z
+                    and math.abs(v.X) < 4194304
+                    and math.abs(v.Y) < 4194304
+                    and math.abs(v.Z) < 4194304
+            end
+            local function refreshTargetEntry(entry)
+                if not entry then
+                    return nil
+                end
+                local model = entry.model
+                if not model or model.Parent == nil then
+                    return nil
+                end
+                local head = model:FindFirstChild('HitboxHead')
+                local body = model:FindFirstChild('HitboxBody')
+                local root = model:FindFirstChild('HumanoidRootPart') or body
+                if not head or not root or not head:IsA('BasePart') or not root:IsA('BasePart') then
+                    return nil
+                end
+                local humanoid = model:FindFirstChildOfClass('Humanoid')
+                entry.hitboxHead = head
+                entry.hitboxBody = body
+                entry.rootPart = root
+                entry.alive = humanoid == nil or humanoid.Health > 0
+                entry.invincible = isTargetInvincible(entry.entity)
+                entry.deflecting = entry.deflecting == true
+                if not isFiniteVector3(head.Position) or not isFiniteVector3(root.Position) then
+                    return nil
+                end
+                return entry
+            end
             local function collectEnemies()
                 local out = {}
                 local controller = resolveFighterController()
@@ -1595,11 +1628,11 @@ return {
                         local hitboxHead = model:FindFirstChild('HitboxHead')
                         local hitboxBody = model:FindFirstChild('HitboxBody')
                         local rootPart = model:FindFirstChild('HumanoidRootPart') or hitboxBody
-                        if not (hitboxHead and rootPart) then
+                        if not hitboxHead or not rootPart or not hitboxHead:IsA('BasePart') or not rootPart:IsA('BasePart') then
                             return nil
                         end
                         local humanoid = model:FindFirstChildOfClass('Humanoid')
-                        return {
+                        local entry = {
                             fighter = fighter,
                             player = player,
                             entity = entity,
@@ -1613,6 +1646,7 @@ return {
                             hacker = false,
                             equippedGunProjectile = false,
                         }
+                        return refreshTargetEntry(entry)
                     end)
                     if ok and entry then
                         out[#out + 1] = entry
@@ -1621,6 +1655,7 @@ return {
                 return out
             end
             local function isValidTarget(entry)
+                entry = refreshTargetEntry(entry)
                 return entry ~= nil and entry.alive and not entry.invincible and not entry.deflecting
             end
             local function selectTarget()
@@ -1633,12 +1668,25 @@ return {
                         end
                     end
                 end
+                local best = nil
+                local bestDistance = math.huge
+                local localChar = GetChar()
+                local localRoot = localChar and GetRoot() or nil
+                local localPosition = localRoot and localRoot.Position or nil
                 for _, entry in ipairs(enemies) do
                     if not (prioritizeHackers and entry.hacker) and isValidTarget(entry) then
-                        return entry
+                        local distance = math.huge
+                        if localPosition and isFiniteVector3(localPosition) then
+                            local delta = entry.hitboxHead.Position - localPosition
+                            distance = delta:Dot(delta)
+                        end
+                        if best == nil or distance < bestDistance then
+                            best = entry
+                            bestDistance = distance
+                        end
                     end
                 end
-                return nil
+                return best
             end
             local function hasTargets()
                 for _, entry in ipairs(collectEnemies()) do
@@ -2003,6 +2051,8 @@ return {
                     _stateHook = StateHook.new(),
                     _characterController = nil,
                     _boundRootPart = nil,
+                    _lastTarget = nil,
+                    _lastTargetAt = -math.huge,
                     _lastTargetWorld = nil,
                     _lastDefensiveViewAngles = nil,
                 }, Controller)
@@ -2111,7 +2161,20 @@ return {
                 end
                 local ourRootPart = self._boundRootPart
                 local clientCF = characterController:GetClientCFrame()
+                local now = os.clock()
                 local target = selectTarget()
+                if target ~= nil then
+                    self._lastTarget = target
+                    self._lastTargetAt = now
+                elseif self._lastTarget ~= nil and now - self._lastTargetAt <= 0.35 then
+                    target = refreshTargetEntry(self._lastTarget)
+                    if not isValidTarget(target) then
+                        self._lastTarget = nil
+                        target = nil
+                    end
+                else
+                    self._lastTarget = nil
+                end
                 local action = getAction(fighter)
                 local mode = Setting.EvasionMode()
                 if mode == 'Auto' then
@@ -2145,6 +2208,8 @@ return {
                 return self._lastTargetWorld
             end
             function Controller:_Reset()
+                self._lastTarget = nil
+                self._lastTargetAt = -math.huge
                 self._lastTargetWorld = nil
                 self._lastDefensiveViewAngles = nil
                 self:_ApplyForcedCrouch(false)
