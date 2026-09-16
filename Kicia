@@ -99,6 +99,7 @@ local undergroundRestoreConn = nil
 local undergroundRealCF = nil
 local undergroundRealVel = nil
 local undergroundRealAngVel = nil
+local undergroundServerCF = nil
 local undergroundSnapshot = nil
 local undergroundSnapshotCharacter = nil
 local undergroundFirstRun = true
@@ -108,22 +109,23 @@ local undergroundRemoteList = {}
 local undergroundPhysForces = {}
 local undergroundFallHeight = -500
 local undergroundSafeBuffer = 100
+local undergroundRagebotRequested = false
+local undergroundMovementRequested = false
 
 local function ugGetCharacter()
-    local char = lp.Character
-    return char
+    return lp.Character
 end
 
 local function ugGetHrp()
     local char = ugGetCharacter()
     if not char then return nil end
-    return char:FindFirstChild("HumanoidRootPart")
+    return char:FindFirstChild('HumanoidRootPart')
 end
 
 local function ugUpdateFallHeight()
     pcall(function()
         local fh = Workspace.FallenPartsDestroyHeight
-        if type(fh) == "number" then
+        if type(fh) == 'number' and fh == fh then
             undergroundFallHeight = fh
         end
     end)
@@ -135,8 +137,22 @@ local function ugClampY(y)
     return y
 end
 
-local function ugComputeFakeY(hrp, char)
-    local depth = math.clamp(tonumber(undergroundDepth) or 2.5, -15, 30)
+local function ugReadSettings()
+    local usingMovement = undergroundMovementRequested and not undergroundRagebotRequested
+    if undergroundRagebotRequested then
+        local depth = Options and Options.P8S4S6 and Options.P8S4S6.Value
+        local amp = Options and Options.P8S4S9 and Options.P8S4S9.Value
+        return math.clamp(tonumber(depth) or 2.5, 0, 15), math.clamp(tonumber(amp) or 0, 0, 1e8), 'ragebot'
+    end
+    if usingMovement then
+        local depth = Options and Options.P10S8S1 and Options.P10S8S1.Value
+        local amp = Options and Options.P10S8S2 and Options.P10S8S2.Value
+        return math.clamp(tonumber(depth) or 2.5, 0, 15), math.clamp(tonumber(amp) or 0, 0, 1e8), 'movement'
+    end
+    return math.clamp(tonumber(undergroundDepth) or 2.5, 0, 15), 0, 'manual'
+end
+
+local function ugComputeFakeY(hrp, char, depth)
     local params = RaycastParams.new()
     params.FilterDescendantsInstances = { char }
     params.FilterType = Enum.RaycastFilterType.Exclude
@@ -151,13 +167,13 @@ local function ugCollectRemotes()
     local function scan(container)
         if not container then return end
         for _, obj in ipairs(container:GetDescendants()) do
-            if (obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") or obj:IsA("UnreliableRemoteEvent")) and not seen[obj] then
+            if (obj:IsA('RemoteEvent') or obj:IsA('RemoteFunction') or obj:IsA('UnreliableRemoteEvent')) and not seen[obj] then
                 seen[obj] = true
                 table.insert(undergroundRemoteList, obj)
             end
         end
     end
-    pcall(scan, game:GetService("ReplicatedStorage"))
+    pcall(scan, game:GetService('ReplicatedStorage'))
 end
 
 local function ugCleanupForces()
@@ -169,7 +185,7 @@ end
 
 local function ugCaptureSnapshot()
     local char = ugGetCharacter()
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hrp = char and char:FindFirstChild('HumanoidRootPart')
     if not char or not hrp then return false end
     local camera = Workspace.CurrentCamera
     local snap = {
@@ -184,13 +200,13 @@ local function ugCaptureSnapshot()
         parts = {},
         joints = {},
     }
-    local hum = char:FindFirstChildOfClass("Humanoid")
+    local hum = char:FindFirstChildOfClass('Humanoid')
     if hum then
         pcall(function() snap.humanoidState = hum:GetState() end)
         pcall(function() snap.humanoidAutoRotate = hum.AutoRotate end)
     end
     for _, obj in ipairs(char:GetDescendants()) do
-        if obj:IsA("BasePart") then
+        if obj:IsA('BasePart') then
             snap.parts[obj] = {
                 cframe = obj.CFrame,
                 velocity = obj.AssemblyLinearVelocity,
@@ -200,7 +216,7 @@ local function ugCaptureSnapshot()
                 touch = obj.CanTouch,
                 query = obj.CanQuery,
             }
-        elseif obj:IsA("Motor6D") then
+        elseif obj:IsA('Motor6D') then
             snap.joints[obj] = {
                 transform = obj.Transform,
                 c0 = obj.C0,
@@ -208,7 +224,7 @@ local function ugCaptureSnapshot()
                 part0 = obj.Part0,
                 part1 = obj.Part1,
             }
-        elseif obj:IsA("Weld") then
+        elseif obj:IsA('Weld') then
             snap.joints[obj] = {
                 c0 = obj.C0,
                 c1 = obj.C1,
@@ -226,15 +242,10 @@ end
 local function ugRestoreSnapshot()
     local snap = undergroundSnapshot
     local char = ugGetCharacter()
-    if not snap or not char or snap.character ~= char then
-        return false
-    end
-
-    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not snap or not char or snap.character ~= char then return false end
+    local hrp = char:FindFirstChild('HumanoidRootPart')
     if not hrp then return false end
-
     pcall(function() char:PivotTo(snap.pivot) end)
-
     for joint, state in pairs(snap.joints) do
         if joint and joint.Parent then
             pcall(function()
@@ -242,11 +253,10 @@ local function ugRestoreSnapshot()
                 if state.part1 then joint.Part1 = state.part1 end
                 if state.c0 then joint.C0 = state.c0 end
                 if state.c1 then joint.C1 = state.c1 end
-                if state.transform and joint:IsA("Motor6D") then joint.Transform = state.transform end
+                if state.transform and joint:IsA('Motor6D') then joint.Transform = state.transform end
             end)
         end
     end
-
     for part, state in pairs(snap.parts) do
         if part and part.Parent then
             pcall(function()
@@ -260,35 +270,25 @@ local function ugRestoreSnapshot()
             end)
         end
     end
-
     pcall(function()
         hrp.CFrame = snap.hrpCFrame
         hrp.AssemblyLinearVelocity = snap.hrpVelocity
         hrp.AssemblyAngularVelocity = snap.hrpAngularVelocity
-        local hum = char:FindFirstChildOfClass("Humanoid")
+        local hum = char:FindFirstChildOfClass('Humanoid')
         if hum then
-            if snap.humanoidAutoRotate ~= nil then
-                hum.AutoRotate = snap.humanoidAutoRotate
-            end
-            if snap.humanoidState then
-                pcall(function() hum:ChangeState(snap.humanoidState) end)
-            end
+            if snap.humanoidAutoRotate ~= nil then hum.AutoRotate = snap.humanoidAutoRotate end
+            if snap.humanoidState then pcall(function() hum:ChangeState(snap.humanoidState) end) end
         end
     end)
-
     pcall(function()
         local camera = Workspace.CurrentCamera
         if camera and snap.camera then camera.CFrame = snap.camera end
     end)
-
     return true
 end
 
 local function ugStartRestoreWindow()
-    if undergroundRestoreConn then
-        undergroundRestoreConn:Disconnect()
-        undergroundRestoreConn = nil
-    end
+    if undergroundRestoreConn then undergroundRestoreConn:Disconnect() undergroundRestoreConn = nil end
     local remaining = 12
     undergroundRestoreConn = RunService.Heartbeat:Connect(function()
         if ugRestoreSnapshot() then
@@ -308,77 +308,34 @@ local function ugStartRestoreWindow()
     end)
 end
 
-local function ugSafeTeleport(hrp)
-    if not hrp then return end
-    local pos = hrp.Position
-    local minY = undergroundFallHeight + undergroundSafeBuffer + 50
-    if pos.Y < minY then
-        pcall(function()
-            hrp.CFrame = CFrame.new(pos.X, minY, pos.Z)
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.AssemblyAngularVelocity = Vector3.zero
-        end)
-    end
-end
-
-startUnderground = function()
-    local currentCharacter = ugGetCharacter()
-    if undergroundConn then
-        if undergroundSnapshotCharacter ~= currentCharacter and currentCharacter ~= nil then
-            ugCaptureSnapshot()
-        end
-        return
-    end
-    if undergroundRestoreConn then
-        undergroundRestoreConn:Disconnect()
-        undergroundRestoreConn = nil
-    end
-    -- Defer snapshot by one Heartbeat so the ragebot has time to restore the real
-    -- CFrame via RenderStep before we capture it.  Without this, ugCaptureSnapshot()
-    -- runs while hrp.CFrame is still the scatter/FAR_AXIS position, which means
-    -- stopUnderground() later restores to a void coordinate and the character dies.
-    local function doStart()
-        if not ugCaptureSnapshot() then
-            undergroundEnabled = false
-            return
-        end
-        pcall(function() RunService:UnbindFromRenderStep("UndergroundSync") end)
-        pcall(function() RunService:UnbindFromRenderStep("UndergroundSync2") end)
-        pcall(function() RunService:UnbindFromRenderStep("UndergroundSync3") end)
-        undergroundEnabled = true
-        undergroundTick = 0
-        undergroundChaosSeed = math.random(1, 1e9)
-        ugUpdateFallHeight()
-        ugCollectRemotes()
-
+local function ugEnsureConnections()
+    if undergroundConn then return end
     undergroundConn = RunService.Heartbeat:Connect(function(dt)
         if not undergroundEnabled then return end
-        undergroundTick = undergroundTick + dt
+        undergroundTick = undergroundTick + (dt or 0)
         pcall(function()
             local char = ugGetCharacter()
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            local hrp = char and char:FindFirstChild('HumanoidRootPart')
             if not char or not hrp or char ~= undergroundSnapshotCharacter then return end
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if hum then
-                pcall(function() hum:ChangeState(Enum.HumanoidStateType.Physics) end)
-            end
+            local depth, amp = ugReadSettings()
+            undergroundDepth = depth
             undergroundRealCF = hrp.CFrame
             undergroundRealVel = hrp.AssemblyLinearVelocity
             undergroundRealAngVel = hrp.AssemblyAngularVelocity
-            local fakeY = ugComputeFakeY(hrp, char)
-            local _ugAmp = (Options and Options['P8S4S9'] and Options['P8S4S9'].Value) or 100
-            local chaos1, chaos2
-            if _ugAmp >= 1e7 then
-                local _fa = 1073741824
-                chaos1 = ((math.floor(undergroundTick * 60) % 2 == 0) and 1 or -1) * _fa
-                chaos2 = ((math.floor(undergroundTick * 74) % 2 == 0) and 1 or -1) * _fa
-            else
-                local amp = math.clamp(_ugAmp, 0, 1e9)
+            local fakeY = ugComputeFakeY(hrp, char, depth)
+            local chaos1, chaos2 = 0, 0
+            if amp >= 1e7 then
+                local a = 1048576
+                chaos1 = ((math.floor(undergroundTick * 60) % 2 == 0) and 1 or -1) * a
+                chaos2 = ((math.floor(undergroundTick * 74) % 2 == 0) and 1 or -1) * a
+            elseif amp > 0 then
                 chaos1 = math.sin(undergroundTick * 180 + undergroundChaosSeed) * amp
                 chaos2 = math.cos(undergroundTick * 220 + undergroundChaosSeed) * amp
             end
-            local base = undergroundRealCF and undergroundRealCF.Position or hrp.Position
-            hrp.CFrame = CFrame.new(base.X + chaos1 + undergroundOffset.X, fakeY, base.Z + chaos2 + undergroundOffset.Z)
+            local base = undergroundRealCF.Position
+            local fakeCF = CFrame.new(base.X + chaos1 + undergroundOffset.X, fakeY, base.Z + chaos2 + undergroundOffset.Z)
+            undergroundServerCF = fakeCF
+            hrp.CFrame = fakeCF
             hrp.AssemblyLinearVelocity = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
         end)
@@ -386,19 +343,9 @@ startUnderground = function()
 
     undergroundSteppedConn = RunService.Stepped:Connect(function()
         if not undergroundEnabled then return end
-        pcall(function()
-            local char = ugGetCharacter()
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            if not char or not hrp or char ~= undergroundSnapshotCharacter then return end
-            local fakeY = ugClampY(ugComputeFakeY(hrp, char))
-            local base = undergroundRealCF and undergroundRealCF.Position or hrp.Position
-            hrp.CFrame = CFrame.new(base.X + undergroundOffset.X, fakeY, base.Z + undergroundOffset.Z)
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.AssemblyAngularVelocity = Vector3.zero
-        end)
     end)
 
-    undergroundRenderConn = RunService:BindToRenderStep("UndergroundSync", Enum.RenderPriority.First.Value, function()
+    undergroundRenderConn = RunService:BindToRenderStep('UndergroundSync', Enum.RenderPriority.First.Value, function()
         if undergroundEnabled and undergroundRealCF then
             pcall(function()
                 local hrp = ugGetHrp()
@@ -410,27 +357,8 @@ startUnderground = function()
         end
     end)
 
-    undergroundRenderConn2 = RunService:BindToRenderStep("UndergroundSync2", Enum.RenderPriority.Camera.Value, function()
-        if not undergroundEnabled then return end
-        pcall(function()
-            local hrp = ugGetHrp()
-            if hrp and undergroundSnapshotCharacter == lp.Character then
-                local base = undergroundRealCF and undergroundRealCF.Position or hrp.Position
-                hrp.CFrame = CFrame.new(base.X + undergroundOffset.X, ugClampY(ugComputeFakeY(hrp, lp.Character)), base.Z + undergroundOffset.Z)
-            end
-        end)
-    end)
-
-    undergroundRenderConn3 = RunService:BindToRenderStep("UndergroundSync3", Enum.RenderPriority.Last.Value, function()
-        if not undergroundEnabled then return end
-        pcall(function()
-            local hrp = ugGetHrp()
-            if not hrp or undergroundSnapshotCharacter ~= lp.Character then return end
-            local base = undergroundRealCF and undergroundRealCF.Position or hrp.Position
-            local pos = hrp.Position
-            hrp.CFrame = CFrame.new(base.X + undergroundOffset.X, ugClampY(pos.Y), base.Z + undergroundOffset.Z)
-        end)
-    end)
+    undergroundRenderConn2 = nil
+    undergroundRenderConn3 = nil
 
     undergroundOwnershipConn = RunService.Heartbeat:Connect(function()
         if not undergroundEnabled then return end
@@ -451,7 +379,7 @@ startUnderground = function()
         if not undergroundEnabled then return end
         pcall(function()
             local char = ugGetCharacter()
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            local hrp = char and char:FindFirstChild('HumanoidRootPart')
             if not char or not hrp or undergroundSnapshotCharacter ~= char then return end
             ugCleanupForces()
         end)
@@ -462,19 +390,17 @@ startUnderground = function()
         ugUpdateFallHeight()
         pcall(function()
             local char = ugGetCharacter()
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            local hrp = char and char:FindFirstChild('HumanoidRootPart')
             if not char or not hrp or undergroundSnapshotCharacter ~= char then return end
-            ugSafeTeleport(hrp)
+            if undergroundServerCF and undergroundServerCF.Position.Y < undergroundFallHeight + undergroundSafeBuffer then
+                local p = undergroundServerCF.Position
+                undergroundServerCF = CFrame.new(p.X, undergroundFallHeight + undergroundSafeBuffer + 5, p.Z)
+            end
         end)
     end)
-    end  -- end doStart()
-    -- Wait one Heartbeat tick so RenderStep has already restored hrp.CFrame
-    -- to the real position before we snapshot it.
-    RunService.Heartbeat:Wait()
-    doStart()
 end
 
-stopUnderground = function(skipRestoreWindow)
+local function ugStopRuntime(skipRestoreWindow)
     undergroundEnabled = false
     if undergroundConn then undergroundConn:Disconnect() undergroundConn = nil end
     if undergroundSteppedConn then undergroundSteppedConn:Disconnect() undergroundSteppedConn = nil end
@@ -482,9 +408,9 @@ stopUnderground = function(skipRestoreWindow)
     if undergroundJointConn then undergroundJointConn:Disconnect() undergroundJointConn = nil end
     if undergroundPhysicsConn then undergroundPhysicsConn:Disconnect() undergroundPhysicsConn = nil end
     if undergroundSafeConn then undergroundSafeConn:Disconnect() undergroundSafeConn = nil end
-    pcall(function() RunService:UnbindFromRenderStep("UndergroundSync") end)
-    pcall(function() RunService:UnbindFromRenderStep("UndergroundSync2") end)
-    pcall(function() RunService:UnbindFromRenderStep("UndergroundSync3") end)
+    pcall(function() RunService:UnbindFromRenderStep('UndergroundSync') end)
+    pcall(function() RunService:UnbindFromRenderStep('UndergroundSync2') end)
+    pcall(function() RunService:UnbindFromRenderStep('UndergroundSync3') end)
     undergroundRenderConn = nil
     undergroundRenderConn2 = nil
     undergroundRenderConn3 = nil
@@ -492,13 +418,12 @@ stopUnderground = function(skipRestoreWindow)
     if undergroundFloodConn then pcall(function() task.cancel(undergroundFloodConn) end) undergroundFloodConn = nil end
     if undergroundRestoreConn then undergroundRestoreConn:Disconnect() undergroundRestoreConn = nil end
     ugCleanupForces()
-
     local restored = ugRestoreSnapshot()
     if restored and not skipRestoreWindow then
         ugStartRestoreWindow()
-    else
+    elseif not restored then
         local char = ugGetCharacter()
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hrp = char and char:FindFirstChild('HumanoidRootPart')
         if hrp and undergroundRealCF then
             pcall(function()
                 hrp.CFrame = undergroundRealCF
@@ -507,12 +432,54 @@ stopUnderground = function(skipRestoreWindow)
             end)
         end
     end
-
     undergroundRemoteList = {}
+    undergroundServerCF = nil
     undergroundRealCF = nil
     undergroundRealVel = nil
     undergroundRealAngVel = nil
     undergroundFirstRun = true
+end
+
+startUnderground = function(owner)
+    owner = owner or 'manual'
+    if owner == 'ragebot' then
+        undergroundRagebotRequested = true
+    elseif owner == 'movement' then
+        undergroundMovementRequested = true
+    else
+        undergroundRagebotRequested = true
+    end
+    if undergroundEnabled then return end
+    if undergroundRestoreConn then undergroundRestoreConn:Disconnect() undergroundRestoreConn = nil end
+    RunService.Heartbeat:Wait()
+    if not ugCaptureSnapshot() then
+        undergroundRagebotRequested = owner == 'ragebot' and false or undergroundRagebotRequested
+        undergroundMovementRequested = owner == 'movement' and false or undergroundMovementRequested
+        return
+    end
+    undergroundEnabled = true
+    undergroundTick = 0
+    undergroundChaosSeed = math.random(1, 1e9)
+    ugUpdateFallHeight()
+    ugCollectRemotes()
+    ugEnsureConnections()
+end
+
+stopUnderground = function(skipRestoreWindow, owner)
+    if owner == 'ragebot' then
+        undergroundRagebotRequested = false
+    elseif owner == 'movement' then
+        undergroundMovementRequested = false
+    else
+        undergroundRagebotRequested = false
+        undergroundMovementRequested = false
+    end
+    if undergroundRagebotRequested or undergroundMovementRequested then
+        return
+    end
+    if undergroundEnabled or undergroundConn or undergroundRestoreConn or undergroundSnapshot then
+        ugStopRuntime(skipRestoreWindow)
+    end
 end
 
 local __kicia_hook_genv = ResolveGlobalEnv()
@@ -902,10 +869,6 @@ return {
                 RandomRadiusFactor = function() return optValue('P8S4S5', 0.5) end,
                 RandomAnchorFromCharacter = function() return togValue('P8S4T8', false) end,
                 RepositionInterval = function() return 0.3 end,
-                AntiAimEnabled = function() return togValue('P8S4T9', false) end,
-                AntiAimMode    = function() return optValue('P8S4D4', 'Auto') end,
-                ReloadHyperEvade = function() return togValue('P8S4T10', false) end,
-                HyperEvadeCount = function() return optValue('P8S4S8', 5) end,
             }
             local PB_DEPTH_FORWARD = { Min = 0, Max = 4 }
             local PB_DEPTH_FORWARD_FREQ = 5
@@ -2546,47 +2509,6 @@ return {
                     self._gluedOurPart = nil
                 end
             end
-            local AA_PATTERNS = {
-                FakePitch = function(p)
-                    return { kind = 'Normalized',
-                        pitch = (math.floor(p * 24) % 2 == 0) and 89 or -89,
-                        yaw   = rbRandom:NextNumber(0, 360) }
-                end,
-                Spin = function(p)
-                    return { kind = 'Normalized', pitch = 0, yaw = (p * 1440) % 360 }
-                end,
-                Jitter = function(_)
-                    return { kind = 'Normalized',
-                        pitch = rbRandom:NextNumber(-89, 89),
-                        yaw   = rbRandom:NextNumber(0, 360) }
-                end,
-                BackFace = function(p)
-                    return { kind = 'Normalized',
-                        pitch = rbRandom:NextNumber(-20, 20),
-                        yaw   = (p * 720 + 180) % 360 }
-                end,
-            }
-            local AA_CYCLE = { 'FakePitch', 'Spin', 'Jitter', 'BackFace' }
-            local AntiAimDesync = {}
-            AntiAimDesync.__index = AntiAimDesync
-            function AntiAimDesync.new()
-                return setmetatable({ _phase = 0, _idx = 1, _lastSwitch = 0 }, AntiAimDesync)
-            end
-            function AntiAimDesync:Compute(dt, modeOverride)
-                self._phase = self._phase + (dt or 0)
-                local mode = modeOverride
-                if not mode or mode == 'Auto' then
-                    local now = os.clock()
-                    if now - self._lastSwitch >= 0.12 then
-                        self._idx = (self._idx % #AA_CYCLE) + 1
-                        self._lastSwitch = now
-                    end
-                    mode = AA_CYCLE[self._idx]
-                end
-                local fn = AA_PATTERNS[mode]
-                return fn and fn(self._phase) or nil
-            end
-
             local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
             local function applyEnabledFFlags(enabled)
                 if enabled and ORIGINAL_FALLEN_PARTS_HEIGHT == nil then
@@ -2621,9 +2543,6 @@ return {
                     _weaponTransitionUntil = 0,
                     _lastEquippedItem = nil,
                     _lastClientCFrame = nil,
-                    _antiAimDesync = AntiAimDesync.new(),
-                    _reloadHyperEvadeActive = false,
-                    _currentFrameAAAngles = nil,
                 }, Controller)
             end
             function Controller:SetEnabled(enabled)
@@ -2767,17 +2686,10 @@ return {
                     self._hitscanStrategy:ClearGlue()
                     self._meleeStrategy:ClearGlue()
                     if inWeaponTransition then
-                        self._reloadHyperEvadeActive = false
                         return { cframe = clientCF, shouldSkipDefense = true, _weaponTransitionReload = true }
-                    end
-                    self._reloadHyperEvadeActive = true
-                    if Setting.ReloadHyperEvade() and not inWeaponTransition then
-                        local evadeCF = scatterFar(clientCF.Position, true, 1e9, 1.0)
-                        return { cframe = evadeCF, shouldSkipDefense = true, _reloadHyperEvade = true }
                     end
                     return { cframe = randomEvade(clientCF), shouldSkipDefense = true }
                 end
-                self._reloadHyperEvadeActive = false
                 self._meleeStrategy:ClearGlue()
                 local cframe, weaponAction = self._hitscanStrategy:Plan(dt, target, action.item, ourRootPart, canFire)
                 if mode == 'ProjectileBreaker' then
@@ -2801,27 +2713,26 @@ return {
                     end
                 end
             end
+            local function getUndergroundServerCFrame(fallback)
+                if undergroundEnabled and undergroundServerCF and typeof(undergroundServerCF) == 'CFrame' then
+                    return undergroundServerCF
+                end
+                return fallback
+            end
             function Controller:_ApplyPlan(plan, target, characterController, fighter)
                 local cframe = plan.cframe
-                local aaAngles = self._currentFrameAAAngles
-                local suppressAA = plan.viewAngles ~= nil and plan.kind == 'attack'
                 if cframe == nil or target == nil or plan.shouldSkipDefense then
-                    characterController:SetServerCFrame(cframe)
+                    characterController:SetServerCFrame(getUndergroundServerCFrame(cframe))
                     characterController:SendViewAngles(20, plan.viewAngles)
-                    if aaAngles and not suppressAA then
-                        characterController:SendViewAngles(30, aaAngles)
-                    end
                     return
                 end
                 local stance = localShieldStance(fighter)
-                characterController:SetServerCFrame(getDefensiveCFrame(cframe, stance, target.rootPart))
+                local defensiveCF = getDefensiveCFrame(cframe, stance, target.rootPart)
+                characterController:SetServerCFrame(getUndergroundServerCFrame(defensiveCF))
                 if plan.isAimPose or plan.shouldDefendInPlace then
                     self._lastDefensiveViewAngles = getDefensiveViewAngles(stance)
                 end
                 characterController:SendViewAngles(20, plan.viewAngles or (plan.isAimPose and self._lastDefensiveViewAngles or nil))
-                if aaAngles and not suppressAA then
-                    characterController:SendViewAngles(30, aaAngles)
-                end
             end
             function Controller:Update(dt)
                 local fighter = resolveLocalFighter()
@@ -2875,7 +2786,7 @@ return {
                     self._hitscanStrategy:ResetState()
                     self._meleeStrategy:ResetState()
                     self._weaponTransitionUntil = math.max(self._weaponTransitionUntil, os.clock() + 0.20)
-                    characterController:SetServerCFrame(clientCF)
+                    characterController:SetServerCFrame(getUndergroundServerCFrame(clientCF))
                     characterController:HeartbeatUpdate()
                 end
                 self._lastEquippedItem = equippedNow or self._lastEquippedItem
@@ -2885,16 +2796,10 @@ return {
                     self._hitscanStrategy:ClearGlue()
                     self._meleeStrategy:ClearGlue()
                     self:_ApplyForcedCrouch(false)
-                    characterController:SetServerCFrame(clientCF)
+                    characterController:SetServerCFrame(getUndergroundServerCFrame(clientCF))
                     characterController:SendViewAngles(20, nil)
                     characterController:HeartbeatUpdate()
                     return
-                end
-                if Setting.AntiAimEnabled() then
-                    self._currentFrameAAAngles = self._antiAimDesync:Compute(dt or 0, Setting.AntiAimMode())
-                else
-                    self._currentFrameAAAngles = nil
-                    characterController:SendViewAngles(30, nil)
                 end
                 local plan = self:_Plan(dt, action, target, ourRootPart, clientCF, mode, fighter, characterController)
                 self:_ApplyPlan(plan, target, characterController, fighter)
@@ -2904,30 +2809,17 @@ return {
                         self._weaponTransitionUntil = os.clock() + 0.35
                         self._hitscanStrategy:ResetState()
                         self._meleeStrategy:ResetState()
-                        characterController:SetServerCFrame(clientCF)
+                        characterController:SetServerCFrame(getUndergroundServerCFrame(clientCF))
                         characterController:HeartbeatUpdate()
                     end
                     plan.weaponAction()
                     if plan.kind == 'weapon' then
-                        characterController:SetServerCFrame(clientCF)
+                        characterController:SetServerCFrame(getUndergroundServerCFrame(clientCF))
                         characterController:HeartbeatUpdate()
                     end
                 end
                 characterController:HeartbeatUpdate()
-                if plan._reloadHyperEvade and os.clock() >= self._weaponTransitionUntil and self._lastEquippedItem ~= nil and equippedNow ~= nil and itemsSame(self._lastEquippedItem, equippedNow, fighter) then
-                    local spams = math.clamp(math.floor(tonumber(Setting.HyperEvadeCount()) or 5), 2, 20)
-                    for _i = 2, spams do
-                        if os.clock() < self._weaponTransitionUntil or not itemsSame(self._lastEquippedItem, equippedNow, fighter) then
-                            break
-                        end
-                        local spamCF = scatterFar(clientCF.Position, true, 1e9, 1.0)
-                        characterController:SetServerCFrame(spamCF)
-                        characterController:HeartbeatUpdate()
-                    end
-                    characterController:SetServerCFrame(clientCF)
-                else
-                    characterController:SetServerCFrame(clientCF)
-                end
+                characterController:SetServerCFrame(getUndergroundServerCFrame(clientCF))
             end
             function Controller:GetLastTargetWorld()
                 return self._lastTargetWorld
@@ -2944,8 +2836,6 @@ return {
                 self._projectileBreaker:ResetState()
                 self._partGlue:Destroy()
                 self._projectileEnvironmentID = nil
-                self._reloadHyperEvadeActive = false
-                self._currentFrameAAAngles = nil
                 if self._characterController then
                     self._characterController:SetServerCFrame(nil)
                     self._characterController:SendViewAngles(20, nil)
@@ -2998,16 +2888,9 @@ return {
                 local mode = optValue('P8S4D3', 'Default')
                 local wantUnderground = enabled and mode == 'Under'
                 if wantUnderground then
-                    local sliderVal = Options and Options['P8S4S6'] and Options['P8S4S6'].Value
-                    if sliderVal ~= nil then
-                        undergroundDepth = math.clamp(tonumber(sliderVal) or 2.5, 0, 15)
-                    end
-                    startUnderground()
-                elseif undergroundEnabled or undergroundConn or undergroundRestoreConn or undergroundSnapshot then
-                    local movUgOn = Toggles and Toggles['P10S8T1'] and Toggles['P10S8T1'].Value
-                    if not movUgOn then
-                        stopUnderground()
-                    end
+                    startUnderground('ragebot')
+                elseif undergroundRagebotRequested then
+                    stopUnderground(false, 'ragebot')
                 end
                 if controller._enabled ~= enabled then
                     controller:SetEnabled(enabled)
@@ -25154,16 +25037,11 @@ end
                     })
                     Options.P8S4D3:OnChanged(GuardRivalsCallback("Ragebot_ModeChanged", function()
                         local value = Options.P8S4D3 and Options.P8S4D3.Value
-                        -- Only drive underground from here when ragebot is active.
-                        -- If ragebot is off, KiciaRagebot.Update will start/stop it
-                        -- on its own schedule (after the real CFrame is visible).
                         local rageBotOn = Toggles.P8S4T1 and Toggles.P8S4T1.Value
-                        if value == "Under" then
-                            if rageBotOn then
-                                startUnderground()
-                            end
-                        else
-                            stopUnderground()
+                        if value == "Under" and rageBotOn then
+                            startUnderground('ragebot')
+                        elseif value ~= "Under" and undergroundRagebotRequested then
+                            stopUnderground(false, 'ragebot')
                         end
                     end))
                     local RageUnderground = Rage:AddDependencyBox()
@@ -25257,37 +25135,6 @@ end
                     WeaponStrategies:AddDivider()
                     WeaponStrategies:AddLabel("Melee Strategy")
                     WeaponStrategies:AddToggle("P8S4T7", { Text = "Use Melee", Default = true })
-
-                    Rage:AddDivider()
-                    Rage:AddToggle("P8S4T9", {
-                        Text = "Anti-Aim Desync",
-                        Default = false,
-                        Tooltip = "Sends fake view angles to the server every Heartbeat frame.\nMode cycles every 0.12s in Auto.",
-                    })
-                    local AntiAimBox = Rage:AddDependencyBox()
-                    AntiAimBox:AddDropdown("P8S4D4", {
-                        Text = "AA Mode",
-                        Values = { "Auto", "FakePitch", "Spin", "Jitter", "BackFace" },
-                        Default = "Auto",
-                        Tooltip = "Auto — cycles all 4 patterns; FakePitch — flips ±89°; Spin — 1440°/s yaw; Jitter — random every frame; BackFace — 180° + pitch jitter.",
-                    })
-                    AntiAimBox:SetupDependencies({ { Toggles.P8S4T9, true } })
-
-                    Rage:AddDivider()
-                    Rage:AddToggle("P8S4T10", {
-                        Text = "Reload HyperEvade",
-                        Default = false,
-                    })
-                    local HyperEvadeBox = Rage:AddDependencyBox()
-                    HyperEvadeBox:AddSlider("P8S4S8", {
-                        Text = "Heartbeat Spams",
-                        Default = 5,
-                        Min = 2,
-                        Max = 20,
-                        Rounding = 0,
-                        Compact = true,
-                    })
-                    HyperEvadeBox:SetupDependencies({ { Toggles.P8S4T10, true } })
 
                 do
                     local Mods = Tabs.Combat:AddRightGroupbox("Weapon Mods", "swords")
@@ -25979,12 +25826,9 @@ local P1 = Tabs.ESP
                     UgSettings:SetupDependencies({ { Toggles.P10S8T1, true } })
                     Toggles.P10S8T1:OnChanged(GuardRivalsCallback("Movement_Underground", function()
                         if Toggles.P10S8T1.Value then
-                            -- Sync depth to the slider
-                            undergroundDepth = math.clamp(
-                                tonumber(Options.P10S8S1 and Options.P10S8S1.Value) or 2.5, 0, 15)
-                            startUnderground()
-                        else
-                            stopUnderground()
+                            startUnderground('movement')
+                        elseif undergroundMovementRequested then
+                            stopUnderground(false, 'movement')
                         end
                     end))
                     local Animation = Tabs.Movement:AddRightGroupbox("Animation Player", "play")
@@ -27626,10 +27470,6 @@ local RivalsRuntime = {}
                     { idx = 'P8S4S6', type = 'Slider', value = 2.5 },
                     { idx = 'P8S4I1', type = 'Input', value = '0,0,0' },
                     { idx = 'P8S4S9', type = 'Slider', value = 100 },
-                    { idx = 'P8S4T9', type = 'Toggle', value = false },
-                    { idx = 'P8S4D4', type = 'Dropdown', value = 'Auto' },
-                    { idx = 'P8S4T10', type = 'Toggle', value = false },
-                    { idx = 'P8S4S8', type = 'Slider', value = 5 },
                     { idx = 'P8S4T8', type = 'Toggle', value = false },
                     { idx = 'P8S4S4', type = 'Slider', value = 100 },
                     { idx = 'P8S4S5', type = 'Slider', value = 0.5 },
