@@ -891,46 +891,81 @@ return {
                 RandomAnchorFromCharacter = function() return togValue('P8S4T8', false) end,
                 RepositionInterval = function() return 0.3 end,
             }
-            local AUTO_EVASION_INTERVAL = 0.1
+            local AUTO_TRANSLOCATE_DURATION = 0.15
+            local AUTO_RANDOM_DURATION = 0.3
             local AutoEvasion = {
                 active = false,
                 mode = 'Random',
                 nextSwitchAt = 0,
+                randomHoldUntil = 0,
                 reloading = false,
+                shotPending = false,
             }
-            local function resolveAutoEvasionMode(now, isReloading)
+            local function resolveAutoEvasionMode(now, isReloading, forceRandom)
                 now = now or os.clock()
                 if not AutoEvasion.active then
                     AutoEvasion.active = true
                     AutoEvasion.mode = 'Random'
-                    AutoEvasion.nextSwitchAt = now + AUTO_EVASION_INTERVAL
+                    AutoEvasion.nextSwitchAt = 0
+                    AutoEvasion.randomHoldUntil = now
                     AutoEvasion.reloading = isReloading == true
+                    AutoEvasion.shotPending = false
+                    if isReloading then
+                        AutoEvasion.randomHoldUntil = math.huge
+                    elseif forceRandom then
+                        AutoEvasion.randomHoldUntil = now + AUTO_RANDOM_DURATION
+                    end
                     return 'Random'
                 end
                 if isReloading then
                     AutoEvasion.reloading = true
                     AutoEvasion.mode = 'Random'
-                    AutoEvasion.nextSwitchAt = now + AUTO_EVASION_INTERVAL
+                    AutoEvasion.nextSwitchAt = 0
+                    AutoEvasion.randomHoldUntil = math.huge
+                    AutoEvasion.shotPending = false
                     return 'Random'
                 end
                 if AutoEvasion.reloading then
                     AutoEvasion.reloading = false
                     AutoEvasion.mode = 'Random'
-                    AutoEvasion.nextSwitchAt = now + AUTO_EVASION_INTERVAL
+                    AutoEvasion.nextSwitchAt = 0
+                    AutoEvasion.randomHoldUntil = now + AUTO_RANDOM_DURATION
+                    AutoEvasion.shotPending = false
                     return 'Random'
                 end
-                if now >= AutoEvasion.nextSwitchAt then
-                    local switches = 0
-                    while now >= AutoEvasion.nextSwitchAt and switches < 8 do
-                        AutoEvasion.mode = AutoEvasion.mode == 'Random' and 'Translocate' or 'Random'
-                        AutoEvasion.nextSwitchAt = AutoEvasion.nextSwitchAt + AUTO_EVASION_INTERVAL
-                        switches = switches + 1
-                    end
-                    if AutoEvasion.nextSwitchAt <= now then
-                        AutoEvasion.nextSwitchAt = now + AUTO_EVASION_INTERVAL
-                    end
+                if forceRandom then
+                    AutoEvasion.mode = 'Random'
+                    AutoEvasion.nextSwitchAt = 0
+                    AutoEvasion.randomHoldUntil = now + AUTO_RANDOM_DURATION
+                    AutoEvasion.shotPending = false
+                    return 'Random'
                 end
-                return AutoEvasion.mode
+                if AutoEvasion.mode == 'Translocate' then
+                    if now >= AutoEvasion.nextSwitchAt then
+                        AutoEvasion.mode = 'Random'
+                        AutoEvasion.nextSwitchAt = 0
+                        AutoEvasion.randomHoldUntil = now + AUTO_RANDOM_DURATION
+                        AutoEvasion.shotPending = false
+                    end
+                    return AutoEvasion.mode
+                end
+                if AutoEvasion.shotPending and now >= AutoEvasion.randomHoldUntil then
+                    AutoEvasion.shotPending = false
+                    AutoEvasion.mode = 'Translocate'
+                    AutoEvasion.nextSwitchAt = now + AUTO_TRANSLOCATE_DURATION
+                    return 'Translocate'
+                end
+                return 'Random'
+            end
+            local function markAutoEvasionShot(now)
+                if not AutoEvasion.active or AutoEvasion.reloading or AutoEvasion.mode ~= 'Random' then
+                    return
+                end
+                now = now or os.clock()
+                if now < AutoEvasion.randomHoldUntil then
+                    return
+                end
+                AutoEvasion.shotPending = true
             end
             local function findChild(root, ...)
                 local node = root
@@ -1063,7 +1098,7 @@ return {
                 local remote = resolveUseItemRemote()
                 local token = enc('StartShooting')
                 if not remote or not token or not objectId then
-                    return
+                    return false
                 end
                 local inner = { ['\0'] = aim1, ['\1'] = aim2, ['\2'] = hitboxHead, ['\3'] = extra }
                 local payload
@@ -1073,24 +1108,27 @@ return {
                     payload = { ['\1'] = inner }
                 end
                 rbFireServerNative(remote, objectId, token, payload, nil)
+                return true
             end
             local function fireMeleeAttack(objectId, a, b, c, d)
                 local remote = resolveUseItemRemote()
                 local token = enc('StartShooting')
                 local anim = enc('AttackAnimation1')
                 if not remote or not token or not anim or not objectId then
-                    return
+                    return false
                 end
                 rbFireServerNative(remote, objectId, token, { ['\1'] = { ['\0'] = a, ['\1'] = b, ['\2'] = c, ['\3'] = d }, ['\2'] = anim }, nil)
+                return true
             end
             local function fireMeleeHeavy(objectId, a, b, c, d)
                 local remote = resolveUseItemRemote()
                 local token = enc('StartAiming')
                 local anim = enc('HeavyAttackAnimation1')
                 if not remote or not token or not anim or not objectId then
-                    return
+                    return false
                 end
                 rbFireServerNative(remote, objectId, token, { ['\1'] = { ['\0'] = a, ['\1'] = b, ['\2'] = c, ['\3'] = d }, ['\2'] = anim }, nil)
+                return true
             end
             local function fireReload(objectId)
                 local remote = resolveUseItemRemote()
@@ -2002,6 +2040,21 @@ return {
             local function randomEvade(clientCF)
                 return scatterFar(clientCF.Position, Setting.RandomAnchorFromCharacter(), Setting.RandomBaseRadius(), Setting.RandomRadiusFactor())
             end
+            local function isFlightActive()
+                local movement = RivalsRuntimeBridge.Movement
+                local flight = type(movement) == 'table' and movement.Flight or nil
+                return type(flight) == 'table' and flight.RootPart ~= nil and flight.RootPart.Parent ~= nil
+            end
+            local function fallbackEvadeCFrame(clientCF, ourRootPart)
+                local baseCF = ourRootPart
+                    and ourRootPart.Parent ~= nil
+                    and ourRootPart.CFrame
+                    or clientCF
+                if isFlightActive() then
+                    return baseCF
+                end
+                return randomEvade(baseCF)
+            end
             local function translocateEvade(clientCF, hasTargetsNow)
                 if not hasTargetsNow then
                     return ringPoint(clientCF.Position, 10000, 1000000000)
@@ -2077,10 +2130,18 @@ return {
                 local above = isAbove(target)
                 local offset = above and OFFSET_ABOVE or OFFSET_BELOW
                 local aimHeadPosition = resolveTargetHeadPosition(target, hitboxHead)
-                local void = self._partGlue:Acquire(ourRootPart, hitboxHead)
-                self._gluedOurPart = ourRootPart
+                local flightActive = isFlightActive()
+                if flightActive then
+                    self:ClearGlue()
+                end
+                local void = flightActive and ourRootPart.CFrame or self._partGlue:Acquire(ourRootPart, hitboxHead)
+                if not flightActive then
+                    self._gluedOurPart = ourRootPart
+                end
                 local cframe
-                if above then
+                if flightActive then
+                    cframe = ourRootPart.CFrame
+                elseif above then
                     cframe = void + offset
                 else
                     cframe = CFrame.new(void.Position + offset, aimHeadPosition or hitboxHead.Position)
@@ -2090,11 +2151,11 @@ return {
                 local isRaycast = itemIsRaycast(item)
                 local function weaponAction()
                     if not fireNow then
-                        return
+                        return false
                     end
                     local liveHead = resolveLiveHead(target)
                     if liveHead == nil then
-                        return
+                        return false
                     end
                     local _, liveOy, liveOz = target.rootPart.CFrame:ToOrientation()
                     local liveFallback = above and PITCH_ABOVE or PITCH_BELOW
@@ -2102,7 +2163,7 @@ return {
                     local livePitch = resolveHeadPitchPosition(liveHeadPosition, ourRootPart.Position, liveFallback)
                     local liveAim1 = buildAim(above and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, livePitch, liveOy, liveOz)
                     local liveAim2 = buildAim(above and AIM_ABOVE_END or AIM_BELOW_END, livePitch, liveOy, liveOz)
-                    fireGun(objectId, isRaycast, liveAim1, liveAim2, liveHead, AIM_EXTRA)
+                    return fireGun(objectId, isRaycast, liveAim1, liveAim2, liveHead, AIM_EXTRA) == true
                 end
                 return cframe, weaponAction
             end
@@ -2150,10 +2211,18 @@ return {
                 end
                 local above = isAbove(target)
                 local offset = above and OFFSET_ABOVE or OFFSET_BELOW
-                local void = self._partGlue:Acquire(ourRootPart, hitboxHead)
-                self._gluedOurPart = ourRootPart
+                local flightActive = isFlightActive()
+                if flightActive then
+                    self:ClearGlue()
+                end
+                local void = flightActive and ourRootPart.CFrame or self._partGlue:Acquire(ourRootPart, hitboxHead)
+                if not flightActive then
+                    self._gluedOurPart = ourRootPart
+                end
                 local cframe
-                if above then
+                if flightActive then
+                    cframe = ourRootPart.CFrame
+                elseif above then
                     cframe = void + offset
                 else
                     cframe = CFrame.new(void.Position + offset, hitboxHead.Position)
@@ -2166,7 +2235,7 @@ return {
                 local now = os.clock()
                 if now < self._hitboxWindowUntil then
                     return cframe, meleeViewAngles(px, oy), function()
-                        fireMeleeHeavy(objectId, aim1, aim2, hitboxHead, AIM_EXTRA)
+                        return fireMeleeHeavy(objectId, aim1, aim2, hitboxHead, AIM_EXTRA) == true
                     end
                 end
                 if not self._shootLock:ShouldFire(canFire, math.max(dt, 1 / 240) * Setting.ShootFrames()) then
@@ -2179,12 +2248,12 @@ return {
                 end
                 if itemName(item) ~= 'Knife' then
                     return cframe, nil, function()
-                        fireMeleeAttack(objectId, aim1, aim2, hitboxHead, AIM_EXTRA)
+                        return fireMeleeAttack(objectId, aim1, aim2, hitboxHead, AIM_EXTRA) == true
                     end
                 end
                 self:_RecordBackstab()
                 return cframe, meleeViewAngles(px, oy), function()
-                    fireMeleeHeavy(objectId, aim1, aim2, hitboxHead, AIM_EXTRA)
+                    return fireMeleeHeavy(objectId, aim1, aim2, hitboxHead, AIM_EXTRA) == true
                 end
             end
             function MeleeStrategy:ResetState()
@@ -2268,6 +2337,9 @@ return {
                 if mode == 'Off' then
                     return {}
                 end
+                if isFlightActive() then
+                    return { cframe = clientCF }
+                end
                 return { cframe = randomEvade(clientCF) }
             end
             function Controller:_Plan(dt, action, target, ourRootPart, clientCF, mode)
@@ -2283,13 +2355,13 @@ return {
                     self._meleeStrategy:ResetState()
                     local item = action.item
                     local index = action.index
-                    return { cframe = clientCF, weaponAction = function() equipItem(item, index) end }
+                    return { cframe = fallbackEvadeCFrame(clientCF, ourRootPart), weaponAction = function() equipItem(item, index) end }
                 end
                 if action.type == 'Reload' then
                     self._hitscanStrategy:ResetState()
                     self._meleeStrategy:ResetState()
                     local item = action.item
-                    return { cframe = clientCF, weaponAction = function() reloadItem(item) end }
+                    return { cframe = fallbackEvadeCFrame(clientCF, ourRootPart), weaponAction = function() reloadItem(item) end }
                 end
                 if target == nil then
                     return self:_EvadePlan(clientCF, mode)
@@ -2357,16 +2429,20 @@ return {
                     if not isReloading and action ~= nil and action.item ~= nil then
                         isReloading = itemIsReloading(action.item)
                     end
-                    mode = resolveAutoEvasionMode(os.clock(), isReloading)
+                    local forceRandom = isReloading or (action ~= nil and action.type == 'Swap')
+                    mode = resolveAutoEvasionMode(os.clock(), isReloading, forceRandom)
                 elseif AutoEvasion.active then
                     AutoEvasion.active = false
                     AutoEvasion.mode = 'Random'
                     AutoEvasion.nextSwitchAt = 0
+                    AutoEvasion.randomHoldUntil = 0
                     AutoEvasion.reloading = false
+                    AutoEvasion.shotPending = false
                 end
                 if mode == 'Translocate' then
                     self:_ApplyForcedCrouch(false)
-                    characterController:SetServerCFrame(translocateEvade(clientCF, hasTargets()))
+                    local translocateCFrame = isFlightActive() and clientCF or translocateEvade(clientCF, hasTargets())
+                    characterController:SetServerCFrame(translocateCFrame)
                     characterController:HeartbeatUpdate()
                     return
                 end
@@ -2375,7 +2451,10 @@ return {
                 self:_ApplyPlan(plan, target, characterController, fighter)
                 self:_ApplyForcedCrouch(plan.shouldForceCrouch == true)
                 if plan.weaponAction ~= nil then
-                    plan.weaponAction()
+                    local fired = plan.weaponAction() == true
+                    if fired then
+                        markAutoEvasionShot(os.clock())
+                    end
                 end
                 characterController:HeartbeatUpdate()
             end
@@ -2393,7 +2472,9 @@ return {
                 AutoEvasion.active = false
                 AutoEvasion.mode = 'Random'
                 AutoEvasion.nextSwitchAt = 0
+                AutoEvasion.randomHoldUntil = 0
                 AutoEvasion.reloading = false
+                AutoEvasion.shotPending = false
                 if self._characterController then
                     self._characterController:SetServerCFrame(nil)
                     self._characterController:SendViewAngles(20, nil)
@@ -16523,7 +16604,14 @@ ErrorReporter.set_game(GameName)
             end
             function RivalsRagebot.Update(deltaTime)
                 local now = tick()
-                if RivalsRagebot.IsBaitModeEnabled() then
+                local flightActive = isFlightActive()
+                if flightActive and RivalsRagebot.IsBaitModeEnabled() then
+                    RivalsRagebotState.Target = nil
+                    RivalsRagebotState.HoldCFrame = nil
+                    RivalsRagebotState.LastHoldUpdateAt = 0
+                    RivalsRagebotState.PhaseClockSec = 0
+                end
+                if RivalsRagebot.IsBaitModeEnabled() and not flightActive then
                     RivalsRagebot.UpdateHostileTeleportTracker(now)
                     if RivalsRagebot.IsHostileCheating() then
                         if RivalsRuntimeBridge.ResetKiciaRagebot then
