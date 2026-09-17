@@ -16001,6 +16001,11 @@ ErrorReporter.set_game(GameName)
             }
             do
             local TWO_PI = math.pi * 2
+            local function isRivalsFlightActive()
+                local movement = RivalsRuntimeBridge.Movement
+                local flight = type(movement) == 'table' and movement.Flight or nil
+                return type(flight) == 'table' and flight.RootPart ~= nil and flight.RootPart.Parent ~= nil
+            end
             function RivalsRagebot.IsEnabled()
                 return Toggles.P8S4T1 and Toggles.P8S4T1.Value == true
             end
@@ -16604,7 +16609,7 @@ ErrorReporter.set_game(GameName)
             end
             function RivalsRagebot.Update(deltaTime)
                 local now = tick()
-                local flightActive = isFlightActive()
+                local flightActive = isRivalsFlightActive()
                 if flightActive and RivalsRagebot.IsBaitModeEnabled() then
                     RivalsRagebotState.Target = nil
                     RivalsRagebotState.HoldCFrame = nil
