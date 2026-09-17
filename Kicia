@@ -37,7 +37,7 @@ local Window = Library:CreateWindow({
         KeyPicker = true,
         SubTabUnderline = true,
     },
-    TabTransitionTime = 0.0001,
+    TabTransitionTime = 0.22,
     TabSwipeOffset = 26,
     TabSwipeFrom = "right",
 })
@@ -636,9 +636,9 @@ local DefaultUiSettings = {
     show_notification = true,
     show_keybind_states = false,
     auto_execute_on_teleport = false,
-    auto_load_config = true,
-    auto_save_config = true,
-    load_config_name = 'Legit',
+    auto_load_config = false,
+    auto_save_config = false,
+    load_config_name = '',
     menu_keybind = 'LeftControl',
 }
 local module = {}
@@ -1133,16 +1133,100 @@ return {
                 return type(maxAmmo) == 'number' and maxAmmo <= itemAmmo(item)
             end
             local function itemIsEquipped(item)
-                return rawget(item, 'IsEquipped')
+                return type(item) == 'table' and rawget(item, 'IsEquipped') == true
             end
-            local function equipItem(item, index)
-                if itemIsEquipped(item) then
-                    return
+            local function resolveItemIndex(item, fighter, fallback)
+                if type(item) == 'table' then
+                    local data = rawget(item, 'Data')
+                    if type(data) == 'table' then
+                        local index = tonumber(rawget(data, 'ItemIndex'))
+                        if index then
+                            return index
+                        end
+                    end
                 end
-                local clientFighter = rawget(item, 'ClientFighter')
-                if clientFighter and index and type(clientFighter.EquipItem) == 'function' then
-                    pcall(function() clientFighter:EquipItem(index) end)
+                if type(fighter) == 'table' then
+                    local items = rawget(fighter, 'Items')
+                    if type(items) == 'table' then
+                        for slotIndex, candidate in pairs(items) do
+                            if candidate == item then
+                                return tonumber(slotIndex) or slotIndex
+                            end
+                        end
+                    end
                 end
+                return fallback
+            end
+            local function resolveFighterEquippedItem(fighter)
+                if type(fighter) ~= 'table' then
+                    return nil
+                end
+                local equipped = rawget(fighter, 'EquippedItem')
+                if type(equipped) == 'table' then
+                    return equipped
+                end
+                local observer = rawget(fighter, 'itemObserver') or rawget(fighter, 'ItemObserver')
+                if observer and type(observer.GetEquippedItem) == 'function' then
+                    local ok, value = pcall(observer.GetEquippedItem, observer)
+                    if ok and type(value) == 'table' then
+                        return value
+                    end
+                end
+                local data = rawget(fighter, 'Data')
+                local equippedId = type(data) == 'table' and (rawget(data, 'EquippedItemID') or rawget(data, 'EquippedItemId')) or nil
+                local items = rawget(fighter, 'Items')
+                if equippedId ~= nil and type(items) == 'table' then
+                    for _, item in pairs(items) do
+                        if type(item) == 'table' and itemObjectId(item) == equippedId then
+                            return item
+                        end
+                    end
+                end
+                return nil
+            end
+            local function ragebotItemKey(item, fighter)
+                if type(item) ~= 'table' then
+                    return nil
+                end
+                local objectId = itemObjectId(item)
+                if objectId ~= nil then
+                    return 'id:' .. tostring(objectId)
+                end
+                local data = rawget(item, 'Data')
+                local itemIndex = type(data) == 'table' and rawget(data, 'ItemIndex') or nil
+                if itemIndex ~= nil then
+                    return 'index:' .. tostring(itemIndex)
+                end
+                if type(fighter) == 'table' then
+                    local items = rawget(fighter, 'Items')
+                    if type(items) == 'table' then
+                        for slotIndex, candidate in pairs(items) do
+                            if candidate == item then
+                                return 'slot:' .. tostring(slotIndex)
+                            end
+                        end
+                    end
+                end
+                return 'name:' .. tostring(rawget(item, 'Name') or rawget(item, 'ItemName') or item)
+            end
+            local function equipItem(item, index, fighter)
+                if not item or itemIsEquipped(item) then
+                    return false
+                end
+                local resolvedIndex = resolveItemIndex(item, fighter, index)
+                if not resolvedIndex then
+                    return false
+                end
+                local equipTarget = fighter
+                if not equipTarget or type(equipTarget.EquipItem) ~= 'function' then
+                    equipTarget = rawget(item, 'ClientFighter')
+                end
+                if not equipTarget or type(equipTarget.EquipItem) ~= 'function' then
+                    return false
+                end
+                return pcall(function()
+                    equipTarget:EquipItem(resolvedIndex)
+                end)
             end
             local function reloadItem(item)
                 if itemIsReloading(item) or itemAmmoReserve(item) <= 0 or itemIsMagFull(item) then
@@ -1493,7 +1577,12 @@ return {
                     end
                     part.Anchored = true
                 end
-                self._gluedParts[part] = { refCount = 1, weld = weld, originalPart1 = originalPart1 }
+                self._gluedParts[part] = {
+                    refCount = 1,
+                    weld = weld,
+                    originalPart1 = originalPart1,
+                    lastNaturalCFrame = part.CFrame,
+                }
             end
             function PartGlue:_ReleaseGlue(part)
                 local entry = self._gluedParts[part]
@@ -1505,6 +1594,9 @@ return {
                     return
                 end
                 local weld = entry.weld
+                if entry.lastNaturalCFrame ~= nil and part.Parent ~= nil then
+                    pcall(function() part.CFrame = entry.lastNaturalCFrame end)
+                end
                 if weld ~= nil and entry.originalPart1 ~= nil then
                     weld.Part1 = entry.originalPart1
                     entry.originalPart1.Anchored = false
@@ -1523,6 +1615,13 @@ return {
                     end
                     self:_SetupGlue(hitboxPart)
                     self._bindings[ourPart] = hitboxPart
+                end
+                local entry = self._gluedParts[hitboxPart]
+                if entry ~= nil then
+                    local current = hitboxPart.CFrame
+                    if (current.Position - VOID_CFRAME.Position).Magnitude > 0.01 then
+                        entry.lastNaturalCFrame = current
+                    end
                 end
                 local cf = CFrame.new(VOID_CFRAME.Position)
                 if useRotation then
@@ -1850,15 +1949,19 @@ return {
                 return setmetatable({ _lockedUntil = nil }, ShootLock)
             end
             function ShootLock:ShouldFire(canFire, lockDuration)
+                if not canFire then
+                    return false
+                end
                 local now = os.clock()
-                local locked = self._lockedUntil ~= nil and now < self._lockedUntil
-                if canFire then
-                    self._lockedUntil = now + lockDuration
+                if self._lockedUntil ~= nil and now < self._lockedUntil then
+                    return false
                 end
-                if not locked then
-                    locked = canFire
+                local duration = tonumber(lockDuration) or 0
+                if duration < 0 then
+                    duration = 0
                 end
-                return locked
+                self._lockedUntil = now + duration
+                return true
             end
             function ShootLock:Reset()
                 self._lockedUntil = nil
@@ -2007,20 +2110,29 @@ return {
                 if horizontal < 0.05 then
                     return fallback
                 end
-                if math.abs(delta.Y) < 3 then
-                    return fallback
-                end
                 return math.clamp(-math.atan2(delta.Y, horizontal), -math.pi / 2, math.pi / 2)
             end
             local HitscanStrategy = {}
             HitscanStrategy.__index = HitscanStrategy
             function HitscanStrategy.new(partGlue)
-                return setmetatable({ _partGlue = partGlue, _shootLock = ShootLock.new() }, HitscanStrategy)
+                return setmetatable({
+                    _partGlue = partGlue,
+                    _shootLock = ShootLock.new(),
+                    _lastVoidCFrame = nil,
+                }, HitscanStrategy)
+            end
+            function HitscanStrategy:ClearGlue()
+                local glued = self._gluedOurPart
+                if glued ~= nil then
+                    self._partGlue:Free(glued)
+                    self._gluedOurPart = nil
+                end
             end
             function HitscanStrategy:Plan(dt, target, item, ourRootPart, canFire)
                 local hitboxHead = resolveLiveHead(target)
                 if hitboxHead == nil then
                     self:ClearGlue()
+                    self._lastVoidCFrame = nil
                     return ourRootPart.CFrame, nil
                 end
                 local above = isAbove(target)
@@ -2033,8 +2145,9 @@ return {
                 else
                     cframe = CFrame.new(void.Position + offset, hitboxHead.Position)
                 end
+                self._lastVoidCFrame = cframe
                 if not self._shootLock:ShouldFire(canFire, math.max(dt, 1 / 240) * Setting.ShootFrames()) then
-                    return ourRootPart.CFrame, nil
+                    return self._lastVoidCFrame, nil
                 end
                 local _, oy, oz = target.rootPart.CFrame:ToOrientation()
                 local fallbackPitch = above and PITCH_ABOVE or PITCH_BELOW
@@ -2059,11 +2172,8 @@ return {
             end
             function HitscanStrategy:ResetState()
                 self._shootLock:Reset()
-                local glued = self._gluedOurPart
-                if glued ~= nil then
-                    self._partGlue:Free(glued)
-                    self._gluedOurPart = nil
-                end
+                self:ClearGlue()
+                self._lastVoidCFrame = nil
             end
             local BACKSTAB_WINDOW = 0.625
             local BACKSTAB_COOLDOWN = 1.25
@@ -2075,7 +2185,15 @@ return {
                     _shootLock = ShootLock.new(),
                     _hitboxWindowUntil = -1,
                     _attackCooldown = -1,
+                    _lastVoidCFrame = nil,
                 }, MeleeStrategy)
+            end
+            function MeleeStrategy:ClearGlue()
+                local glued = self._gluedOurPart
+                if glued ~= nil then
+                    self._partGlue:Free(glued)
+                    self._gluedOurPart = nil
+                end
             end
             local function meleeViewAngles(px, oy)
                 return { kind = 'Normalized', pitch = math.deg(px), yaw = math.deg(oy) }
@@ -2089,6 +2207,7 @@ return {
                 local hitboxHead = resolveLiveHead(target)
                 if hitboxHead == nil then
                     self:ClearGlue()
+                    self._lastVoidCFrame = nil
                     return ourRootPart.CFrame, nil, nil
                 end
                 local above = isAbove(target)
@@ -2101,6 +2220,7 @@ return {
                 else
                     cframe = CFrame.new(void.Position + offset, hitboxHead.Position)
                 end
+                self._lastVoidCFrame = cframe
                 local px, oy, oz = target.rootPart.CFrame:ToOrientation()
                 local pitch = above and PITCH_ABOVE or PITCH_BELOW
                 local aim1 = buildAim(above and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, pitch, oy, oz)
@@ -2113,12 +2233,10 @@ return {
                     end
                 end
                 if not self._shootLock:ShouldFire(canFire, math.max(dt, 1 / 240) * Setting.ShootFrames()) then
-                    self:ClearGlue()
-                    return ourRootPart.CFrame, nil, nil
+                    return self._lastVoidCFrame or cframe, nil, nil
                 end
                 if now < self._attackCooldown then
-                    self:ClearGlue()
-                    return ourRootPart.CFrame, nil, nil
+                    return self._lastVoidCFrame or cframe, nil, nil
                 end
                 if itemName(item) ~= 'Knife' then
                     return cframe, nil, function()
@@ -2134,11 +2252,8 @@ return {
                 self._hitboxWindowUntil = -1
                 self._attackCooldown = -1
                 self._shootLock:Reset()
-                local glued = self._gluedOurPart
-                if glued ~= nil then
-                    self._partGlue:Free(glued)
-                    self._gluedOurPart = nil
-                end
+                self:ClearGlue()
+                self._lastVoidCFrame = nil
             end
             local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
             local function applyEnabledFFlags(enabled)
@@ -2171,6 +2286,10 @@ return {
                     _lastTargetAt = -math.huge,
                     _lastTargetWorld = nil,
                     _lastDefensiveViewAngles = nil,
+                    _weaponTransitionUntil = 0,
+                    _pendingWeaponKey = nil,
+                    _lastEquippedKey = nil,
+                    _lastSafeWeaponCF = nil,
                 }, Controller)
             end
             function Controller:SetEnabled(enabled)
@@ -2211,44 +2330,71 @@ return {
                 if mode == 'Off' then
                     return {}
                 end
+                if mode == 'Translocate' then
+                    return { cframe = translocateEvade(clientCF, hasTargets()) }
+                end
                 return { cframe = randomEvade(clientCF) }
             end
-            function Controller:_Plan(dt, action, target, ourRootPart, clientCF, mode)
+            function Controller:_Plan(dt, action, target, ourRootPart, clientCF, mode, fighter, characterController)
                 local canFire = true
                 if target ~= nil then
                     canFire = not self._spatialLimitGate:Tick(target)
                 end
+                local safeCF = self._lastSafeWeaponCF or clientCF or ourRootPart.CFrame
                 if action == nil then
-                    return self:_EvadePlan(clientCF, mode)
+                    return self:_EvadePlan(safeCF, mode)
                 end
                 if action.type == 'Swap' then
                     self._hitscanStrategy:ResetState()
                     self._meleeStrategy:ResetState()
-                    local item = action.item
-                    local index = action.index
-                    return { cframe = clientCF, weaponAction = function() equipItem(item, index) end }
+                    self._pendingWeaponKey = ragebotItemKey(action.item, fighter)
+                    return {
+                        kind = 'weapon',
+                        cframe = safeCF,
+                        weaponAction = function()
+                            if characterController then
+                                characterController:SetServerCFrame(safeCF)
+                                characterController:HeartbeatUpdate()
+                            end
+                            equipItem(action.item, action.index, fighter)
+                        end,
+                        shouldSkipDefense = true,
+                    }
                 end
                 if action.type == 'Reload' then
                     self._hitscanStrategy:ResetState()
                     self._meleeStrategy:ResetState()
-                    local item = action.item
-                    return { cframe = clientCF, weaponAction = function() reloadItem(item) end }
+                    self._pendingWeaponKey = ragebotItemKey(action.item, fighter)
+                    return {
+                        kind = 'weapon',
+                        cframe = safeCF,
+                        weaponAction = function()
+                            if characterController then
+                                characterController:SetServerCFrame(safeCF)
+                                characterController:HeartbeatUpdate()
+                            end
+                            reloadItem(action.item)
+                        end,
+                        shouldSkipDefense = true,
+                    }
                 end
                 if target == nil then
-                    return self:_EvadePlan(clientCF, mode)
+                    self._hitscanStrategy:ClearGlue()
+                    self._meleeStrategy:ClearGlue()
+                    return self:_EvadePlan(safeCF, mode)
                 end
                 if action.itemType == 'Melee' then
                     local cframe, viewAngles, weaponAction = self._meleeStrategy:Plan(dt, target, action.item, ourRootPart, canFire)
-                    return { cframe = cframe, viewAngles = viewAngles, weaponAction = weaponAction, shouldSkipDefense = true, shouldForceCrouch = true }
+                    return { cframe = cframe, viewAngles = viewAngles, weaponAction = weaponAction, shouldSkipDefense = true, shouldForceCrouch = weaponAction ~= nil }
                 end
                 if action.itemType ~= 'Gun' then
                     return {}
                 end
                 if itemIsReloading(action.item) then
-                    return self:_EvadePlan(clientCF, mode)
+                    return self:_EvadePlan(safeCF, mode)
                 end
                 local cframe, weaponAction = self._hitscanStrategy:Plan(dt, target, action.item, ourRootPart, canFire)
-                return { cframe = cframe, weaponAction = weaponAction, shouldForceCrouch = true, isAimPose = weaponAction ~= nil }
+                return { cframe = cframe, weaponAction = weaponAction, shouldForceCrouch = weaponAction ~= nil, isAimPose = weaponAction ~= nil }
             end
             function Controller:_ApplyPlan(plan, target, characterController, fighter)
                 local cframe = plan.cframe
@@ -2264,6 +2410,43 @@ return {
                 end
                 characterController:SendViewAngles(20, plan.viewAngles or self._lastDefensiveViewAngles)
             end
+            local function isUsableWeaponCFrame(cf)
+                if cf == nil or typeof(cf) ~= 'CFrame' then
+                    return false
+                end
+                local p = cf.Position
+                return isFiniteVector3(p)
+                    and math.abs(p.X) <= 500000
+                    and math.abs(p.Y) <= 500000
+                    and math.abs(p.Z) <= 500000
+            end
+            local function IsRagebotGameReady(fighter)
+                if type(fighter) ~= 'table' then
+                    return false
+                end
+                local character = lp.Character
+                local entity = rawget(fighter, 'Entity')
+                local model = entity and entity.Model
+                if not character or not model or model ~= character then
+                    return false
+                end
+                if type(entity) == 'table' and rawget(entity, '_is_in_world') == false then
+                    return false
+                end
+                local duel = FighterDataCache and FighterDataCache.LocalDuel
+                if duel and duel.Seeded then
+                    return duel.IsInDuel == true or duel.IsInShootingRange == true
+                end
+                local function fighterValue(key)
+                    if type(fighter.Get) ~= 'function' then
+                        return nil
+                    end
+                    local ok, value = pcall(fighter.Get, fighter, key)
+                    return ok and value or nil
+                end
+                return fighterValue('IsInDuel') == true
+                    or fighterValue('IsInShootingRange') == true
+            end
             function Controller:Update(dt)
                 local fighter = resolveLocalFighter()
                 local characterController = self:_EnsureCharacterController()
@@ -2271,36 +2454,90 @@ return {
                     self:_Reset()
                     return
                 end
-                if RivalsRuntimeBridge.IsReadyToFight and not RivalsRuntimeBridge.IsReadyToFight() then
-                    self:_Reset()
-                    return
-                end
                 local ourRootPart = self._boundRootPart
                 local clientCF = characterController:GetClientCFrame()
-                local now = os.clock()
-                local target = selectTarget()
-                if target ~= nil then
-                    self._lastTarget = target
-                    self._lastTargetAt = now
-                elseif self._lastTarget ~= nil and now - self._lastTargetAt <= 0.5 then
-                    target = refreshTargetEntry(self._lastTarget)
-                    if not isValidTarget(target) then
-                        self._lastTarget = nil
-                        target = nil
-                    else
-                        self._lastTargetAt = now
-                    end
-                else
-                    self._lastTarget = nil
+                local rootCF = ourRootPart and ourRootPart.CFrame or nil
+                local safeCF
+                if isUsableWeaponCFrame(clientCF) then
+                    safeCF = clientCF
+                elseif isUsableWeaponCFrame(self._lastSafeWeaponCF) then
+                    safeCF = self._lastSafeWeaponCF
+                elseif isUsableWeaponCFrame(rootCF) then
+                    safeCF = rootCF
+                end
+                if isUsableWeaponCFrame(safeCF) then
+                    self._lastSafeWeaponCF = safeCF
+                end
+                local readyToFight = IsRagebotGameReady(fighter)
+                local target = readyToFight and selectTarget() or nil
+                if target ~= nil and not isValidTarget(target) then
+                    target = nil
                 end
                 local action = getAction(fighter)
+                local equippedNow = resolveFighterEquippedItem(fighter)
+                local equippedKey = ragebotItemKey(equippedNow, fighter)
+                local now = os.clock()
+                if self._lastEquippedKey ~= nil and equippedKey ~= nil and equippedKey ~= self._lastEquippedKey then
+                    self._hitscanStrategy:ResetState()
+                    self._meleeStrategy:ResetState()
+                    self._weaponTransitionUntil = math.max(self._weaponTransitionUntil, now + 0.35)
+                    self._pendingWeaponKey = nil
+                    if isUsableWeaponCFrame(self._lastSafeWeaponCF or safeCF) then
+                        characterController:SetServerCFrame(self._lastSafeWeaponCF or safeCF)
+                        characterController:HeartbeatUpdate()
+                    end
+                end
+                if self._pendingWeaponKey ~= nil and equippedKey == self._pendingWeaponKey then
+                    self._pendingWeaponKey = nil
+                end
+                self._lastEquippedKey = equippedKey or self._lastEquippedKey
+                if os.clock() < self._weaponTransitionUntil then
+                    self._hitscanStrategy:ClearGlue()
+                    self._meleeStrategy:ClearGlue()
+                    self:_ApplyForcedCrouch(false)
+                    if isUsableWeaponCFrame(self._lastSafeWeaponCF or safeCF) then
+                        characterController:SetServerCFrame(self._lastSafeWeaponCF or safeCF)
+                    end
+                    characterController:SendViewAngles(20, nil)
+                    characterController:HeartbeatUpdate()
+                    return
+                end
+                if action ~= nil and action.type == 'Swap' then
+                    self._hitscanStrategy:ResetState()
+                    self._meleeStrategy:ResetState()
+                    self._pendingWeaponKey = ragebotItemKey(action.item, fighter)
+                    self._weaponTransitionUntil = now + 0.35
+                    if isUsableWeaponCFrame(safeCF) then
+                        characterController:SetServerCFrame(safeCF)
+                        characterController:HeartbeatUpdate()
+                    end
+                    equipItem(action.item, action.index, fighter)
+                    if isUsableWeaponCFrame(safeCF) then
+                        characterController:SetServerCFrame(safeCF)
+                        characterController:HeartbeatUpdate()
+                    end
+                    return
+                end
+                if not readyToFight then
+                    self._hitscanStrategy:ClearGlue()
+                    self._meleeStrategy:ClearGlue()
+                    self:_ApplyForcedCrouch(false)
+                    AutoEvasion.active = false
+                    AutoEvasion.mode = 'Random'
+                    AutoEvasion.nextSwitchAt = 0
+                    AutoEvasion.reloading = false
+                    characterController:SetServerCFrame(nil)
+                    characterController:SendViewAngles(20, nil)
+                    characterController:HeartbeatUpdate()
+                    return
+                end
                 local mode = Setting.EvasionMode()
                 if mode == 'Auto' then
                     local isReloading = action ~= nil and action.type == 'Reload'
                     if not isReloading and action ~= nil and action.item ~= nil then
                         isReloading = itemIsReloading(action.item)
                     end
-                    mode = resolveAutoEvasionMode(os.clock(), isReloading)
+                    mode = resolveAutoEvasionMode(now, isReloading)
                 elseif AutoEvasion.active then
                     AutoEvasion.active = false
                     AutoEvasion.mode = 'Random'
@@ -2308,19 +2545,39 @@ return {
                     AutoEvasion.reloading = false
                 end
                 if mode == 'Translocate' then
+                    self._hitscanStrategy:ClearGlue()
+                    self._meleeStrategy:ClearGlue()
                     self:_ApplyForcedCrouch(false)
-                    characterController:SetServerCFrame(translocateEvade(clientCF, hasTargets()))
-                    characterController:HeartbeatUpdate()
+                    if isUsableWeaponCFrame(self._lastSafeWeaponCF or safeCF) then
+                        characterController:SetServerCFrame(translocateEvade(self._lastSafeWeaponCF or safeCF, hasTargets()))
+                        characterController:SendViewAngles(20, nil)
+                        characterController:HeartbeatUpdate()
+                    end
                     return
                 end
                 self._lastTargetWorld = target ~= nil and target.rootPart.Position or nil
-                local plan = self:_Plan(dt, action, target, ourRootPart, clientCF, mode)
+                local plan = self:_Plan(dt, action, target, ourRootPart, clientCF, mode, fighter, characterController)
                 self:_ApplyPlan(plan, target, characterController, fighter)
                 self:_ApplyForcedCrouch(plan.shouldForceCrouch == true)
                 if plan.weaponAction ~= nil then
+                    if plan.kind == 'weapon' then
+                        self._weaponTransitionUntil = now + 0.35
+                        self._hitscanStrategy:ResetState()
+                        self._meleeStrategy:ResetState()
+                        if isUsableWeaponCFrame(safeCF) then
+                            characterController:SetServerCFrame(safeCF)
+                            characterController:HeartbeatUpdate()
+                        end
+                    end
                     plan.weaponAction()
+                    if plan.kind == 'weapon' and isUsableWeaponCFrame(safeCF) then
+                        characterController:SetServerCFrame(safeCF)
+                        characterController:HeartbeatUpdate()
+                    end
                 end
-                characterController:HeartbeatUpdate()
+                if plan.kind ~= 'weapon' or plan.weaponAction == nil then
+                    characterController:HeartbeatUpdate()
+                end
             end
             function Controller:GetLastTargetWorld()
                 return self._lastTargetWorld
@@ -2330,6 +2587,10 @@ return {
                 self._lastTargetAt = -math.huge
                 self._lastTargetWorld = nil
                 self._lastDefensiveViewAngles = nil
+                self._weaponTransitionUntil = 0
+                self._pendingWeaponKey = nil
+                self._lastEquippedKey = nil
+                self._lastSafeWeaponCF = nil
                 self:_ApplyForcedCrouch(false)
                 self._meleeStrategy:ResetState()
                 self._hitscanStrategy:ResetState()
@@ -2369,10 +2630,6 @@ return {
                     KiciaRagebot.CapsOk = __kicia_hook_genv.KiciaHookCaps.gate('Ragebot', 'getgc', 'sethiddenproperty')
                 end
                 if not KiciaRagebot.CapsOk then
-                    return false
-                end
-                local localDuel = FighterDataCache and FighterDataCache.LocalDuel
-                if localDuel and localDuel.Seeded and localDuel.IsInShootingRange == true then
                     return false
                 end
                 local keypicker = Options and Options.P8S4T1K
@@ -15648,7 +15905,7 @@ ErrorReporter.set_game(GameName)
                 BoundPageControllers = {},
                 BoundPageFrames = {},
                 Profiles = {},
-                ConfigName = 'RIVALS Default',
+                ConfigName = nil,
                 RefreshingDropdownValues = 0,
             }
             local RivalsCosmeticsState = {
@@ -15675,7 +15932,7 @@ ErrorReporter.set_game(GameName)
                 PreviewViewportModel = nil,
                 CosmeticsUiLoaded = false,
                 CosmeticsUiLoading = false,
-                CosmeticsConfigName = 'RIVALS Default',
+                CosmeticsConfigName = nil,
                 BoundFirstPersonModels = false,
                 PlayerDataController = nil,
                 PlayerDataRestore = nil,
@@ -17109,7 +17366,13 @@ ErrorReporter.set_game(GameName)
                 end
             end
             function RivalsAutoLoadout.LoadProfilesFromConfig()
-                local configPath = ScriptPaths.config_path(RivalsAutoLoadoutState.ConfigName or 'RIVALS Default')
+                local configName = RivalsAutoLoadoutState.ConfigName
+                if type(configName) ~= 'string' or configName == '' then
+                    RivalsAutoLoadout.NormalizeProfiles({})
+                    RivalsAutoLoadout.RefreshDropdownOptions()
+                    return false
+                end
+                local configPath = ScriptPaths.config_path(configName)
                 if not isfile(configPath) then
                     RivalsAutoLoadout.NormalizeProfiles({})
                     RivalsAutoLoadout.RefreshDropdownOptions()
@@ -17138,7 +17401,13 @@ ErrorReporter.set_game(GameName)
                 return profiles ~= nil
             end
             function RivalsAutoLoadout.SaveProfilesToConfig()
-                local configPath = ScriptPaths.config_path(RivalsAutoLoadoutState.ConfigName or 'RIVALS Default')
+                local configName = RivalsAutoLoadoutState.ConfigName
+                if type(configName) ~= 'string' or configName == '' then
+                    RivalsAutoLoadout.NormalizeProfiles({})
+                    RivalsAutoLoadout.RefreshDropdownOptions()
+                    return false
+                end
+                local configPath = ScriptPaths.config_path(configName)
                 if not isfile(configPath) then
                     return false
                 end
@@ -21140,7 +21409,11 @@ ErrorReporter.set_game(GameName)
                 return true
             end
             function RivalsCosmetics.LoadSavedSelectionsFromConfig()
-                local configPath = ScriptPaths.config_path(RivalsCosmeticsState.CosmeticsConfigName or 'RIVALS Default')
+                local configName = RivalsCosmeticsState.CosmeticsConfigName
+                if type(configName) ~= 'string' or configName == '' then
+                    return false
+                end
+                local configPath = ScriptPaths.config_path(configName)
                 if not isfile(configPath) then
                     return false
                 end
@@ -21275,7 +21548,11 @@ ErrorReporter.set_game(GameName)
                 return objectsById
             end
             function RivalsCosmetics.SaveSelectionsToConfig()
-                local configPath = ScriptPaths.config_path(RivalsCosmeticsState.CosmeticsConfigName or 'RIVALS Default')
+                local configName = RivalsCosmeticsState.CosmeticsConfigName
+                if type(configName) ~= 'string' or configName == '' then
+                    return false
+                end
+                local configPath = ScriptPaths.config_path(configName)
                 if not isfile(configPath) then
                     RivalsCosmeticsState.SavedConfigCosmeticObjects = nil
                     return false
@@ -22961,7 +23238,7 @@ ErrorReporter.set_game(GameName)
                 RivalsCosmeticsState.ApplyingCosmeticPreset = false
                 RivalsCosmeticsState.CosmeticsUiLoaded = false
                 RivalsCosmeticsState.CosmeticsUiLoading = false
-                RivalsCosmeticsState.CosmeticsConfigName = 'RIVALS Default'
+                RivalsCosmeticsState.CosmeticsConfigName = nil
                 RivalsCosmeticsState.NativeUnlockedInventory = nil
                 RivalsCosmeticsState.NativeFavoritesSeeded = false
                 RivalsCosmeticsState.NativeSaveToken = RivalsCosmeticsState.NativeSaveToken + 1
@@ -26068,69 +26345,124 @@ MenuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', {
     Text = 'Menu keybind',
 })
 Library.ToggleKeybind = Options.MenuKeybind
+local RivalsRuntimeReconcile = nil
 ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
 SaveManager:IgnoreThemeSettings()
 SaveManager:SetIgnoreIndexes({ 'MenuKeybind', 'P1S32D1', 'P1S26D6', 'P1S14D1' })
 ThemeManager:SetFolder(ScriptPaths.storage_root())
-SaveManager:SetFolder(ScriptPaths.storage_root() .. '/settings')
+SaveManager:SetFolder(ScriptPaths.storage_root())
 SaveManager:BuildConfigSection(Tabs.Settings)
 ThemeManager:ApplyToTab(Tabs.Settings)
-SaveManager:LoadAutoloadConfig()
 
-local function CreateSharedUIAdapter(args)
-    local names = args.config_names or { 'Legit', 'Rage' }
-    local shared = {}
-    function shared:get_config_names()
-        return names
-    end
-    function shared:should_auto_load_config()
+local NativeSaveManagerSave = SaveManager.Save
+local NativeSaveManagerLoad = SaveManager.Load
+local ConfigOperationBusy = false
+
+local function SetActiveRivalsConfigName(configName)
+    if type(configName) ~= 'string' or configName == '' then
         return false
     end
-    function shared:resolve_load_config_name()
-        return args.default_config_name or args.current_config_name
+    if RivalsRuntimeBridge.SetRivalsCosmeticsConfigName then
+        pcall(RivalsRuntimeBridge.SetRivalsCosmeticsConfigName, configName)
     end
-    function shared:resolve_save_config_name()
-        return args.current_config_name
-    end
-    function shared:register_callbacks()
-        return true
-    end
-    function shared:reconcile_loaded_ui_settings()
-        return true
-    end
-    function shared:with_config_load_suspended(fn)
-        return fn()
-    end
-    function shared:notify_loaded(duration)
-        if type(Library.Notify) == 'function' then
-            Library:Notify({ Title = 'Kicia', Description = 'Loaded', Time = duration or 5 })
-        end
-    end
-    return shared
-end
-local function PrepareSharedConfig(args)
-    local sm = args.save_manager
-    local defaultName = args.default_config_name
-    if isfile and type(args.script_paths.config_path) == 'function' and not isfile(args.script_paths.config_path(defaultName)) then
-        pcall(function() sm:Save(defaultName) end)
-    end
-    if args.shared_ui and type(args.shared_ui.get_config_names) == 'function' then
-        for _, configName in ipairs(args.shared_ui:get_config_names()) do
-            local path = args.script_paths.config_path(configName)
-            if isfile and not isfile(path) then
-                local ok
-                if type(args.reset_config_to_default) == 'function' then
-                    ok = args.reset_config_to_default(args.shared_ui, configName)
-                end
-                if ok == false or ok == nil then
-                    pcall(function() sm:Save(configName) end)
-                end
-            end
-        end
+    if RivalsRuntimeBridge.SetAutoLoadoutConfigName then
+        pcall(RivalsRuntimeBridge.SetAutoLoadoutConfigName, configName)
     end
     return true
 end
+
+local function SaveRivalsConfigMetadata()
+    local errors = {}
+    if RivalsRuntimeBridge.SaveRivalsCosmeticsSelections then
+        local ok, result = pcall(RivalsRuntimeBridge.SaveRivalsCosmeticsSelections)
+        if not ok or result == false then
+            errors[#errors + 1] = 'cosmetics'
+        end
+    end
+    if RivalsRuntimeBridge.SaveAutoLoadoutProfiles then
+        local ok, result = pcall(RivalsRuntimeBridge.SaveAutoLoadoutProfiles)
+        if not ok or result == false then
+            errors[#errors + 1] = 'autoloadout'
+        end
+    end
+    if #errors > 0 then
+        return false, table.concat(errors, ', ')
+    end
+    return true
+end
+
+local function LoadRivalsConfigMetadata()
+    if RivalsRuntimeBridge.LoadSavedRivalsCosmeticsSelections then
+        pcall(RivalsRuntimeBridge.LoadSavedRivalsCosmeticsSelections)
+    end
+    if RivalsRuntimeBridge.LoadAutoLoadoutProfiles then
+        pcall(RivalsRuntimeBridge.LoadAutoLoadoutProfiles)
+    end
+    if RivalsRuntimeBridge.RefreshRivalsCosmetics then
+        pcall(RivalsRuntimeBridge.RefreshRivalsCosmetics)
+    end
+    if RivalsRuntimeBridge.ApplyRivalsCosmetics then
+        pcall(RivalsRuntimeBridge.ApplyRivalsCosmetics)
+    end
+    if RivalsRuntimeReconcile then
+        pcall(RivalsRuntimeReconcile)
+    end
+end
+
+function SaveManager:Save(configName)
+    if ConfigOperationBusy then
+        return false, 'Config operation already in progress'
+    end
+    if type(configName) ~= 'string' or configName:gsub('^%s+', '') == '' then
+        return false, 'Invalid config name provided'
+    end
+    ConfigOperationBusy = true
+    local cleanName = configName:gsub('^%s+', ''):gsub('%s+$', '')
+    SetActiveRivalsConfigName(cleanName)
+    local ok, err = NativeSaveManagerSave(self, cleanName)
+    if not ok then
+        ConfigOperationBusy = false
+        return false, err
+    end
+    local metadataOk, metadataErr = SaveRivalsConfigMetadata()
+    ConfigOperationBusy = false
+    if not metadataOk then
+        return false, 'Base config saved, but metadata sync failed: ' .. tostring(metadataErr)
+    end
+    return true
+end
+
+function SaveManager:Load(configName)
+    if ConfigOperationBusy then
+        return false, 'Config operation already in progress'
+    end
+    if type(configName) ~= 'string' or configName:gsub('^%s+', '') == '' then
+        return false, 'No config is selected'
+    end
+    ConfigOperationBusy = true
+    local cleanName = configName:gsub('^%s+', ''):gsub('%s+$', '')
+    SetActiveRivalsConfigName(cleanName)
+    local ok, err = NativeSaveManagerLoad(self, cleanName)
+    ConfigOperationBusy = false
+    if not ok then
+        return false, err
+    end
+    task.defer(LoadRivalsConfigMetadata)
+    return true
+end
+
+if Options.SaveManager_ConfigName then
+    Options.SaveManager_ConfigName:OnChanged(function(value)
+        SetActiveRivalsConfigName(value)
+    end)
+end
+if Options.SaveManager_ConfigList then
+    Options.SaveManager_ConfigList:OnChanged(function(value)
+        SetActiveRivalsConfigName(value)
+    end)
+end
+
 local RivalsRuntime = {}
             function RivalsRuntime.ResetState()
                 RivalsRuntimeBridge.WorldVisuals.Destroy()
@@ -26333,573 +26665,7 @@ local RivalsRuntime = {}
             end
             function RivalsRuntime.Initialize(Window)
                 Connections = ConnectionRegistry.new()
-                local ReconcileLoadedState
-                local RivalsConfigProfiles = {
-                    Names = { 'Legit', 'Rage' },
-                }
-                local SharedConfigDefaultObjects = {
-                    { idx = 'P1S1T1', type = 'Toggle', value = true },
-                    { idx = 'P1S1T2', type = 'Toggle', value = true },
-                    { idx = 'P1S1T3', type = 'Toggle', value = true },
-                    { idx = 'P1S1T4', type = 'Toggle', value = true },
-                    { idx = 'P1S1T5', type = 'Toggle', value = true },
-                    { idx = 'P1S1T6', type = 'Toggle', value = true },
-                    { idx = 'P1S1T7', type = 'Toggle', value = false },
-                    { idx = 'P1S1T8', type = 'Toggle', value = true },
-                    { idx = 'P1S1T9', type = 'Toggle', value = true },
-                    { idx = 'P1S1T10', type = 'Toggle', value = false },
-                    { idx = 'P1S1T11', type = 'Toggle', value = true },
-                    { idx = 'P1S1C1', type = 'ColorPicker', value = '00ff00', transparency = 0 },
-                    { idx = 'P1S1C2', type = 'ColorPicker', value = 'ff0000', transparency = 0 },
-                    { idx = 'P1S1C4', type = 'ColorPicker', value = 'ffff00', transparency = 0 },
-                    { idx = 'P1S1S3', type = 'Slider', value = 1 },
-                    { idx = 'P1S1S4', type = 'Slider', value = 0 },
-                    { idx = 'P1S2T1', type = 'Toggle', value = true },
-                    { idx = 'P1S2T2', type = 'Toggle', value = true },
-                    { idx = 'P1S2T4', type = 'Toggle', value = true },
-                    { idx = 'P1S2T5', type = 'Toggle', value = true },
-                    { idx = 'P1S2T6', type = 'Toggle', value = true },
-                    { idx = 'P1S3T1', type = 'Toggle', value = false },
-                    { idx = 'P1S3D1', type = 'Dropdown', value = 'Enemies' },
-                    { idx = 'P1S3T2', type = 'Toggle', value = true },
-                    { idx = 'P1S3T3', type = 'Toggle', value = true },
-                    { idx = 'P1S3S1', type = 'Slider', value = 0.05 },
-                    { idx = 'P1S3C1', type = 'ColorPicker', value = 'ffd250', transparency = 0 },
-                    { idx = 'P1S3C2', type = 'ColorPicker', value = 'ff5a5a', transparency = 0 },
-                    { idx = 'P1S4T2', type = 'Toggle', value = false },
-                    { idx = 'P1S4C1', type = 'ColorPicker', value = '3bcbff', transparency = 0 },
-                    { idx = 'P1S4C2', type = 'ColorPicker', value = '01668b', transparency = 0 },
-                    { idx = 'P1S4T3', type = 'Toggle', value = false },
-                    { idx = 'P1S4S1', type = 'Slider', value = 12 },
-                    { idx = 'P1S4T4', type = 'Toggle', value = false },
-                    { idx = 'P1S4S2', type = 'Slider', value = 2 },
-                    { idx = 'P1S4T5', type = 'Toggle', value = false },
-                    { idx = 'P1S4C3', type = 'ColorPicker', value = '64a0ff', transparency = 0 },
-                    { idx = 'P1S4C4', type = 'ColorPicker', value = '14285a', transparency = 0 },
-                    { idx = 'P1S4T6', type = 'Toggle', value = false },
-                    { idx = 'P1S4S3', type = 'Slider', value = 0 },
-                    { idx = 'P1S4T7', type = 'Toggle', value = false },
-                    { idx = 'P1S4S4', type = 'Slider', value = 0 },
-                    { idx = 'P1S4T8', type = 'Toggle', value = false },
-                    { idx = 'P1S4S5', type = 'Slider', value = 0 },
-                    { idx = 'P1S5T1', type = 'Toggle', value = false },
-                    { idx = 'P1S5C1', type = 'ColorPicker', value = 'c0c0c0', transparency = 0 },
-                    { idx = 'P1S5S1', type = 'Slider', value = 0 },
-                    { idx = 'P1S5S2', type = 'Slider', value = 10000 },
-                    { idx = 'P1S5T2', type = 'Toggle', value = false },
-                    { idx = 'P1S5S3', type = 'Slider', value = 41.733 },
-                    { idx = 'P1S5T3', type = 'Toggle', value = false },
-                    { idx = 'P1S5T4', type = 'Toggle', value = false },
-                    { idx = 'P1S5S4', type = 'Slider', value = 0.5 },
-                    { idx = 'P1S5T5', type = 'Toggle', value = false },
-                    { idx = 'P1S5D1', type = 'Dropdown', value = 'Realistic' },
-                    { idx = 'P1S5T6', type = 'Toggle', value = false },
-                    { idx = 'P1S5C2', type = 'ColorPicker', value = 'b3b3b8', transparency = 0 },
-                    { idx = 'P1S5T7', type = 'Toggle', value = false },
-                    { idx = 'P1S6T1', type = 'Toggle', value = false },
-                    { idx = 'P1S6S1', type = 'Slider', value = 0.4 },
-                    { idx = 'P1S6S2', type = 'Slider', value = 24 },
-                    { idx = 'P1S6S3', type = 'Slider', value = 0.95 },
-                    { idx = 'P1S7T1', type = 'Toggle', value = false },
-                    { idx = 'P1S7C1', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
-                    { idx = 'P1S7S1', type = 'Slider', value = 0 },
-                    { idx = 'P1S7S2', type = 'Slider', value = 0 },
-                    { idx = 'P1S7S3', type = 'Slider', value = 0 },
-                    { idx = 'P1S8T1', type = 'Toggle', value = false },
-                    { idx = 'P1S8D1', type = 'Dropdown', value = 'Default' },
-                    { idx = 'P1S10T1', type = 'Toggle', value = false },
-                    { idx = 'P1S10S1', type = 'Slider', value = 0.25 },
-                    { idx = 'P1S10S2', type = 'Slider', value = 1 },
-                    { idx = 'P1S12T1', type = 'Toggle', value = false },
-                    { idx = 'P1S12D1', type = 'Dropdown', value = '' },
-                    { idx = 'P1S13T1', type = 'Toggle', value = false },
-                    { idx = 'P1S13C1', type = 'ColorPicker', value = 'c8aa6c', transparency = 0 },
-                    { idx = 'P1S13C2', type = 'ColorPicker', value = '5c3c0e', transparency = 0 },
-                    { idx = 'P1S13S1', type = 'Slider', value = 0.395 },
-                    { idx = 'P1S13S2', type = 'Slider', value = 0 },
-                    { idx = 'P1S13S3', type = 'Slider', value = 0 },
-                    { idx = 'P1S13S4', type = 'Slider', value = 0 },
-                    { idx = 'P1S14T1', type = 'Toggle', value = false },
-                    { idx = 'P1S14I1', type = 'Input', text = '' },
-                    { idx = 'P1S14S1', type = 'Slider', value = 1 },
-                    { idx = 'P1S28T1', type = 'Toggle', value = false },
-                    { idx = 'P1S28D1', type = 'Dropdown', value = 'Snow' },
-                    { idx = 'P1S28C1', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
-                    { idx = 'P1S28S1', type = 'Slider', value = 1 },
-                    { idx = 'P1S28S2', type = 'Slider', value = 1 },
-                    { idx = 'P1S28S3', type = 'Slider', value = 1 },
-                    { idx = 'P1S28S4', type = 'Slider', value = 1 },
-                    { idx = 'P1S28S5', type = 'Slider', value = 0.6 },
-                    { idx = 'P1S28S6', type = 'Slider', value = 3 },
-                    { idx = 'P1S28S7', type = 'Slider', value = 45 },
-                    { idx = 'P1S28S8', type = 'Slider', value = 0 },
-                    { idx = 'P1S28S9', type = 'Slider', value = 0 },
-                    { idx = 'P1S29T1', type = 'Toggle', value = false },
-                    { idx = 'P1S29C1', type = 'ColorPicker', value = 'd6e6ff', transparency = 0 },
-                    { idx = 'P1S29S1', type = 'Slider', value = 2 },
-                    { idx = 'P1S29S2', type = 'Slider', value = 80 },
-                    { idx = 'P1S29S3', type = 'Slider', value = 220 },
-                    { idx = 'P1S29S4', type = 'Slider', value = 4 },
-                    { idx = 'P1S29S5', type = 'Slider', value = 7 },
-                    { idx = 'P1S29S6', type = 'Slider', value = 12 },
-                    { idx = 'P1S29S7', type = 'Slider', value = 8 },
-                    { idx = 'P1S29T2', type = 'Toggle', value = true },
-                    { idx = 'P1S29C2', type = 'ColorPicker', value = 'eef6ff', transparency = 0 },
-                    { idx = 'P1S29S8', type = 'Slider', value = 18 },
-                    { idx = 'P1S29S9', type = 'Slider', value = 2.2 },
-                    { idx = 'P1S29S10', type = 'Slider', value = 22 },
-                    { idx = 'P1S29S11', type = 'Slider', value = 22 },
-                    { idx = 'P1S29S12', type = 'Slider', value = 4 },
-                    { idx = 'P1S29T3', type = 'Toggle', value = true },
-                    { idx = 'P1S29C3', type = 'ColorPicker', value = 'eec8ff', transparency = 0 },
-                    { idx = 'P1S29S13', type = 'Slider', value = 0.45 },
-                    { idx = 'P1S29S14', type = 'Slider', value = 14 },
-                    { idx = 'P1S29T4', type = 'Toggle', value = true },
-                    { idx = 'P1S29S15', type = 'Slider', value = 1 },
-                    { idx = 'P1S29T5', type = 'Toggle', value = true },
-                    { idx = 'P1S29I1', type = 'Input', text = '' },
-                    { idx = 'P1S30T1', type = 'Toggle', value = false },
-                    { idx = 'P1S30S1', type = 'Slider', value = 1 },
-                    { idx = 'P1S30S2', type = 'Slider', value = 1 },
-                    { idx = 'P1S31T1', type = 'Toggle', value = false },
-                    { idx = 'P1S31T2', type = 'Toggle', value = false },
-                    { idx = 'P1S31T3', type = 'Toggle', value = false },
-                    { idx = 'P1S31T4', type = 'Toggle', value = false },
-                    { idx = 'P1S31T5', type = 'Toggle', value = false },
-                    { idx = 'P1S15T1', type = 'Toggle', value = false },
-                    { idx = 'P1S15T2', type = 'Toggle', value = false },
-                    { idx = 'P1S15D1', type = 'Dropdown', value = '' },
-                    { idx = 'P1S15S1', type = 'Slider', value = 1 },
-                    { idx = 'P1S15S2', type = 'Slider', value = 1 },
-                    { idx = 'P1S15D2', type = 'Dropdown', value = '' },
-                    { idx = 'P1S15S3', type = 'Slider', value = 1 },
-                    { idx = 'P1S15S4', type = 'Slider', value = 1 },
-                    { idx = 'P1S15T3', type = 'Toggle', value = false },
-                    { idx = 'P1S15T4', type = 'Toggle', value = false },
-                    { idx = 'P1S15C1', type = 'ColorPicker', value = 'ff0000', transparency = 0 },
-                    { idx = 'P1S15S5', type = 'Slider', value = 0.8 },
-                    { idx = 'P1S15D3', type = 'Dropdown', value = 'Ghost' },
-                    { idx = 'P1S16T1', type = 'Toggle', value = false },
-                    { idx = 'P1S16T2', type = 'Toggle', value = false },
-                    { idx = 'P1S16D1', type = 'Dropdown', value = '' },
-                    { idx = 'P1S16S1', type = 'Slider', value = 1 },
-                    { idx = 'P1S16S2', type = 'Slider', value = 1 },
-                    { idx = 'P1S16T3', type = 'Toggle', value = false },
-                    { idx = 'P1S16C1', type = 'ColorPicker', value = 'ff0000', transparency = 0 },
-                    { idx = 'P1S16S3', type = 'Slider', value = 0.8 },
-                    { idx = 'P1S16D2', type = 'Dropdown', value = 'Ghost' },
-                    { idx = 'P1S18T1', type = 'Toggle', value = false },
-                    { idx = 'P1S18C1', type = 'ColorPicker', value = '78dcff', transparency = 0 },
-                    { idx = 'P1S18D1', type = 'Dropdown', value = 'Beam' },
-                    { idx = 'P1S18S1', type = 'Slider', value = 0.06 },
-                    { idx = 'P1S18S2', type = 'Slider', value = 4 },
-                    { idx = 'P1S18S3', type = 'Slider', value = 1 },
-                    { idx = 'P1S18S4', type = 'Slider', value = 1 },
-                    { idx = 'P1S18S5', type = 'Slider', value = 1 },
-                    { idx = 'P1S18S6', type = 'Slider', value = 0.6 },
-                    { idx = 'P1S18S7', type = 'Slider', value = 0.35 },
-                    { idx = 'P1S18T2', type = 'Toggle', value = true },
-                    { idx = 'P1S18S8', type = 'Slider', value = 18 },
-                    { idx = 'P1S18S9', type = 'Slider', value = 0.7 },
-                    { idx = 'P1S19T1', type = 'Toggle', value = false },
-                    { idx = 'P1S19D1', type = 'Dropdown', value = 'Ghost' },
-                    { idx = 'P1S19C1', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
-                    { idx = 'P1S19S1', type = 'Slider', value = 0 },
-                    { idx = 'P1S19T2', type = 'Toggle', value = false },
-                    { idx = 'P1S20T1', type = 'Toggle', value = false },
-                    { idx = 'P1S20D1', type = 'Dropdown', value = 'Ghost' },
-                    { idx = 'P1S20C1', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
-                    { idx = 'P1S20S1', type = 'Slider', value = 0 },
-                    { idx = 'P1S20T2', type = 'Toggle', value = true },
-                    { idx = 'P1S21T1', type = 'Toggle', value = false },
-                    { idx = 'P1S21D1', type = 'Dropdown', value = 'Ghost' },
-                    { idx = 'P1S21C1', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
-                    { idx = 'P1S21S1', type = 'Slider', value = 0 },
-                    { idx = 'P1S21T2', type = 'Toggle', value = false },
-                    { idx = 'P1S22T1', type = 'Toggle', value = false },
-                    { idx = 'P1S22C1', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
-                    { idx = 'P1S22S1', type = 'Slider', value = 0.5 },
-                    { idx = 'P1S22C2', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
-                    { idx = 'P1S22S2', type = 'Slider', value = 0 },
-                    { idx = 'P1S23T1', type = 'Toggle', value = false },
-                    { idx = 'P1S23C1', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
-                    { idx = 'P1S23S1', type = 'Slider', value = 0.5 },
-                    { idx = 'P1S23C2', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
-                    { idx = 'P1S23S2', type = 'Slider', value = 0 },
-                    { idx = 'P1S26T1', type = 'Toggle', value = false },
-                    { idx = 'P1S26D1', type = 'Dropdown', value = 'Lines' },
-                    { idx = 'P1S26S1', type = 'Slider', value = 12 },
-                    { idx = 'P1S26S2', type = 'Slider', value = 2 },
-                    { idx = 'P1S26S3', type = 'Slider', value = 6 },
-                    { idx = 'P1S26T2', type = 'Toggle', value = false },
-                    { idx = 'P1S26C1', type = 'ColorPicker', value = '000000', transparency = 0 },
-                    { idx = 'P1S26S11', type = 'Slider', value = 1 },
-                    { idx = 'P1S26T3', type = 'Toggle', value = true },
-                    { idx = 'P1S26C2', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
-                    { idx = 'P1S26T4', type = 'Toggle', value = true },
-                    { idx = 'P1S26C3', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
-                    { idx = 'P1S26T5', type = 'Toggle', value = true },
-                    { idx = 'P1S26C4', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
-                    { idx = 'P1S26T6', type = 'Toggle', value = true },
-                    { idx = 'P1S26C5', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
-                    { idx = 'P1S26T7', type = 'Toggle', value = false },
-                    { idx = 'P1S26S8', type = 'Slider', value = 4 },
-                    { idx = 'P1S26S9', type = 'Slider', value = 16 },
-                    { idx = 'P1S26S10', type = 'Slider', value = 3 },
-                    { idx = 'P1S26T8', type = 'Toggle', value = false },
-                    { idx = 'P1S26S4', type = 'Slider', value = 0 },
-                    { idx = 'P1S26S5', type = 'Slider', value = 90 },
-                    { idx = 'P1S26I1', type = 'Input', text = '' },
-                    { idx = 'P1S26S6', type = 'Slider', value = 32 },
-                    { idx = 'P1S26S7', type = 'Slider', value = 0 },
-                    { idx = 'P1S26T9', type = 'Toggle', value = false },
-                    { idx = 'P1S26D2', type = 'Dropdown', value = 'Crosshair' },
-                    { idx = 'P1S26T10', type = 'Toggle', value = false },
-                    { idx = 'P1S26D3', type = 'Dropdown', value = 'Shimmer' },
-                    { idx = 'P1S26S12', type = 'Slider', value = 1 },
-                    { idx = 'P1S26C6', type = 'ColorPicker', value = '282828', transparency = 0 },
-                    { idx = 'P1S26C7', type = 'ColorPicker', value = 'ff0000', transparency = 0 },
-                    { idx = 'P1S26C8', type = 'ColorPicker', value = '0000ff', transparency = 0 },
-                    { idx = 'P1S26C9', type = 'ColorPicker', value = '000000', transparency = 0 },
-                    { idx = 'P1S26C10', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
-                    { idx = 'P1S26S13', type = 'Slider', value = 0 },
-                    { idx = 'P1S26T11', type = 'Toggle', value = false },
-                    { idx = 'P1S26I2', type = 'Input', text = '' },
-                    { idx = 'P1S26D4', type = 'Dropdown', value = 'Inconsolata' },
-                    { idx = 'P1S26S14', type = 'Slider', value = 14 },
-                    { idx = 'P1S26S15', type = 'Slider', value = 24 },
-                    { idx = 'P1S26C11', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
-                    { idx = 'P1S26T12', type = 'Toggle', value = false },
-                    { idx = 'P1S26C12', type = 'ColorPicker', value = '000000', transparency = 0 },
-                    { idx = 'P1S26S16', type = 'Slider', value = 1 },
-                    { idx = 'P1S26T13', type = 'Toggle', value = false },
-                    { idx = 'P1S26D5', type = 'Dropdown', value = 'Shimmer' },
-                    { idx = 'P1S26S17', type = 'Slider', value = 1 },
-                    { idx = 'P1S26C13', type = 'ColorPicker', value = '282828', transparency = 0 },
-                    { idx = 'P1S26C14', type = 'ColorPicker', value = '000000', transparency = 0 },
-                    { idx = 'P1S26C15', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
-                    { idx = 'P1S26S18', type = 'Slider', value = 0 },
-                    { idx = 'P1S27T1', type = 'Toggle', value = false },
-                    { idx = 'P1S27T2', type = 'Toggle', value = false },
-                    { idx = 'P1S27T3', type = 'Toggle', value = false },
-                    { idx = 'P1S27T4', type = 'Toggle', value = false },
-                    { idx = 'P1S27T5', type = 'Toggle', value = false },
-                    { idx = 'P1S27T6', type = 'Toggle', value = false },
-                    { idx = 'P1S27T7', type = 'Toggle', value = false },
-                    { idx = 'P1S27T8', type = 'Toggle', value = false },
-                    { idx = 'P2S1T1', type = 'Toggle', value = true },
-                    { idx = 'P2S1T1K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
-                    { idx = 'P2S1D1', type = 'Dropdown', value = 'Silent' },
-                    { idx = 'P2S1T3', type = 'Toggle', value = true },
-                    { idx = 'P2S1T5', type = 'Toggle', value = true },
-                    { idx = 'P2S1D2', type = 'Dropdown', value = 'Auto' },
-                    { idx = 'P2S1T12', type = 'Toggle', value = false },
-                    { idx = 'P2S1T12K', type = 'KeyPicker', mode = 'Hold', key = 'Unknown', modifiers = {} },
-                    { idx = 'P2S1T13', type = 'Toggle', value = false },
-                    { idx = 'P2S1S8', type = 'Slider', value = 0 },
-                    { idx = 'P2S1S9', type = 'Slider', value = 250 },
-                    { idx = 'P2S1S10', type = 'Slider', value = 110 },
-                    { idx = 'P2S1S11', type = 'Slider', value = 12 },
-                    { idx = 'P2S1S12', type = 'Slider', value = 30 },
-                    { idx = 'P2S1S2', type = 'Slider', value = 282 },
-                    { idx = 'P2S1T6', type = 'Toggle', value = false },
-                    { idx = 'P2S1T7K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
-                    { idx = 'P2S1S7', type = 'Slider', value = 0 },
-                    { idx = 'P2S1T8', type = 'Toggle', value = true },
-                    { idx = 'P2S1T9', type = 'Toggle', value = true },
-                    { idx = 'P2S1D4', type = 'Dropdown', multi = true, value = {
-                        ['Flare Gun'] = true,
-                        ['Freeze Ray'] = true,
-                        ['Grenade Launcher'] = true,
-                        RPG = true,
-                    } },
-                    { idx = 'P2S2S1', type = 'Slider', value = 35 },
-                    { idx = 'P4S1T1', type = 'Toggle', value = true },
-                    { idx = 'P4S1S4', type = 'Slider', value = 85 },
-                    { idx = 'P4S1T2', type = 'Toggle', value = true },
-                    { idx = 'P4S1S3', type = 'Slider', value = 20 },
-                    { idx = 'P4S1T3', type = 'Toggle', value = false },
-                    { idx = 'P4S1T4', type = 'Toggle', value = false },
-                    { idx = 'P4S1S2', type = 'Slider', value = 100 },
-                    { idx = 'P4S1T5', type = 'Toggle', value = false },
-                    { idx = 'P4S1S5', type = 'Slider', value = 75 },
-                    { idx = 'P4S1T6', type = 'Toggle', value = false },
-                    { idx = 'P4S1D1', type = 'Dropdown', value = 'Impact' },
-                    { idx = 'P4S1T7', type = 'Toggle', value = false },
-                    { idx = 'P4S2T2', type = 'Toggle', value = true },
-                    { idx = 'P4S2S2', type = 'Slider', value = 85 },
-                    { idx = 'P4S2T3', type = 'Toggle', value = true },
-                    { idx = 'P4S2S3', type = 'Slider', value = 80 },
-                    { idx = 'P4S2T4', type = 'Toggle', value = false },
-                    { idx = 'P4S2T5', type = 'Toggle', value = false },
-                    { idx = 'P4S2T6', type = 'Toggle', value = false },
-                    { idx = 'P4S2T8', type = 'Toggle', value = false },
-                    { idx = 'P4S2T9', type = 'Toggle', value = false },
-                    { idx = 'P4S2S4', type = 'Slider', value = 80 },
-                    { idx = 'P4S2T10', type = 'Toggle', value = false },
-                    { idx = 'P4S2S5', type = 'Slider', value = 0 },
-                    { idx = 'P4S2S6', type = 'Slider', value = 0 },
-                    { idx = 'P4S2S7', type = 'Slider', value = 0 },
-                    { idx = 'P8S1T1', type = 'Toggle', value = true },
-                    { idx = 'P8S1T2', type = 'Toggle', value = true },
-                    { idx = 'P8S8T1', type = 'Toggle', value = false },
-                    { idx = 'P8S8T2', type = 'Toggle', value = false },
-                    { idx = 'P8S4T3', type = 'Toggle', value = false },
-                    { idx = 'P8S4T1K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
-                    { idx = 'P8S4T4', type = 'Toggle', value = false },
-                    { idx = 'P8S4S1', type = 'Slider', value = 0.15 },
-                    { idx = 'P8S4S2', type = 'Slider', value = 1 },
-                    { idx = 'P8S4T5', type = 'Toggle', value = true },
-                    { idx = 'P8S4T6', type = 'Toggle', value = true },
-                    { idx = 'P8S4T7', type = 'Toggle', value = true },
-                    { idx = 'P8S4D1', type = 'Dropdown', value = 'SwapOrReload' },
-                    { idx = 'P8S4D2', type = 'Dropdown', value = 'Random' },
-                    { idx = 'P8S4T8', type = 'Toggle', value = false },
-                    { idx = 'P8S4S4', type = 'Slider', value = 100 },
-                    { idx = 'P8S4S5', type = 'Slider', value = 0.5 },
-                    { idx = 'P8S4S3', type = 'Slider', value = -5 },
-                    { idx = 'P8S5T3', type = 'Toggle', value = false },
-                    { idx = 'P8S5D7', type = 'Dropdown', value = RivalsRuntimeBridge.ResolveAutoLoadoutMapValues()[1] },
-                    { idx = 'P8S5T4', type = 'Toggle', value = false },
-                    { idx = 'P8S5D8', type = 'Dropdown', value = '1' },
-                    { idx = 'P8S5D1', type = 'Dropdown', value = RivalsRuntimeBridge.ResolveAutoLoadoutDefaultWeapon('Primary') },
-                    { idx = 'P8S5D2', type = 'Dropdown', value = RivalsRuntimeBridge.ResolveAutoLoadoutDefaultWeapon('Secondary') },
-                    { idx = 'P8S5D3', type = 'Dropdown', value = RivalsRuntimeBridge.ResolveAutoLoadoutDefaultWeapon('Melee') },
-                    { idx = 'P8S5D4', type = 'Dropdown', value = RivalsRuntimeBridge.ResolveAutoLoadoutDefaultWeapon('Utility') },
-                    { idx = 'P8S5T2', type = 'Toggle', value = false },
-                    { idx = 'P8S5D5', type = 'Dropdown', multi = true, value = {} },
-                    { idx = 'P8S5D6', type = 'Dropdown', multi = true, value = {} },
-                    { idx = 'P8S5T5', type = 'Toggle', value = false },
-                    { idx = 'P8S5D9', type = 'Dropdown', multi = true, value = {} },
-                    { idx = 'P8S6D1', type = 'Dropdown', value = '1v1' },
-                    { idx = 'P9S2T1', type = 'Toggle', value = false },
-                    { idx = 'P9S2T2', type = 'Toggle', value = true },
-                    { idx = 'P9S2T3', type = 'Toggle', value = true },
-                    { idx = 'P9S2T4', type = 'Toggle', value = true },
-                    { idx = 'P9S2T5', type = 'Toggle', value = true },
-                    { idx = 'P9S2T6', type = 'Toggle', value = true },
-                    { idx = 'P9S2T7', type = 'Toggle', value = true },
-                    { idx = 'P9S2T8', type = 'Toggle', value = true },
-                    { idx = 'P9S2T9', type = 'Toggle', value = true },
-                    { idx = 'P9S2T10', type = 'Toggle', value = true },
-                    { idx = 'P9S2T11', type = 'Toggle', value = true },
-                    { idx = 'P9S2T12', type = 'Toggle', value = false },
-                    { idx = 'P9S2T13', type = 'Toggle', value = false },
-                    { idx = 'P9S2T14', type = 'Toggle', value = true },
-                    { idx = 'P9S2T15', type = 'Toggle', value = true },
-                    { idx = 'P9S2T16', type = 'Toggle', value = true },
-                    { idx = 'P9S2T17', type = 'Toggle', value = true },
-                    { idx = 'P9S2T18', type = 'Toggle', value = true },
-                    { idx = 'P9S2T19', type = 'Toggle', value = false },
-                    { idx = 'P9S3T1', type = 'Toggle', value = false },
-                    { idx = 'P10S3T1', type = 'Toggle', value = false },
-                    { idx = 'P10S3T1K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
-                    { idx = 'P10S3S1', type = 'Slider', value = 2 },
-                    { idx = 'P10S3T2', type = 'Toggle', value = false },
-                    { idx = 'P10S3T2K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
-                    { idx = 'P10S3S2', type = 'Slider', value = 10 },
-                    { idx = 'P10S3T3', type = 'Toggle', value = false },
-                    { idx = 'P10S3S3', type = 'Slider', value = 2 },
-                    { idx = 'P10S3T4', type = 'Toggle', value = false },
-                    { idx = 'P10S3T4K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
-                    { idx = 'P10S3S4', type = 'Slider', value = 100 },
-                    { idx = 'P10S3T5', type = 'Toggle', value = false },
-                    { idx = 'P10S3T5K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
-                    { idx = 'P10S3T6', type = 'Toggle', value = false },
-                    { idx = 'P10S3T6K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
-                    { idx = 'P10S3S5', type = 'Slider', value = 50 },
-                    { idx = 'P10S3T7', type = 'Toggle', value = false },
-                    { idx = 'P10S3T7K', type = 'KeyPicker', mode = 'Hold', key = 'Unknown', modifiers = {} },
-                    { idx = 'P10S3D1', type = 'Dropdown', value = 'Under Feet' },
-                    { idx = 'P10S3S6', type = 'Slider', value = 60 },
-                    { idx = 'P10S3S7', type = 'Slider', value = 20 },
-                    { idx = 'P10S3S8', type = 'Slider', value = 8 },
-                    { idx = 'P10S4T1', type = 'Toggle', value = false },
-                    { idx = 'P10S4T2', type = 'Toggle', value = false },
-                    { idx = 'P10S4T3', type = 'Toggle', value = false },
-                    { idx = 'P10S4S1', type = 'Slider', value = 3 },
-                    { idx = 'P10S4S2', type = 'Slider', value = 50 },
-                    { idx = 'P10S4S3', type = 'Slider', value = 180 },
-                    { idx = 'P10S4S4', type = 'Slider', value = 35 },
-                    { idx = 'P10S4S5', type = 'Slider', value = 0.2 },
-                    { idx = 'P10S4T4', type = 'Toggle', value = false },
-                    { idx = 'P10S4T4K', type = 'KeyPicker', mode = 'Toggle', key = 'Unknown', modifiers = {} },
-                    { idx = 'P10S4T5', type = 'Toggle', value = false },
-                    { idx = 'P10S4T5K', type = 'KeyPicker', mode = 'Toggle', key = 'Unknown', modifiers = {} },
-                    { idx = 'P10S4I1', type = 'Input', text = '' },
-                    { idx = 'P10S6T1', type = 'Toggle', value = false },
-                    { idx = 'P10S6I1', type = 'Input', text = '' },
-                    { idx = 'P10S6S1', type = 'Slider', value = 1 },
-                    { idx = 'P10S6S2', type = 'Slider', value = 0 },
-                    { idx = 'P10S6S3', type = 'Slider', value = 100 },
-                    { idx = 'P10S7T1', type = 'Toggle', value = false },
-                    { idx = 'P10S7D1', type = 'Dropdown', value = 'VR' },
-                    { idx = 'P10S2T1', type = 'Toggle', value = false },
-                    { idx = 'P10S2D1', type = 'Dropdown', multi = true, value = {} },
-                    { idx = 'P10S2D2', type = 'Dropdown', multi = true, value = {} },
-                    { idx = 'P10S2C1', type = 'ColorPicker', value = 'faaa46', transparency = 0 },
-                    { idx = 'P5S1T2', type = 'Toggle', value = false },
-                }
-                local ConfigProfileDefaults = {
-                    Legit = {
-                        { idx = 'P2S1T7', type = 'Toggle', value = false },
-                        { idx = 'P8S4T1', type = 'Toggle', value = false },
-                        { idx = 'P8S4T2', type = 'Toggle', value = false },
-                        { idx = 'P8S5T1', type = 'Toggle', value = false },
-                        { idx = 'P8S6T1', type = 'Toggle', value = false },
-                        { idx = 'P4S1T3', type = 'Toggle', value = false },
-                        { idx = 'P4S1T4', type = 'Toggle', value = false },
-                        { idx = 'P8S4T4', type = 'Toggle', value = false },
-                    },
-                    Rage = {
-                        { idx = 'P2S1T7', type = 'Toggle', value = true },
-                        { idx = 'P8S4T1', type = 'Toggle', value = true },
-                        { idx = 'P8S4T2', type = 'Toggle', value = true },
-                        { idx = 'P8S5T1', type = 'Toggle', value = true },
-                        { idx = 'P8S6T1', type = 'Toggle', value = true },
-                        { idx = 'P4S1T3', type = 'Toggle', value = true },
-                        { idx = 'P4S1T4', type = 'Toggle', value = true },
-                        { idx = 'P8S4T4', type = 'Toggle', value = true },
-                    },
-                }
-                local function CloneRivalsConfigProfileValue(value)
-                    if type(value) ~= 'table' then
-                        return value
-                    end
-                    local copy = {}
-                    for key, child in pairs(value) do
-                        copy[key] = CloneRivalsConfigProfileValue(child)
-                    end
-                    return copy
-                end
-                local function CloneRivalsConfigProfileObject(object)
-                    local copy = {}
-                    for key, value in pairs(object) do
-                        copy[key] = CloneRivalsConfigProfileValue(value)
-                    end
-                    return copy
-                end
-                local function BuildRivalsConfigProfileDefaultObjects(config_name)
-                    local profile_defaults = ConfigProfileDefaults[config_name]
-                    if type(profile_defaults) ~= 'table' then
-                        return nil
-                    end
-                    local objects = {}
-                    local indexes_by_id = {}
-                    local function upsert(object)
-                        if type(object) ~= 'table' or type(object.idx) ~= 'string' then
-                            return
-                        end
-                        local cloned = CloneRivalsConfigProfileObject(object)
-                        local existing_index = indexes_by_id[cloned.idx]
-                        if existing_index then
-                            objects[existing_index] = cloned
-                        else
-                            indexes_by_id[cloned.idx] = #objects + 1
-                            objects[#objects + 1] = cloned
-                        end
-                    end
-                    for _, object in ipairs(SharedConfigDefaultObjects) do
-                        upsert(object)
-                    end
-                    for _, object in ipairs(profile_defaults) do
-                        upsert(object)
-                    end
-                    return objects
-                end
-                local function WriteRivalsConfigProfileDefault(config_name)
-                    local objects = BuildRivalsConfigProfileDefaultObjects(config_name)
-                    if not objects then
-                        return false, 'unknown RIVALS config profile: ' .. tostring(config_name)
-                    end
-                    local settings_folder = ScriptPaths.storage_root() .. '/settings'
-                    if not isfolder(settings_folder) then
-                        makefolder(settings_folder)
-                    end
-                    local ok, err = pcall(function()
-                        writefile(ScriptPaths.config_path(config_name), HttpService:JSONEncode({ objects = objects }))
-                    end)
-                    if not ok then
-                        return false, err
-                    end
-                    return true
-                end
-                RivalsConfigProfiles.WriteDefault = WriteRivalsConfigProfileDefault
-                SaveManager:SetIgnoreIndexes({ 'P1S32D1', 'P1S26D6', 'P1S14D1' })
-                local SharedUI = CreateSharedUIAdapter({
-                    window = Window,
-                    settings_tab = Tabs.Settings,
-                    library = Library,
-                    theme_manager = ThemeManager,
-                    script_paths = ScriptPaths,
-                    save_manager = SaveManager,
-                    current_config_name = 'RIVALS',
-                    default_config_name = 'RIVALS Default',
-                    config_names = RivalsConfigProfiles.Names,
-                    use_global_config_names = true,
-                    toggles = Toggles,
-                    options = Options,
-                    local_player = LP,
-                    defaults = {
-                        auto_show = false,
-                        show_notification = true,
-                        show_keybind_states = true,
-                        auto_execute_on_teleport = true,
-                        auto_load_config = true,
-                        auto_save_config = true,
-                        load_config_name = 'Legit',
-                        menu_keybind = 'LeftControl',
-                    },
-                    persist_menu_keybind = false,
-                    queue_on_teleport = queue_on_teleport,
-                    before_save = function(shared_ui, config_name)
-                        local saveName = config_name or (shared_ui and shared_ui:resolve_save_config_name()) or 'Legit'
-                        RivalsRuntimeBridge.SetRivalsCosmeticsConfigName(saveName)
-                        RivalsRuntimeBridge.SetAutoLoadoutConfigName(saveName)
-                        RivalsRuntimeBridge.CaptureSavedRivalsCosmeticsSelections()
-                    end,
-                    on_save = function(shared_ui, config_name)
-                        local saveName = config_name or (shared_ui and shared_ui:resolve_save_config_name()) or 'Legit'
-                        RivalsRuntimeBridge.SetRivalsCosmeticsConfigName(saveName)
-                        RivalsRuntimeBridge.SetAutoLoadoutConfigName(saveName)
-                        RivalsRuntimeBridge.SaveRivalsCosmeticsSelections()
-                        RivalsRuntimeBridge.SaveAutoLoadoutProfiles()
-                    end,
-                    on_load_saved = function(shared_ui, config_name)
-                        local loadName = config_name or (shared_ui and shared_ui:resolve_load_config_name()) or 'Legit'
-                        RivalsRuntimeBridge.SetRivalsCosmeticsConfigName(loadName)
-                        RivalsRuntimeBridge.SetAutoLoadoutConfigName(loadName)
-                        task.defer(GuardRivalsCallback('Cosmetics_LoadSavedSelections', function()
-                            RivalsRuntimeBridge.LoadSavedRivalsCosmeticsSelections()
-                            RivalsRuntimeBridge.RefreshRivalsCosmetics()
-                            RivalsRuntimeBridge.ApplyRivalsCosmetics()
-                        end))
-                        task.defer(GuardRivalsCallback('AutoLoadout_LoadSavedProfiles', RivalsRuntimeBridge.LoadAutoLoadoutProfiles))
-                    end,
-                    on_load_default = function(shared_ui, config_name)
-                        local loadName = config_name or (shared_ui and shared_ui:resolve_save_config_name()) or 'Legit'
-                        RivalsRuntimeBridge.SetRivalsCosmeticsConfigName(loadName)
-                        RivalsRuntimeBridge.SetAutoLoadoutConfigName(loadName)
-                        task.defer(GuardRivalsCallback('Cosmetics_LoadDefaultSelections', function()
-                            RivalsRuntimeBridge.LoadSavedRivalsCosmeticsSelections()
-                            RivalsRuntimeBridge.RefreshRivalsCosmetics()
-                            RivalsRuntimeBridge.ApplyRivalsCosmetics()
-                        end))
-                        task.defer(GuardRivalsCallback('AutoLoadout_LoadDefaultProfiles', RivalsRuntimeBridge.LoadAutoLoadoutProfiles))
-                    end,
-                    reset_config_to_default = function(shared_ui, config_name)
-                        return RivalsConfigProfiles.WriteDefault(config_name)
-                    end,
-                    reconcile_loaded_state = function()
-                        if ReconcileLoadedState then
-                            ReconcileLoadedState()
-                        end
-                    end,
-                })
-                local initialRivalsConfigName = (SharedUI:should_auto_load_config() and SharedUI:resolve_load_config_name()) or 'RIVALS Default'
-                RivalsRuntimeBridge.SetRivalsCosmeticsConfigName(initialRivalsConfigName)
-                RivalsRuntimeBridge.SetAutoLoadoutConfigName(initialRivalsConfigName)
-                ReconcileLoadedState = function()
+                RivalsRuntimeReconcile = function()
                     RefreshEspRenderSettings()
                     RivalsModsState.EnsureHooks()
                     RivalsRuntimeBridge.WorldVisuals.RefreshAll()
@@ -26912,20 +26678,6 @@ local RivalsRuntime = {}
                     RivalsRuntimeBridge.RefreshRivalsCosmetics()
                     RivalsRuntimeBridge.ApplyRivalsCosmetics()
                 end
-                PrepareSharedConfig({
-                    save_manager = SaveManager,
-                    script_paths = ScriptPaths,
-                    current_config_name = 'RIVALS',
-                    default_config_name = 'RIVALS Default',
-                    shared_ui = SharedUI,
-                    toggles = Toggles,
-                    options = Options,
-                    reset_config_to_default = function(shared_ui, config_name)
-                        return RivalsConfigProfiles.WriteDefault(config_name)
-                    end,
-                })
-                RivalsRuntimeBridge.LoadSavedRivalsCosmeticsSelections()
-                task.defer(GuardRivalsCallback('AutoLoadout_LoadInitialProfiles', RivalsRuntimeBridge.LoadAutoLoadoutProfiles))
                 EnsureEspRenderSettingsTracking()
                 RefreshEspRenderSettings()
                 RivalsRuntimeBridge.WorldVisuals.RefreshAll()
@@ -26950,7 +26702,6 @@ local RivalsRuntime = {}
                 RivalsRuntimeBridge.BindAutoLoadoutControllers()
                 RivalsRuntimeBridge.ApplyRivalsCosmetics()
                 RivalsRuntimeBridge.QueueAutoLoadoutSubmission()
-                SharedUI:notify_loaded(5)
             end
             RivalsRuntime.Initialize(Window)
             GuardRivalsCallback('EnumLibrary_StartupBarrier', function()
