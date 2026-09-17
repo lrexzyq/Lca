@@ -717,6 +717,19 @@ end
 function module.config_path(config_name)
     return StorageRoot .. '/settings/' .. config_name .. '.json'
 end
+function module.rivals_metadata_path(config_name)
+    local safe_name = tostring(config_name or ''):gsub('[^%w%._%- ]', '_')
+    return StorageRoot .. '/rivals_metadata/' .. safe_name .. '.json'
+end
+function module.ensure_rivals_metadata_folder()
+    local path = StorageRoot .. '/rivals_metadata'
+    pcall(function()
+        if not isfolder(path) then
+            makefolder(path)
+        end
+    end)
+    return path
+end
 function module.load_ui_settings(overrides)
     local defaults = module.default_ui_settings(overrides)
     if isfile(UiSettingsPath) then
@@ -834,7 +847,6 @@ return {
             local LPRB = PlayersRB.LocalPlayer
             local rbRandom = Random.new()
             local rbSetHidden = sethiddenproperty
-            local rbSetFFlag = (type(setfflag) == 'function') and setfflag or sfflag
             local rbSetThreadIdentity = setthreadidentity
             local rbGetThreadIdentity = getthreadidentity
             local rbCleanFireEvent = Instance.new('RemoteEvent')
@@ -1560,7 +1572,7 @@ return {
             local PartGlue = {}
             PartGlue.__index = PartGlue
             function PartGlue.new()
-                return setmetatable({ _gluedParts = {}, _bindings = {} }, PartGlue)
+                return setmetatable({ _gluedParts = {}, _bindings = {}, _originalPhysicsRepRoot = {} }, PartGlue)
             end
             function PartGlue:_SetupGlue(part)
                 local entry = self._gluedParts[part]
@@ -1604,17 +1616,30 @@ return {
                 self._gluedParts[part] = nil
             end
             function PartGlue:Acquire(ourPart, hitboxPart, useRotation)
-                local prev = rbGetThreadIdentity()
-                rbSetThreadIdentity(8)
-                pcall(rbSetHidden, ourPart, 'PhysicsRepRootPart', hitboxPart)
-                rbSetThreadIdentity(prev)
+                if ourPart == nil or hitboxPart == nil then
+                    return ourPart and ourPart.CFrame or CFrame.identity
+                end
                 local bound = self._bindings[ourPart]
                 if bound ~= hitboxPart then
-                    if bound ~= nil then
+                    if bound == nil then
+                        local original = nil
+                        local prev = rbGetThreadIdentity()
+                        rbSetThreadIdentity(8)
+                        pcall(function() original = rawget(self._originalPhysicsRepRoot, ourPart) end)
+                        if original == nil then
+                            pcall(function() original = gethiddenproperty(ourPart, 'PhysicsRepRootPart') end)
+                            self._originalPhysicsRepRoot[ourPart] = original
+                        end
+                        rbSetThreadIdentity(prev)
+                    else
                         self:_ReleaseGlue(bound)
                     end
                     self:_SetupGlue(hitboxPart)
                     self._bindings[ourPart] = hitboxPart
+                    local prev = rbGetThreadIdentity()
+                    rbSetThreadIdentity(8)
+                    pcall(rbSetHidden, ourPart, 'PhysicsRepRootPart', hitboxPart)
+                    rbSetThreadIdentity(prev)
                 end
                 local entry = self._gluedParts[hitboxPart]
                 if entry ~= nil then
@@ -1627,7 +1652,9 @@ return {
                 if useRotation then
                     cf = cf * hitboxPart.CFrame.Rotation
                 end
-                hitboxPart.CFrame = cf
+                if (hitboxPart.Position - VOID_CFRAME.Position).Magnitude > 0.01 then
+                    hitboxPart.CFrame = cf
+                end
                 return VOID_CFRAME
             end
             function PartGlue:Free(ourPart)
@@ -1637,9 +1664,11 @@ return {
                 end
                 self._bindings[ourPart] = nil
                 self:_ReleaseGlue(bound)
+                local original = self._originalPhysicsRepRoot[ourPart]
+                self._originalPhysicsRepRoot[ourPart] = nil
                 local prev = rbGetThreadIdentity()
                 rbSetThreadIdentity(8)
-                pcall(rbSetHidden, ourPart, 'PhysicsRepRootPart', nil)
+                pcall(rbSetHidden, ourPart, 'PhysicsRepRootPart', original)
                 rbSetThreadIdentity(prev)
             end
             function PartGlue:Destroy()
@@ -2150,8 +2179,7 @@ return {
                     return self._lastVoidCFrame, nil
                 end
                 local _, oy, oz = target.rootPart.CFrame:ToOrientation()
-                local fallbackPitch = above and PITCH_ABOVE or PITCH_BELOW
-                local pitch = resolveHeadPitch(hitboxHead, ourRootPart.Position, fallbackPitch)
+                local pitch = above and PITCH_ABOVE or PITCH_BELOW
                 local aim1 = buildAim(above and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, pitch, oy, oz)
                 local aim2 = buildAim(above and AIM_ABOVE_END or AIM_BELOW_END, pitch, oy, oz)
                 local objectId = itemObjectId(item)
@@ -2162,8 +2190,7 @@ return {
                         return
                     end
                     local _, liveOy, liveOz = target.rootPart.CFrame:ToOrientation()
-                    local liveFallback = above and PITCH_ABOVE or PITCH_BELOW
-                    local livePitch = resolveHeadPitch(liveHead, ourRootPart.Position, liveFallback)
+                    local livePitch = above and PITCH_ABOVE or PITCH_BELOW
                     local liveAim1 = buildAim(above and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, livePitch, liveOy, liveOz)
                     local liveAim2 = buildAim(above and AIM_ABOVE_END or AIM_BELOW_END, livePitch, liveOy, liveOz)
                     fireGun(objectId, isRaycast, liveAim1, liveAim2, liveHead, AIM_EXTRA)
@@ -2255,19 +2282,8 @@ return {
                 self:ClearGlue()
                 self._lastVoidCFrame = nil
             end
-            local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
             local function applyEnabledFFlags(enabled)
-                if enabled and ORIGINAL_FALLEN_PARTS_HEIGHT == nil then
-                    ORIGINAL_FALLEN_PARTS_HEIGHT = WorkspaceRB.FallenPartsDestroyHeight
-                end
-                pcall(function()
-                    WorkspaceRB.FallenPartsDestroyHeight = enabled and (0 / 0) or (ORIGINAL_FALLEN_PARTS_HEIGHT or -500)
-                end)
-                if rbSetFFlag then
-                    pcall(rbSetFFlag, 'DFIntS2PhysicsSenderRate', enabled and '120' or '15')
-                    pcall(rbSetFFlag, 'DFIntAssemblyHistoryBufferSize', enabled and '2147483648' or '15')
-                    pcall(rbSetFFlag, 'DFIntAssemblyHistorySkipSize', enabled and '0' or '8')
-                end
+                return enabled == true
             end
             local Controller = {}
             Controller.__index = Controller
@@ -17372,6 +17388,21 @@ ErrorReporter.set_game(GameName)
                     RivalsAutoLoadout.RefreshDropdownOptions()
                     return false
                 end
+                local metadataPath = ScriptPaths.rivals_metadata_path(configName)
+                if isfile(metadataPath) then
+                    local readOk, rawMetadata = pcall(readfile, metadataPath)
+                    if readOk and type(rawMetadata) == 'string' then
+                        local decodeOk, decoded = pcall(function()
+                            return HttpService:JSONDecode(rawMetadata)
+                        end)
+                        local profiles = decodeOk and type(decoded) == 'table' and decoded.autoloadout or nil
+                        if type(profiles) == 'table' then
+                            RivalsAutoLoadout.NormalizeProfiles(profiles)
+                            RivalsAutoLoadout.RefreshDropdownOptions()
+                            return true
+                        end
+                    end
+                end
                 local configPath = ScriptPaths.config_path(configName)
                 if not isfile(configPath) then
                     RivalsAutoLoadout.NormalizeProfiles({})
@@ -17403,39 +17434,26 @@ ErrorReporter.set_game(GameName)
             function RivalsAutoLoadout.SaveProfilesToConfig()
                 local configName = RivalsAutoLoadoutState.ConfigName
                 if type(configName) ~= 'string' or configName == '' then
-                    RivalsAutoLoadout.NormalizeProfiles({})
-                    RivalsAutoLoadout.RefreshDropdownOptions()
                     return false
                 end
-                local configPath = ScriptPaths.config_path(configName)
-                if not isfile(configPath) then
-                    return false
-                end
-                local readOk, rawConfig = pcall(readfile, configPath)
-                if not readOk or type(rawConfig) ~= 'string' then
-                    return false
-                end
-                local decodeOk, decoded = pcall(function()
-                    return HttpService:JSONDecode(rawConfig)
-                end)
-                if not decodeOk or type(decoded) ~= 'table' then
-                    return false
-                end
-                local existingObjects = type(decoded.objects) == 'table' and decoded.objects or {}
-                local mergedObjects = {}
-                for _, object in ipairs(existingObjects) do
-                    if not object or object.idx ~= RivalsAutoLoadout.ConfigMetadataId then
-                        mergedObjects[#mergedObjects + 1] = object
+                ScriptPaths.ensure_rivals_metadata_folder()
+                local metadataPath = ScriptPaths.rivals_metadata_path(configName)
+                local payload = {}
+                if isfile(metadataPath) then
+                    local readOk, rawMetadata = pcall(readfile, metadataPath)
+                    if readOk and type(rawMetadata) == 'string' then
+                        local decodeOk, decoded = pcall(function()
+                            return HttpService:JSONDecode(rawMetadata)
+                        end)
+                        if decodeOk and type(decoded) == 'table' then
+                            payload = decoded
+                        end
                     end
                 end
-                mergedObjects[#mergedObjects + 1] = {
-                    idx = RivalsAutoLoadout.ConfigMetadataId,
-                    type = 'KiciaHookMetadata',
-                    value = RivalsAutoLoadout.NormalizeProfiles(RivalsAutoLoadoutState.Profiles),
-                }
-                decoded.objects = mergedObjects
+                payload.version = 1
+                payload.autoloadout = RivalsAutoLoadout.NormalizeProfiles(RivalsAutoLoadoutState.Profiles)
                 return pcall(function()
-                    writefile(configPath, HttpService:JSONEncode(decoded))
+                    writefile(metadataPath, HttpService:JSONEncode(payload))
                 end)
             end
             RivalsRuntimeBridge.BindAutoLoadoutControllers = RivalsAutoLoadout.BindPageControllers
@@ -21413,18 +21431,34 @@ ErrorReporter.set_game(GameName)
                 if type(configName) ~= 'string' or configName == '' then
                     return false
                 end
-                local configPath = ScriptPaths.config_path(configName)
-                if not isfile(configPath) then
-                    return false
+                local objects = nil
+                local metadataPath = ScriptPaths.rivals_metadata_path(configName)
+                if isfile(metadataPath) then
+                    local readOk, rawMetadata = pcall(readfile, metadataPath)
+                    if readOk and type(rawMetadata) == 'string' then
+                        local decodeOk, decoded = pcall(function()
+                            return HttpService:JSONDecode(rawMetadata)
+                        end)
+                        local metadataObjects = decodeOk and type(decoded) == 'table' and decoded.cosmetics or nil
+                        if type(metadataObjects) == 'table' then
+                            objects = metadataObjects
+                        end
+                    end
                 end
-                local readOk, rawConfig = pcall(readfile, configPath)
-                if not readOk or type(rawConfig) ~= 'string' then
-                    return false
+                if objects == nil then
+                    local configPath = ScriptPaths.config_path(configName)
+                    if not isfile(configPath) then
+                        return false
+                    end
+                    local readOk, rawConfig = pcall(readfile, configPath)
+                    if not readOk or type(rawConfig) ~= 'string' then
+                        return false
+                    end
+                    local decodeOk, decoded = pcall(function()
+                        return HttpService:JSONDecode(rawConfig)
+                    end)
+                    objects = decodeOk and type(decoded) == 'table' and decoded.objects or nil
                 end
-                local decodeOk, decoded = pcall(function()
-                    return HttpService:JSONDecode(rawConfig)
-                end)
-                local objects = decodeOk and type(decoded) == 'table' and decoded.objects or nil
                 if type(objects) ~= 'table' then
                     return false
                 end
@@ -21552,24 +21586,20 @@ ErrorReporter.set_game(GameName)
                 if type(configName) ~= 'string' or configName == '' then
                     return false
                 end
-                local configPath = ScriptPaths.config_path(configName)
-                if not isfile(configPath) then
-                    RivalsCosmeticsState.SavedConfigCosmeticObjects = nil
-                    return false
+                ScriptPaths.ensure_rivals_metadata_folder()
+                local metadataPath = ScriptPaths.rivals_metadata_path(configName)
+                local payload = {}
+                if isfile(metadataPath) then
+                    local readOk, rawMetadata = pcall(readfile, metadataPath)
+                    if readOk and type(rawMetadata) == 'string' then
+                        local decodeOk, decoded = pcall(function()
+                            return HttpService:JSONDecode(rawMetadata)
+                        end)
+                        if decodeOk and type(decoded) == 'table' then
+                            payload = decoded
+                        end
+                    end
                 end
-                local readOk, rawConfig = pcall(readfile, configPath)
-                if not readOk or type(rawConfig) ~= 'string' then
-                    RivalsCosmeticsState.SavedConfigCosmeticObjects = nil
-                    return false
-                end
-                local decodeOk, decoded = pcall(function()
-                    return HttpService:JSONDecode(rawConfig)
-                end)
-                if not decodeOk or type(decoded) ~= 'table' then
-                    RivalsCosmeticsState.SavedConfigCosmeticObjects = nil
-                    return false
-                end
-                local existingObjects = type(decoded.objects) == 'table' and decoded.objects or {}
                 local cosmeticObjectsById = {}
                 for optionId, object in pairs(RivalsCosmeticsState.SavedConfigCosmeticObjects or {}) do
                     cosmeticObjectsById[optionId] = RivalsCosmetics.CloneConfigObject(object)
@@ -21578,13 +21608,7 @@ ErrorReporter.set_game(GameName)
                 for optionId, object in pairs(selectedObjectsById) do
                     cosmeticObjectsById[optionId] = object
                 end
-                local mergedObjects = {}
-                for _, object in ipairs(existingObjects) do
-                    local optionId = object and object.idx or nil
-                    if not RivalsCosmetics.IsCosmeticOptionId(optionId) then
-                        mergedObjects[#mergedObjects + 1] = object
-                    end
-                end
+                local cosmeticObjects = {}
                 local cosmeticOptionIds = {}
                 for optionId in pairs(cosmeticObjectsById) do
                     cosmeticOptionIds[#cosmeticOptionIds + 1] = optionId
@@ -21593,13 +21617,14 @@ ErrorReporter.set_game(GameName)
                 for _, optionId in ipairs(cosmeticOptionIds) do
                     local object = cosmeticObjectsById[optionId]
                     if object then
-                        mergedObjects[#mergedObjects + 1] = object
+                        cosmeticObjects[#cosmeticObjects + 1] = object
                     end
                 end
-                decoded.objects = mergedObjects
+                payload.version = 1
+                payload.cosmetics = cosmeticObjects
                 RivalsCosmeticsState.SavedConfigCosmeticObjects = nil
                 return pcall(function()
-                    writefile(configPath, HttpService:JSONEncode(decoded))
+                    writefile(metadataPath, HttpService:JSONEncode(payload))
                 end)
             end
             function RivalsCosmetics.CloneSerializable(value, seen)
@@ -26352,12 +26377,57 @@ SaveManager:IgnoreThemeSettings()
 SaveManager:SetIgnoreIndexes({ 'MenuKeybind', 'P1S32D1', 'P1S26D6', 'P1S14D1' })
 ThemeManager:SetFolder(ScriptPaths.storage_root())
 SaveManager:SetFolder(ScriptPaths.storage_root())
+local NativeRefreshConfigList = SaveManager.RefreshConfigList
+local function AddLegacyConfigNames(values)
+    local legacyRoot = ScriptPaths.storage_root() .. '/settings/settings'
+    if type(listfiles) ~= 'function' or not isfolder or not isfolder(legacyRoot) then
+        return values
+    end
+    local seen = {}
+    for _, value in ipairs(values) do
+        seen[tostring(value):lower()] = true
+    end
+    local files = {}
+    local ok = pcall(function()
+        files = listfiles(legacyRoot)
+    end)
+    if ok and type(files) == 'table' then
+        for _, filePath in ipairs(files) do
+            if type(filePath) == 'string' and filePath:sub(-5) == '.json' then
+                local base = filePath:match('[^/\\]+$')
+                local name = base and base:sub(1, -6) or nil
+                if name and name ~= '' and not seen[name:lower()] then
+                    seen[name:lower()] = true
+                    values[#values + 1] = name
+                end
+            end
+        end
+    end
+    return values
+end
+if type(NativeRefreshConfigList) == 'function' then
+    function SaveManager:RefreshConfigList()
+        local values = AddLegacyConfigNames(NativeRefreshConfigList(self) or {})
+        local out = {}
+        local blocked = {
+            ['legit'] = true,
+            ['rage'] = true,
+            ['rivals default'] = true,
+        }
+        for _, value in ipairs(values) do
+            local key = tostring(value):lower():gsub('^%s+', ''):gsub('%s+$', '')
+            if not blocked[key] then
+                out[#out + 1] = value
+            end
+        end
+        table.sort(out, function(a, b)
+            return tostring(a):lower() < tostring(b):lower()
+        end)
+        return out
+    end
+end
 SaveManager:BuildConfigSection(Tabs.Settings)
 ThemeManager:ApplyToTab(Tabs.Settings)
-
-local NativeSaveManagerSave = SaveManager.Save
-local NativeSaveManagerLoad = SaveManager.Load
-local ConfigOperationBusy = false
 
 local function SetActiveRivalsConfigName(configName)
     if type(configName) ~= 'string' or configName == '' then
@@ -26368,26 +26438,6 @@ local function SetActiveRivalsConfigName(configName)
     end
     if RivalsRuntimeBridge.SetAutoLoadoutConfigName then
         pcall(RivalsRuntimeBridge.SetAutoLoadoutConfigName, configName)
-    end
-    return true
-end
-
-local function SaveRivalsConfigMetadata()
-    local errors = {}
-    if RivalsRuntimeBridge.SaveRivalsCosmeticsSelections then
-        local ok, result = pcall(RivalsRuntimeBridge.SaveRivalsCosmeticsSelections)
-        if not ok or result == false then
-            errors[#errors + 1] = 'cosmetics'
-        end
-    end
-    if RivalsRuntimeBridge.SaveAutoLoadoutProfiles then
-        local ok, result = pcall(RivalsRuntimeBridge.SaveAutoLoadoutProfiles)
-        if not ok or result == false then
-            errors[#errors + 1] = 'autoloadout'
-        end
-    end
-    if #errors > 0 then
-        return false, table.concat(errors, ', ')
     end
     return true
 end
@@ -26410,41 +26460,46 @@ local function LoadRivalsConfigMetadata()
     end
 end
 
+local NativeSaveManagerLoad = SaveManager.Load
+local NativeSaveManagerSave = SaveManager.Save
 function SaveManager:Save(configName)
-    if ConfigOperationBusy then
-        return false, 'Config operation already in progress'
-    end
     if type(configName) ~= 'string' or configName:gsub('^%s+', '') == '' then
         return false, 'Invalid config name provided'
     end
-    ConfigOperationBusy = true
     local cleanName = configName:gsub('^%s+', ''):gsub('%s+$', '')
     SetActiveRivalsConfigName(cleanName)
     local ok, err = NativeSaveManagerSave(self, cleanName)
     if not ok then
-        ConfigOperationBusy = false
         return false, err
-    end
-    local metadataOk, metadataErr = SaveRivalsConfigMetadata()
-    ConfigOperationBusy = false
-    if not metadataOk then
-        return false, 'Base config saved, but metadata sync failed: ' .. tostring(metadataErr)
     end
     return true
 end
 
 function SaveManager:Load(configName)
-    if ConfigOperationBusy then
-        return false, 'Config operation already in progress'
-    end
     if type(configName) ~= 'string' or configName:gsub('^%s+', '') == '' then
         return false, 'No config is selected'
     end
-    ConfigOperationBusy = true
     local cleanName = configName:gsub('^%s+', ''):gsub('%s+$', '')
     SetActiveRivalsConfigName(cleanName)
     local ok, err = NativeSaveManagerLoad(self, cleanName)
-    ConfigOperationBusy = false
+    if not ok and type(writefile) == 'function' and type(isfile) == 'function' then
+        local legacyPath = ScriptPaths.storage_root() .. '/settings/settings/' .. cleanName .. '.json'
+        local targetPath = ScriptPaths.config_path(cleanName)
+        if isfile(legacyPath) and not isfile(targetPath) then
+            local readOk, raw = pcall(readfile, legacyPath)
+            if readOk and type(raw) == 'string' then
+                local writeOk = pcall(function()
+                    if not isfolder(ScriptPaths.storage_root() .. '/settings') then
+                        makefolder(ScriptPaths.storage_root() .. '/settings')
+                    end
+                    writefile(targetPath, raw)
+                end)
+                if writeOk then
+                    ok, err = NativeSaveManagerLoad(self, cleanName)
+                end
+            end
+        end
+    end
     if not ok then
         return false, err
     end
