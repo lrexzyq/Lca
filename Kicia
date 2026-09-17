@@ -1619,7 +1619,30 @@ return {
                 if not isFiniteVector3(head.Position) or not isFiniteVector3(root.Position) then
                     return nil
                 end
+                local headDelta = head.Position - root.Position
+                if isFiniteVector3(headDelta) and headDelta.Magnitude <= 20 then
+                    local localOffset = root.CFrame:PointToObjectSpace(head.Position)
+                    if isFiniteVector3(localOffset) then
+                        entry.headLocalOffset = localOffset
+                    end
+                end
                 return entry
+            end
+            local function resolveTargetHeadPosition(target, fallbackHead)
+                if target and target.rootPart and target.rootPart.Parent then
+                    local localOffset = target.headLocalOffset
+                    if isFiniteVector3(localOffset) then
+                        local position = target.rootPart.CFrame:PointToWorldSpace(localOffset)
+                        if isFiniteVector3(position) then
+                            return position
+                        end
+                    end
+                end
+                local position = fallbackHead and fallbackHead.Position or nil
+                if isFiniteVector3(position) then
+                    return position
+                end
+                return nil
             end
             local function collectEnemies()
                 local out = {}
@@ -1726,8 +1749,11 @@ return {
                     if not (prioritizeHackers and entry.hacker) and isValidTarget(entry) then
                         local distance = math.huge
                         if localPosition and isFiniteVector3(localPosition) then
-                            local delta = entry.hitboxHead.Position - localPosition
-                            distance = delta:Dot(delta)
+                            local headPosition = resolveTargetHeadPosition(entry, entry.hitboxHead)
+                            if headPosition then
+                                local delta = headPosition - localPosition
+                                distance = delta:Dot(delta)
+                            end
                         end
                         if best == nil or distance < bestDistance then
                             best = entry
@@ -2010,11 +2036,11 @@ return {
                 end
                 return nil
             end
-            local function resolveHeadPitch(head, origin, fallback)
-                if not head or not origin or not isFiniteVector3(origin) then
+            local function resolveHeadPitchPosition(position, origin, fallback)
+                if not position or not origin or not isFiniteVector3(position) or not isFiniteVector3(origin) then
                     return fallback
                 end
-                local delta = head.Position - origin
+                local delta = position - origin
                 if not isFiniteVector3(delta) then
                     return fallback
                 end
@@ -2026,6 +2052,9 @@ return {
                     return fallback
                 end
                 return math.clamp(-math.atan2(delta.Y, horizontal), -math.pi / 2, math.pi / 2)
+            end
+            local function resolveHeadPitch(head, origin, fallback)
+                return resolveHeadPitchPosition(head and head.Position or nil, origin, fallback)
             end
             local HitscanStrategy = {}
             HitscanStrategy.__index = HitscanStrategy
@@ -2047,32 +2076,30 @@ return {
                 end
                 local above = isAbove(target)
                 local offset = above and OFFSET_ABOVE or OFFSET_BELOW
+                local aimHeadPosition = resolveTargetHeadPosition(target, hitboxHead)
                 local void = self._partGlue:Acquire(ourRootPart, hitboxHead)
                 self._gluedOurPart = ourRootPart
                 local cframe
                 if above then
                     cframe = void + offset
                 else
-                    cframe = CFrame.new(void.Position + offset, hitboxHead.Position)
+                    cframe = CFrame.new(void.Position + offset, aimHeadPosition or hitboxHead.Position)
                 end
-                if not self._shootLock:ShouldFire(canFire, math.max(dt, 1 / 240) * Setting.ShootFrames()) then
-                    return ourRootPart.CFrame, nil
-                end
-                local _, oy, oz = target.rootPart.CFrame:ToOrientation()
-                local fallbackPitch = above and PITCH_ABOVE or PITCH_BELOW
-                local pitch = resolveHeadPitch(hitboxHead, ourRootPart.Position, fallbackPitch)
-                local aim1 = buildAim(above and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, pitch, oy, oz)
-                local aim2 = buildAim(above and AIM_ABOVE_END or AIM_BELOW_END, pitch, oy, oz)
+                local fireNow = self._shootLock:ShouldFire(canFire, math.max(dt, 1 / 240) * Setting.ShootFrames())
                 local objectId = itemObjectId(item)
                 local isRaycast = itemIsRaycast(item)
                 local function weaponAction()
+                    if not fireNow then
+                        return
+                    end
                     local liveHead = resolveLiveHead(target)
                     if liveHead == nil then
                         return
                     end
                     local _, liveOy, liveOz = target.rootPart.CFrame:ToOrientation()
                     local liveFallback = above and PITCH_ABOVE or PITCH_BELOW
-                    local livePitch = resolveHeadPitch(liveHead, ourRootPart.Position, liveFallback)
+                    local liveHeadPosition = resolveTargetHeadPosition(target, liveHead)
+                    local livePitch = resolveHeadPitchPosition(liveHeadPosition, ourRootPart.Position, liveFallback)
                     local liveAim1 = buildAim(above and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, livePitch, liveOy, liveOz)
                     local liveAim2 = buildAim(above and AIM_ABOVE_END or AIM_BELOW_END, livePitch, liveOy, liveOz)
                     fireGun(objectId, isRaycast, liveAim1, liveAim2, liveHead, AIM_EXTRA)
@@ -15808,9 +15835,6 @@ ErrorReporter.set_game(GameName)
                 LastBaitTrapPos = nil,
                 LastBaitTrapPickAt = 0,
             }
-            local RAGEBOT_UPDATE_INTERVAL = 1 / 60
-            local ragebotUpdateAccumulator = 0
-            local ragebotKernelWasEnabled = false
             local RivalsAutoLoadoutState = {
                 HasRunThisOpen = false,
                 OpenNonce = 0,
@@ -16498,7 +16522,6 @@ ErrorReporter.set_game(GameName)
                 return bestTarget, bestHoverCFrame
             end
             function RivalsRagebot.Update(deltaTime)
-                local dt = math.clamp(tonumber(deltaTime) or 0, 0, 0.25)
                 local now = tick()
                 if RivalsRagebot.IsBaitModeEnabled() then
                     RivalsRagebot.UpdateHostileTeleportTracker(now)
@@ -16544,31 +16567,20 @@ ErrorReporter.set_game(GameName)
                 end
                 local enabled = RivalsRagebot.IsEnabled()
                 if not enabled then
-                    if ragebotKernelWasEnabled then
-                        RivalsRagebotState.Target = nil
-                        RivalsRagebotState.HoldCFrame = nil
-                        RivalsRagebotState.LastHoldUpdateAt = 0
-                        RivalsRagebotState.PhaseClockSec = 0
-                        if RivalsRuntimeBridge.ResetKiciaRagebot then
-                            RivalsRuntimeBridge.ResetKiciaRagebot()
-                        end
-                        ragebotKernelWasEnabled = false
-                    end
-                    ragebotUpdateAccumulator = 0
+                    RivalsRagebotState.Target = nil
+                    RivalsRagebotState.HoldCFrame = nil
+                    RivalsRagebotState.LastHoldUpdateAt = 0
+                    RivalsRagebotState.PhaseClockSec = 0
                     RivalsRuntimeBridge.RecordCharacterLoadingCheckpoint('Ragebot', false, false)
+                    if RivalsRuntimeBridge.UpdateKiciaRagebot then
+                        RivalsRuntimeBridge.UpdateKiciaRagebot(deltaTime)
+                    end
                     return
                 end
-
-                ragebotKernelWasEnabled = true
-                ragebotUpdateAccumulator = ragebotUpdateAccumulator + dt
-                if ragebotUpdateAccumulator < RAGEBOT_UPDATE_INTERVAL then
-                    return
-                end
-                local kernelDt = ragebotUpdateAccumulator
-                ragebotUpdateAccumulator = 0
-                RivalsRuntimeBridge.RecordCharacterLoadingCheckpoint('Ragebot', true, true)
+                local readyToFight = RivalsRuntimeBridge.IsReadyToFight()
+                RivalsRuntimeBridge.RecordCharacterLoadingCheckpoint('Ragebot', readyToFight, true)
                 if RivalsRuntimeBridge.UpdateKiciaRagebot then
-                    RivalsRuntimeBridge.UpdateKiciaRagebot(kernelDt)
+                    RivalsRuntimeBridge.UpdateKiciaRagebot(deltaTime)
                 end
             end
             RivalsRuntimeBridge.UpdateRagebot = RivalsRagebot.Update
@@ -26304,8 +26316,6 @@ local RivalsRuntime = {}
                 RivalsRagebotState.LastHoldUpdateAt = 0
                 RivalsRagebotState.LastRespawnRequestAt = 0
                 RivalsRagebotState.PhaseClockSec = 0
-                ragebotUpdateAccumulator = 0
-                ragebotKernelWasEnabled = false
                 if RivalsRuntimeBridge.KiciaRagebot then
                     RivalsRuntimeBridge.KiciaRagebot.CapsOk = nil
                     RivalsRuntimeBridge.KiciaRagebot.NextCapsCheckAt = 0
