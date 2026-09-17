@@ -1864,16 +1864,15 @@ return {
                 return setmetatable({ _lockedUntil = nil }, ShootLock)
             end
             function ShootLock:ShouldFire(canFire, lockDuration)
-                if not canFire then
-                    self._lockedUntil = nil
-                    return false
-                end
                 local now = os.clock()
-                if self._lockedUntil ~= nil and now < self._lockedUntil then
-                    return false
+                local locked = self._lockedUntil ~= nil and now < self._lockedUntil
+                if canFire then
+                    self._lockedUntil = now + lockDuration
                 end
-                self._lockedUntil = now + math.max(tonumber(lockDuration) or 0, 1 / 240)
-                return true
+                if not locked then
+                    locked = canFire
+                end
+                return locked
             end
             function ShootLock:Reset()
                 self._lockedUntil = nil
@@ -15808,16 +15807,13 @@ ErrorReporter.set_game(GameName)
                 LastBaitTrapPos = nil,
                 LastBaitTrapPickAt = 0,
             }
-            local RAGEBOT_UPDATE_INTERVAL = 1 / 60
-            local ragebotUpdateAccumulator = 0
-            local ragebotKernelWasEnabled = false
             local RivalsAutoLoadoutState = {
                 HasRunThisOpen = false,
                 OpenNonce = 0,
                 BoundPageControllers = {},
                 BoundPageFrames = {},
                 Profiles = {},
-                ConfigName = nil,
+                ConfigName = 'RIVALS Default',
                 RefreshingDropdownValues = 0,
             }
             local RivalsCosmeticsState = {
@@ -15844,7 +15840,7 @@ ErrorReporter.set_game(GameName)
                 PreviewViewportModel = nil,
                 CosmeticsUiLoaded = false,
                 CosmeticsUiLoading = false,
-                CosmeticsConfigName = nil,
+                CosmeticsConfigName = 'RIVALS Default',
                 BoundFirstPersonModels = false,
                 PlayerDataController = nil,
                 PlayerDataRestore = nil,
@@ -16498,7 +16494,6 @@ ErrorReporter.set_game(GameName)
                 return bestTarget, bestHoverCFrame
             end
             function RivalsRagebot.Update(deltaTime)
-                local dt = math.clamp(tonumber(deltaTime) or 0, 0, 0.25)
                 local now = tick()
                 if RivalsRagebot.IsBaitModeEnabled() then
                     RivalsRagebot.UpdateHostileTeleportTracker(now)
@@ -16544,31 +16539,20 @@ ErrorReporter.set_game(GameName)
                 end
                 local enabled = RivalsRagebot.IsEnabled()
                 if not enabled then
-                    if ragebotKernelWasEnabled then
-                        RivalsRagebotState.Target = nil
-                        RivalsRagebotState.HoldCFrame = nil
-                        RivalsRagebotState.LastHoldUpdateAt = 0
-                        RivalsRagebotState.PhaseClockSec = 0
-                        if RivalsRuntimeBridge.ResetKiciaRagebot then
-                            RivalsRuntimeBridge.ResetKiciaRagebot()
-                        end
-                        ragebotKernelWasEnabled = false
-                    end
-                    ragebotUpdateAccumulator = 0
+                    RivalsRagebotState.Target = nil
+                    RivalsRagebotState.HoldCFrame = nil
+                    RivalsRagebotState.LastHoldUpdateAt = 0
+                    RivalsRagebotState.PhaseClockSec = 0
                     RivalsRuntimeBridge.RecordCharacterLoadingCheckpoint('Ragebot', false, false)
+                    if RivalsRuntimeBridge.UpdateKiciaRagebot then
+                        RivalsRuntimeBridge.UpdateKiciaRagebot(deltaTime)
+                    end
                     return
                 end
-
-                ragebotKernelWasEnabled = true
-                ragebotUpdateAccumulator = ragebotUpdateAccumulator + dt
-                if ragebotUpdateAccumulator < RAGEBOT_UPDATE_INTERVAL then
-                    return
-                end
-                local kernelDt = ragebotUpdateAccumulator
-                ragebotUpdateAccumulator = 0
-                RivalsRuntimeBridge.RecordCharacterLoadingCheckpoint('Ragebot', true, true)
+                local readyToFight = RivalsRuntimeBridge.IsReadyToFight()
+                RivalsRuntimeBridge.RecordCharacterLoadingCheckpoint('Ragebot', readyToFight, true)
                 if RivalsRuntimeBridge.UpdateKiciaRagebot then
-                    RivalsRuntimeBridge.UpdateKiciaRagebot(kernelDt)
+                    RivalsRuntimeBridge.UpdateKiciaRagebot(deltaTime)
                 end
             end
             RivalsRuntimeBridge.UpdateRagebot = RivalsRagebot.Update
@@ -17290,13 +17274,7 @@ ErrorReporter.set_game(GameName)
                 end
             end
             function RivalsAutoLoadout.LoadProfilesFromConfig()
-                local configName = RivalsAutoLoadoutState.ConfigName
-                if type(configName) ~= 'string' or configName == '' then
-                    RivalsAutoLoadout.NormalizeProfiles({})
-                    RivalsAutoLoadout.RefreshDropdownOptions()
-                    return false
-                end
-                local configPath = ScriptPaths.config_path(configName)
+                local configPath = ScriptPaths.config_path(RivalsAutoLoadoutState.ConfigName or 'RIVALS Default')
                 if not isfile(configPath) then
                     RivalsAutoLoadout.NormalizeProfiles({})
                     RivalsAutoLoadout.RefreshDropdownOptions()
@@ -17325,11 +17303,7 @@ ErrorReporter.set_game(GameName)
                 return profiles ~= nil
             end
             function RivalsAutoLoadout.SaveProfilesToConfig()
-                local configName = RivalsAutoLoadoutState.ConfigName
-                if type(configName) ~= 'string' or configName == '' then
-                    return false
-                end
-                local configPath = ScriptPaths.config_path(configName)
+                local configPath = ScriptPaths.config_path(RivalsAutoLoadoutState.ConfigName or 'RIVALS Default')
                 if not isfile(configPath) then
                     return false
                 end
@@ -21331,11 +21305,7 @@ ErrorReporter.set_game(GameName)
                 return true
             end
             function RivalsCosmetics.LoadSavedSelectionsFromConfig()
-                local configName = RivalsCosmeticsState.CosmeticsConfigName
-                if type(configName) ~= 'string' or configName == '' then
-                    return false
-                end
-                local configPath = ScriptPaths.config_path(configName)
+                local configPath = ScriptPaths.config_path(RivalsCosmeticsState.CosmeticsConfigName or 'RIVALS Default')
                 if not isfile(configPath) then
                     return false
                 end
@@ -21470,12 +21440,7 @@ ErrorReporter.set_game(GameName)
                 return objectsById
             end
             function RivalsCosmetics.SaveSelectionsToConfig()
-                local configName = RivalsCosmeticsState.CosmeticsConfigName
-                if type(configName) ~= 'string' or configName == '' then
-                    RivalsCosmeticsState.SavedConfigCosmeticObjects = nil
-                    return false
-                end
-                local configPath = ScriptPaths.config_path(configName)
+                local configPath = ScriptPaths.config_path(RivalsCosmeticsState.CosmeticsConfigName or 'RIVALS Default')
                 if not isfile(configPath) then
                     RivalsCosmeticsState.SavedConfigCosmeticObjects = nil
                     return false
@@ -23161,7 +23126,7 @@ ErrorReporter.set_game(GameName)
                 RivalsCosmeticsState.ApplyingCosmeticPreset = false
                 RivalsCosmeticsState.CosmeticsUiLoaded = false
                 RivalsCosmeticsState.CosmeticsUiLoading = false
-                RivalsCosmeticsState.CosmeticsConfigName = nil
+                RivalsCosmeticsState.CosmeticsConfigName = 'RIVALS Default'
                 RivalsCosmeticsState.NativeUnlockedInventory = nil
                 RivalsCosmeticsState.NativeFavoritesSeeded = false
                 RivalsCosmeticsState.NativeSaveToken = RivalsCosmeticsState.NativeSaveToken + 1
@@ -26278,6 +26243,59 @@ SaveManager:BuildConfigSection(Tabs.Settings)
 ThemeManager:ApplyToTab(Tabs.Settings)
 SaveManager:LoadAutoloadConfig()
 
+local function CreateSharedUIAdapter(args)
+    local names = args.config_names or { 'Legit', 'Rage' }
+    local shared = {}
+    function shared:get_config_names()
+        return names
+    end
+    function shared:should_auto_load_config()
+        return false
+    end
+    function shared:resolve_load_config_name()
+        return args.default_config_name or args.current_config_name
+    end
+    function shared:resolve_save_config_name()
+        return args.current_config_name
+    end
+    function shared:register_callbacks()
+        return true
+    end
+    function shared:reconcile_loaded_ui_settings()
+        return true
+    end
+    function shared:with_config_load_suspended(fn)
+        return fn()
+    end
+    function shared:notify_loaded(duration)
+        if type(Library.Notify) == 'function' then
+            Library:Notify({ Title = 'Kicia', Description = 'Loaded', Time = duration or 5 })
+        end
+    end
+    return shared
+end
+local function PrepareSharedConfig(args)
+    local sm = args.save_manager
+    local defaultName = args.default_config_name
+    if isfile and type(args.script_paths.config_path) == 'function' and not isfile(args.script_paths.config_path(defaultName)) then
+        pcall(function() sm:Save(defaultName) end)
+    end
+    if args.shared_ui and type(args.shared_ui.get_config_names) == 'function' then
+        for _, configName in ipairs(args.shared_ui:get_config_names()) do
+            local path = args.script_paths.config_path(configName)
+            if isfile and not isfile(path) then
+                local ok
+                if type(args.reset_config_to_default) == 'function' then
+                    ok = args.reset_config_to_default(args.shared_ui, configName)
+                end
+                if ok == false or ok == nil then
+                    pcall(function() sm:Save(configName) end)
+                end
+            end
+        end
+    end
+    return true
+end
 local RivalsRuntime = {}
             function RivalsRuntime.ResetState()
                 RivalsRuntimeBridge.WorldVisuals.Destroy()
@@ -26304,8 +26322,6 @@ local RivalsRuntime = {}
                 RivalsRagebotState.LastHoldUpdateAt = 0
                 RivalsRagebotState.LastRespawnRequestAt = 0
                 RivalsRagebotState.PhaseClockSec = 0
-                ragebotUpdateAccumulator = 0
-                ragebotKernelWasEnabled = false
                 if RivalsRuntimeBridge.KiciaRagebot then
                     RivalsRuntimeBridge.KiciaRagebot.CapsOk = nil
                     RivalsRuntimeBridge.KiciaRagebot.NextCapsCheckAt = 0
@@ -26486,6 +26502,599 @@ local RivalsRuntime = {}
             end
             function RivalsRuntime.Initialize(Window)
                 Connections = ConnectionRegistry.new()
+                local ReconcileLoadedState
+                local RivalsConfigProfiles = {
+                    Names = { 'Legit', 'Rage' },
+                }
+                local SharedConfigDefaultObjects = {
+                    { idx = 'P1S1T1', type = 'Toggle', value = true },
+                    { idx = 'P1S1T2', type = 'Toggle', value = true },
+                    { idx = 'P1S1T3', type = 'Toggle', value = true },
+                    { idx = 'P1S1T4', type = 'Toggle', value = true },
+                    { idx = 'P1S1T5', type = 'Toggle', value = true },
+                    { idx = 'P1S1T6', type = 'Toggle', value = true },
+                    { idx = 'P1S1T7', type = 'Toggle', value = false },
+                    { idx = 'P1S1T8', type = 'Toggle', value = true },
+                    { idx = 'P1S1T9', type = 'Toggle', value = true },
+                    { idx = 'P1S1T10', type = 'Toggle', value = false },
+                    { idx = 'P1S1T11', type = 'Toggle', value = true },
+                    { idx = 'P1S1C1', type = 'ColorPicker', value = '00ff00', transparency = 0 },
+                    { idx = 'P1S1C2', type = 'ColorPicker', value = 'ff0000', transparency = 0 },
+                    { idx = 'P1S1C4', type = 'ColorPicker', value = 'ffff00', transparency = 0 },
+                    { idx = 'P1S1S3', type = 'Slider', value = 1 },
+                    { idx = 'P1S1S4', type = 'Slider', value = 0 },
+                    { idx = 'P1S2T1', type = 'Toggle', value = true },
+                    { idx = 'P1S2T2', type = 'Toggle', value = true },
+                    { idx = 'P1S2T4', type = 'Toggle', value = true },
+                    { idx = 'P1S2T5', type = 'Toggle', value = true },
+                    { idx = 'P1S2T6', type = 'Toggle', value = true },
+                    { idx = 'P1S3T1', type = 'Toggle', value = false },
+                    { idx = 'P1S3D1', type = 'Dropdown', value = 'Enemies' },
+                    { idx = 'P1S3T2', type = 'Toggle', value = true },
+                    { idx = 'P1S3T3', type = 'Toggle', value = true },
+                    { idx = 'P1S3S1', type = 'Slider', value = 0.05 },
+                    { idx = 'P1S3C1', type = 'ColorPicker', value = 'ffd250', transparency = 0 },
+                    { idx = 'P1S3C2', type = 'ColorPicker', value = 'ff5a5a', transparency = 0 },
+                    { idx = 'P1S4T2', type = 'Toggle', value = false },
+                    { idx = 'P1S4C1', type = 'ColorPicker', value = '3bcbff', transparency = 0 },
+                    { idx = 'P1S4C2', type = 'ColorPicker', value = '01668b', transparency = 0 },
+                    { idx = 'P1S4T3', type = 'Toggle', value = false },
+                    { idx = 'P1S4S1', type = 'Slider', value = 12 },
+                    { idx = 'P1S4T4', type = 'Toggle', value = false },
+                    { idx = 'P1S4S2', type = 'Slider', value = 2 },
+                    { idx = 'P1S4T5', type = 'Toggle', value = false },
+                    { idx = 'P1S4C3', type = 'ColorPicker', value = '64a0ff', transparency = 0 },
+                    { idx = 'P1S4C4', type = 'ColorPicker', value = '14285a', transparency = 0 },
+                    { idx = 'P1S4T6', type = 'Toggle', value = false },
+                    { idx = 'P1S4S3', type = 'Slider', value = 0 },
+                    { idx = 'P1S4T7', type = 'Toggle', value = false },
+                    { idx = 'P1S4S4', type = 'Slider', value = 0 },
+                    { idx = 'P1S4T8', type = 'Toggle', value = false },
+                    { idx = 'P1S4S5', type = 'Slider', value = 0 },
+                    { idx = 'P1S5T1', type = 'Toggle', value = false },
+                    { idx = 'P1S5C1', type = 'ColorPicker', value = 'c0c0c0', transparency = 0 },
+                    { idx = 'P1S5S1', type = 'Slider', value = 0 },
+                    { idx = 'P1S5S2', type = 'Slider', value = 10000 },
+                    { idx = 'P1S5T2', type = 'Toggle', value = false },
+                    { idx = 'P1S5S3', type = 'Slider', value = 41.733 },
+                    { idx = 'P1S5T3', type = 'Toggle', value = false },
+                    { idx = 'P1S5T4', type = 'Toggle', value = false },
+                    { idx = 'P1S5S4', type = 'Slider', value = 0.5 },
+                    { idx = 'P1S5T5', type = 'Toggle', value = false },
+                    { idx = 'P1S5D1', type = 'Dropdown', value = 'Realistic' },
+                    { idx = 'P1S5T6', type = 'Toggle', value = false },
+                    { idx = 'P1S5C2', type = 'ColorPicker', value = 'b3b3b8', transparency = 0 },
+                    { idx = 'P1S5T7', type = 'Toggle', value = false },
+                    { idx = 'P1S6T1', type = 'Toggle', value = false },
+                    { idx = 'P1S6S1', type = 'Slider', value = 0.4 },
+                    { idx = 'P1S6S2', type = 'Slider', value = 24 },
+                    { idx = 'P1S6S3', type = 'Slider', value = 0.95 },
+                    { idx = 'P1S7T1', type = 'Toggle', value = false },
+                    { idx = 'P1S7C1', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
+                    { idx = 'P1S7S1', type = 'Slider', value = 0 },
+                    { idx = 'P1S7S2', type = 'Slider', value = 0 },
+                    { idx = 'P1S7S3', type = 'Slider', value = 0 },
+                    { idx = 'P1S8T1', type = 'Toggle', value = false },
+                    { idx = 'P1S8D1', type = 'Dropdown', value = 'Default' },
+                    { idx = 'P1S10T1', type = 'Toggle', value = false },
+                    { idx = 'P1S10S1', type = 'Slider', value = 0.25 },
+                    { idx = 'P1S10S2', type = 'Slider', value = 1 },
+                    { idx = 'P1S12T1', type = 'Toggle', value = false },
+                    { idx = 'P1S12D1', type = 'Dropdown', value = '' },
+                    { idx = 'P1S13T1', type = 'Toggle', value = false },
+                    { idx = 'P1S13C1', type = 'ColorPicker', value = 'c8aa6c', transparency = 0 },
+                    { idx = 'P1S13C2', type = 'ColorPicker', value = '5c3c0e', transparency = 0 },
+                    { idx = 'P1S13S1', type = 'Slider', value = 0.395 },
+                    { idx = 'P1S13S2', type = 'Slider', value = 0 },
+                    { idx = 'P1S13S3', type = 'Slider', value = 0 },
+                    { idx = 'P1S13S4', type = 'Slider', value = 0 },
+                    { idx = 'P1S14T1', type = 'Toggle', value = false },
+                    { idx = 'P1S14I1', type = 'Input', text = '' },
+                    { idx = 'P1S14S1', type = 'Slider', value = 1 },
+                    { idx = 'P1S28T1', type = 'Toggle', value = false },
+                    { idx = 'P1S28D1', type = 'Dropdown', value = 'Snow' },
+                    { idx = 'P1S28C1', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
+                    { idx = 'P1S28S1', type = 'Slider', value = 1 },
+                    { idx = 'P1S28S2', type = 'Slider', value = 1 },
+                    { idx = 'P1S28S3', type = 'Slider', value = 1 },
+                    { idx = 'P1S28S4', type = 'Slider', value = 1 },
+                    { idx = 'P1S28S5', type = 'Slider', value = 0.6 },
+                    { idx = 'P1S28S6', type = 'Slider', value = 3 },
+                    { idx = 'P1S28S7', type = 'Slider', value = 45 },
+                    { idx = 'P1S28S8', type = 'Slider', value = 0 },
+                    { idx = 'P1S28S9', type = 'Slider', value = 0 },
+                    { idx = 'P1S29T1', type = 'Toggle', value = false },
+                    { idx = 'P1S29C1', type = 'ColorPicker', value = 'd6e6ff', transparency = 0 },
+                    { idx = 'P1S29S1', type = 'Slider', value = 2 },
+                    { idx = 'P1S29S2', type = 'Slider', value = 80 },
+                    { idx = 'P1S29S3', type = 'Slider', value = 220 },
+                    { idx = 'P1S29S4', type = 'Slider', value = 4 },
+                    { idx = 'P1S29S5', type = 'Slider', value = 7 },
+                    { idx = 'P1S29S6', type = 'Slider', value = 12 },
+                    { idx = 'P1S29S7', type = 'Slider', value = 8 },
+                    { idx = 'P1S29T2', type = 'Toggle', value = true },
+                    { idx = 'P1S29C2', type = 'ColorPicker', value = 'eef6ff', transparency = 0 },
+                    { idx = 'P1S29S8', type = 'Slider', value = 18 },
+                    { idx = 'P1S29S9', type = 'Slider', value = 2.2 },
+                    { idx = 'P1S29S10', type = 'Slider', value = 22 },
+                    { idx = 'P1S29S11', type = 'Slider', value = 22 },
+                    { idx = 'P1S29S12', type = 'Slider', value = 4 },
+                    { idx = 'P1S29T3', type = 'Toggle', value = true },
+                    { idx = 'P1S29C3', type = 'ColorPicker', value = 'eec8ff', transparency = 0 },
+                    { idx = 'P1S29S13', type = 'Slider', value = 0.45 },
+                    { idx = 'P1S29S14', type = 'Slider', value = 14 },
+                    { idx = 'P1S29T4', type = 'Toggle', value = true },
+                    { idx = 'P1S29S15', type = 'Slider', value = 1 },
+                    { idx = 'P1S29T5', type = 'Toggle', value = true },
+                    { idx = 'P1S29I1', type = 'Input', text = '' },
+                    { idx = 'P1S30T1', type = 'Toggle', value = false },
+                    { idx = 'P1S30S1', type = 'Slider', value = 1 },
+                    { idx = 'P1S30S2', type = 'Slider', value = 1 },
+                    { idx = 'P1S31T1', type = 'Toggle', value = false },
+                    { idx = 'P1S31T2', type = 'Toggle', value = false },
+                    { idx = 'P1S31T3', type = 'Toggle', value = false },
+                    { idx = 'P1S31T4', type = 'Toggle', value = false },
+                    { idx = 'P1S31T5', type = 'Toggle', value = false },
+                    { idx = 'P1S15T1', type = 'Toggle', value = false },
+                    { idx = 'P1S15T2', type = 'Toggle', value = false },
+                    { idx = 'P1S15D1', type = 'Dropdown', value = '' },
+                    { idx = 'P1S15S1', type = 'Slider', value = 1 },
+                    { idx = 'P1S15S2', type = 'Slider', value = 1 },
+                    { idx = 'P1S15D2', type = 'Dropdown', value = '' },
+                    { idx = 'P1S15S3', type = 'Slider', value = 1 },
+                    { idx = 'P1S15S4', type = 'Slider', value = 1 },
+                    { idx = 'P1S15T3', type = 'Toggle', value = false },
+                    { idx = 'P1S15T4', type = 'Toggle', value = false },
+                    { idx = 'P1S15C1', type = 'ColorPicker', value = 'ff0000', transparency = 0 },
+                    { idx = 'P1S15S5', type = 'Slider', value = 0.8 },
+                    { idx = 'P1S15D3', type = 'Dropdown', value = 'Ghost' },
+                    { idx = 'P1S16T1', type = 'Toggle', value = false },
+                    { idx = 'P1S16T2', type = 'Toggle', value = false },
+                    { idx = 'P1S16D1', type = 'Dropdown', value = '' },
+                    { idx = 'P1S16S1', type = 'Slider', value = 1 },
+                    { idx = 'P1S16S2', type = 'Slider', value = 1 },
+                    { idx = 'P1S16T3', type = 'Toggle', value = false },
+                    { idx = 'P1S16C1', type = 'ColorPicker', value = 'ff0000', transparency = 0 },
+                    { idx = 'P1S16S3', type = 'Slider', value = 0.8 },
+                    { idx = 'P1S16D2', type = 'Dropdown', value = 'Ghost' },
+                    { idx = 'P1S18T1', type = 'Toggle', value = false },
+                    { idx = 'P1S18C1', type = 'ColorPicker', value = '78dcff', transparency = 0 },
+                    { idx = 'P1S18D1', type = 'Dropdown', value = 'Beam' },
+                    { idx = 'P1S18S1', type = 'Slider', value = 0.06 },
+                    { idx = 'P1S18S2', type = 'Slider', value = 4 },
+                    { idx = 'P1S18S3', type = 'Slider', value = 1 },
+                    { idx = 'P1S18S4', type = 'Slider', value = 1 },
+                    { idx = 'P1S18S5', type = 'Slider', value = 1 },
+                    { idx = 'P1S18S6', type = 'Slider', value = 0.6 },
+                    { idx = 'P1S18S7', type = 'Slider', value = 0.35 },
+                    { idx = 'P1S18T2', type = 'Toggle', value = true },
+                    { idx = 'P1S18S8', type = 'Slider', value = 18 },
+                    { idx = 'P1S18S9', type = 'Slider', value = 0.7 },
+                    { idx = 'P1S19T1', type = 'Toggle', value = false },
+                    { idx = 'P1S19D1', type = 'Dropdown', value = 'Ghost' },
+                    { idx = 'P1S19C1', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
+                    { idx = 'P1S19S1', type = 'Slider', value = 0 },
+                    { idx = 'P1S19T2', type = 'Toggle', value = false },
+                    { idx = 'P1S20T1', type = 'Toggle', value = false },
+                    { idx = 'P1S20D1', type = 'Dropdown', value = 'Ghost' },
+                    { idx = 'P1S20C1', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
+                    { idx = 'P1S20S1', type = 'Slider', value = 0 },
+                    { idx = 'P1S20T2', type = 'Toggle', value = true },
+                    { idx = 'P1S21T1', type = 'Toggle', value = false },
+                    { idx = 'P1S21D1', type = 'Dropdown', value = 'Ghost' },
+                    { idx = 'P1S21C1', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
+                    { idx = 'P1S21S1', type = 'Slider', value = 0 },
+                    { idx = 'P1S21T2', type = 'Toggle', value = false },
+                    { idx = 'P1S22T1', type = 'Toggle', value = false },
+                    { idx = 'P1S22C1', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
+                    { idx = 'P1S22S1', type = 'Slider', value = 0.5 },
+                    { idx = 'P1S22C2', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
+                    { idx = 'P1S22S2', type = 'Slider', value = 0 },
+                    { idx = 'P1S23T1', type = 'Toggle', value = false },
+                    { idx = 'P1S23C1', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
+                    { idx = 'P1S23S1', type = 'Slider', value = 0.5 },
+                    { idx = 'P1S23C2', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
+                    { idx = 'P1S23S2', type = 'Slider', value = 0 },
+                    { idx = 'P1S26T1', type = 'Toggle', value = false },
+                    { idx = 'P1S26D1', type = 'Dropdown', value = 'Lines' },
+                    { idx = 'P1S26S1', type = 'Slider', value = 12 },
+                    { idx = 'P1S26S2', type = 'Slider', value = 2 },
+                    { idx = 'P1S26S3', type = 'Slider', value = 6 },
+                    { idx = 'P1S26T2', type = 'Toggle', value = false },
+                    { idx = 'P1S26C1', type = 'ColorPicker', value = '000000', transparency = 0 },
+                    { idx = 'P1S26S11', type = 'Slider', value = 1 },
+                    { idx = 'P1S26T3', type = 'Toggle', value = true },
+                    { idx = 'P1S26C2', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
+                    { idx = 'P1S26T4', type = 'Toggle', value = true },
+                    { idx = 'P1S26C3', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
+                    { idx = 'P1S26T5', type = 'Toggle', value = true },
+                    { idx = 'P1S26C4', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
+                    { idx = 'P1S26T6', type = 'Toggle', value = true },
+                    { idx = 'P1S26C5', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
+                    { idx = 'P1S26T7', type = 'Toggle', value = false },
+                    { idx = 'P1S26S8', type = 'Slider', value = 4 },
+                    { idx = 'P1S26S9', type = 'Slider', value = 16 },
+                    { idx = 'P1S26S10', type = 'Slider', value = 3 },
+                    { idx = 'P1S26T8', type = 'Toggle', value = false },
+                    { idx = 'P1S26S4', type = 'Slider', value = 0 },
+                    { idx = 'P1S26S5', type = 'Slider', value = 90 },
+                    { idx = 'P1S26I1', type = 'Input', text = '' },
+                    { idx = 'P1S26S6', type = 'Slider', value = 32 },
+                    { idx = 'P1S26S7', type = 'Slider', value = 0 },
+                    { idx = 'P1S26T9', type = 'Toggle', value = false },
+                    { idx = 'P1S26D2', type = 'Dropdown', value = 'Crosshair' },
+                    { idx = 'P1S26T10', type = 'Toggle', value = false },
+                    { idx = 'P1S26D3', type = 'Dropdown', value = 'Shimmer' },
+                    { idx = 'P1S26S12', type = 'Slider', value = 1 },
+                    { idx = 'P1S26C6', type = 'ColorPicker', value = '282828', transparency = 0 },
+                    { idx = 'P1S26C7', type = 'ColorPicker', value = 'ff0000', transparency = 0 },
+                    { idx = 'P1S26C8', type = 'ColorPicker', value = '0000ff', transparency = 0 },
+                    { idx = 'P1S26C9', type = 'ColorPicker', value = '000000', transparency = 0 },
+                    { idx = 'P1S26C10', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
+                    { idx = 'P1S26S13', type = 'Slider', value = 0 },
+                    { idx = 'P1S26T11', type = 'Toggle', value = false },
+                    { idx = 'P1S26I2', type = 'Input', text = '' },
+                    { idx = 'P1S26D4', type = 'Dropdown', value = 'Inconsolata' },
+                    { idx = 'P1S26S14', type = 'Slider', value = 14 },
+                    { idx = 'P1S26S15', type = 'Slider', value = 24 },
+                    { idx = 'P1S26C11', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
+                    { idx = 'P1S26T12', type = 'Toggle', value = false },
+                    { idx = 'P1S26C12', type = 'ColorPicker', value = '000000', transparency = 0 },
+                    { idx = 'P1S26S16', type = 'Slider', value = 1 },
+                    { idx = 'P1S26T13', type = 'Toggle', value = false },
+                    { idx = 'P1S26D5', type = 'Dropdown', value = 'Shimmer' },
+                    { idx = 'P1S26S17', type = 'Slider', value = 1 },
+                    { idx = 'P1S26C13', type = 'ColorPicker', value = '282828', transparency = 0 },
+                    { idx = 'P1S26C14', type = 'ColorPicker', value = '000000', transparency = 0 },
+                    { idx = 'P1S26C15', type = 'ColorPicker', value = 'ffffff', transparency = 0 },
+                    { idx = 'P1S26S18', type = 'Slider', value = 0 },
+                    { idx = 'P1S27T1', type = 'Toggle', value = false },
+                    { idx = 'P1S27T2', type = 'Toggle', value = false },
+                    { idx = 'P1S27T3', type = 'Toggle', value = false },
+                    { idx = 'P1S27T4', type = 'Toggle', value = false },
+                    { idx = 'P1S27T5', type = 'Toggle', value = false },
+                    { idx = 'P1S27T6', type = 'Toggle', value = false },
+                    { idx = 'P1S27T7', type = 'Toggle', value = false },
+                    { idx = 'P1S27T8', type = 'Toggle', value = false },
+                    { idx = 'P2S1T1', type = 'Toggle', value = true },
+                    { idx = 'P2S1T1K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
+                    { idx = 'P2S1D1', type = 'Dropdown', value = 'Silent' },
+                    { idx = 'P2S1T3', type = 'Toggle', value = true },
+                    { idx = 'P2S1T5', type = 'Toggle', value = true },
+                    { idx = 'P2S1D2', type = 'Dropdown', value = 'Auto' },
+                    { idx = 'P2S1T12', type = 'Toggle', value = false },
+                    { idx = 'P2S1T12K', type = 'KeyPicker', mode = 'Hold', key = 'Unknown', modifiers = {} },
+                    { idx = 'P2S1T13', type = 'Toggle', value = false },
+                    { idx = 'P2S1S8', type = 'Slider', value = 0 },
+                    { idx = 'P2S1S9', type = 'Slider', value = 250 },
+                    { idx = 'P2S1S10', type = 'Slider', value = 110 },
+                    { idx = 'P2S1S11', type = 'Slider', value = 12 },
+                    { idx = 'P2S1S12', type = 'Slider', value = 30 },
+                    { idx = 'P2S1S2', type = 'Slider', value = 282 },
+                    { idx = 'P2S1T6', type = 'Toggle', value = false },
+                    { idx = 'P2S1T7K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
+                    { idx = 'P2S1S7', type = 'Slider', value = 0 },
+                    { idx = 'P2S1T8', type = 'Toggle', value = true },
+                    { idx = 'P2S1T9', type = 'Toggle', value = true },
+                    { idx = 'P2S1D4', type = 'Dropdown', multi = true, value = {
+                        ['Flare Gun'] = true,
+                        ['Freeze Ray'] = true,
+                        ['Grenade Launcher'] = true,
+                        RPG = true,
+                    } },
+                    { idx = 'P2S2S1', type = 'Slider', value = 35 },
+                    { idx = 'P4S1T1', type = 'Toggle', value = true },
+                    { idx = 'P4S1S4', type = 'Slider', value = 85 },
+                    { idx = 'P4S1T2', type = 'Toggle', value = true },
+                    { idx = 'P4S1S3', type = 'Slider', value = 20 },
+                    { idx = 'P4S1T3', type = 'Toggle', value = false },
+                    { idx = 'P4S1T4', type = 'Toggle', value = false },
+                    { idx = 'P4S1S2', type = 'Slider', value = 100 },
+                    { idx = 'P4S1T5', type = 'Toggle', value = false },
+                    { idx = 'P4S1S5', type = 'Slider', value = 75 },
+                    { idx = 'P4S1T6', type = 'Toggle', value = false },
+                    { idx = 'P4S1D1', type = 'Dropdown', value = 'Impact' },
+                    { idx = 'P4S1T7', type = 'Toggle', value = false },
+                    { idx = 'P4S2T2', type = 'Toggle', value = true },
+                    { idx = 'P4S2S2', type = 'Slider', value = 85 },
+                    { idx = 'P4S2T3', type = 'Toggle', value = true },
+                    { idx = 'P4S2S3', type = 'Slider', value = 80 },
+                    { idx = 'P4S2T4', type = 'Toggle', value = false },
+                    { idx = 'P4S2T5', type = 'Toggle', value = false },
+                    { idx = 'P4S2T6', type = 'Toggle', value = false },
+                    { idx = 'P4S2T8', type = 'Toggle', value = false },
+                    { idx = 'P4S2T9', type = 'Toggle', value = false },
+                    { idx = 'P4S2S4', type = 'Slider', value = 80 },
+                    { idx = 'P4S2T10', type = 'Toggle', value = false },
+                    { idx = 'P4S2S5', type = 'Slider', value = 0 },
+                    { idx = 'P4S2S6', type = 'Slider', value = 0 },
+                    { idx = 'P4S2S7', type = 'Slider', value = 0 },
+                    { idx = 'P8S1T1', type = 'Toggle', value = true },
+                    { idx = 'P8S1T2', type = 'Toggle', value = true },
+                    { idx = 'P8S8T1', type = 'Toggle', value = false },
+                    { idx = 'P8S8T2', type = 'Toggle', value = false },
+                    { idx = 'P8S4T3', type = 'Toggle', value = false },
+                    { idx = 'P8S4T1K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
+                    { idx = 'P8S4T4', type = 'Toggle', value = false },
+                    { idx = 'P8S4S1', type = 'Slider', value = 0.15 },
+                    { idx = 'P8S4S2', type = 'Slider', value = 1 },
+                    { idx = 'P8S4T5', type = 'Toggle', value = true },
+                    { idx = 'P8S4T6', type = 'Toggle', value = true },
+                    { idx = 'P8S4T7', type = 'Toggle', value = true },
+                    { idx = 'P8S4D1', type = 'Dropdown', value = 'SwapOrReload' },
+                    { idx = 'P8S4D2', type = 'Dropdown', value = 'Random' },
+                    { idx = 'P8S4T8', type = 'Toggle', value = false },
+                    { idx = 'P8S4S4', type = 'Slider', value = 100 },
+                    { idx = 'P8S4S5', type = 'Slider', value = 0.5 },
+                    { idx = 'P8S4S3', type = 'Slider', value = -5 },
+                    { idx = 'P8S5T3', type = 'Toggle', value = false },
+                    { idx = 'P8S5D7', type = 'Dropdown', value = RivalsRuntimeBridge.ResolveAutoLoadoutMapValues()[1] },
+                    { idx = 'P8S5T4', type = 'Toggle', value = false },
+                    { idx = 'P8S5D8', type = 'Dropdown', value = '1' },
+                    { idx = 'P8S5D1', type = 'Dropdown', value = RivalsRuntimeBridge.ResolveAutoLoadoutDefaultWeapon('Primary') },
+                    { idx = 'P8S5D2', type = 'Dropdown', value = RivalsRuntimeBridge.ResolveAutoLoadoutDefaultWeapon('Secondary') },
+                    { idx = 'P8S5D3', type = 'Dropdown', value = RivalsRuntimeBridge.ResolveAutoLoadoutDefaultWeapon('Melee') },
+                    { idx = 'P8S5D4', type = 'Dropdown', value = RivalsRuntimeBridge.ResolveAutoLoadoutDefaultWeapon('Utility') },
+                    { idx = 'P8S5T2', type = 'Toggle', value = false },
+                    { idx = 'P8S5D5', type = 'Dropdown', multi = true, value = {} },
+                    { idx = 'P8S5D6', type = 'Dropdown', multi = true, value = {} },
+                    { idx = 'P8S5T5', type = 'Toggle', value = false },
+                    { idx = 'P8S5D9', type = 'Dropdown', multi = true, value = {} },
+                    { idx = 'P8S6D1', type = 'Dropdown', value = '1v1' },
+                    { idx = 'P9S2T1', type = 'Toggle', value = false },
+                    { idx = 'P9S2T2', type = 'Toggle', value = true },
+                    { idx = 'P9S2T3', type = 'Toggle', value = true },
+                    { idx = 'P9S2T4', type = 'Toggle', value = true },
+                    { idx = 'P9S2T5', type = 'Toggle', value = true },
+                    { idx = 'P9S2T6', type = 'Toggle', value = true },
+                    { idx = 'P9S2T7', type = 'Toggle', value = true },
+                    { idx = 'P9S2T8', type = 'Toggle', value = true },
+                    { idx = 'P9S2T9', type = 'Toggle', value = true },
+                    { idx = 'P9S2T10', type = 'Toggle', value = true },
+                    { idx = 'P9S2T11', type = 'Toggle', value = true },
+                    { idx = 'P9S2T12', type = 'Toggle', value = false },
+                    { idx = 'P9S2T13', type = 'Toggle', value = false },
+                    { idx = 'P9S2T14', type = 'Toggle', value = true },
+                    { idx = 'P9S2T15', type = 'Toggle', value = true },
+                    { idx = 'P9S2T16', type = 'Toggle', value = true },
+                    { idx = 'P9S2T17', type = 'Toggle', value = true },
+                    { idx = 'P9S2T18', type = 'Toggle', value = true },
+                    { idx = 'P9S2T19', type = 'Toggle', value = false },
+                    { idx = 'P9S3T1', type = 'Toggle', value = false },
+                    { idx = 'P10S3T1', type = 'Toggle', value = false },
+                    { idx = 'P10S3T1K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
+                    { idx = 'P10S3S1', type = 'Slider', value = 2 },
+                    { idx = 'P10S3T2', type = 'Toggle', value = false },
+                    { idx = 'P10S3T2K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
+                    { idx = 'P10S3S2', type = 'Slider', value = 10 },
+                    { idx = 'P10S3T3', type = 'Toggle', value = false },
+                    { idx = 'P10S3S3', type = 'Slider', value = 2 },
+                    { idx = 'P10S3T4', type = 'Toggle', value = false },
+                    { idx = 'P10S3T4K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
+                    { idx = 'P10S3S4', type = 'Slider', value = 100 },
+                    { idx = 'P10S3T5', type = 'Toggle', value = false },
+                    { idx = 'P10S3T5K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
+                    { idx = 'P10S3T6', type = 'Toggle', value = false },
+                    { idx = 'P10S3T6K', type = 'KeyPicker', mode = 'Always', key = 'Unknown', modifiers = {} },
+                    { idx = 'P10S3S5', type = 'Slider', value = 50 },
+                    { idx = 'P10S3T7', type = 'Toggle', value = false },
+                    { idx = 'P10S3T7K', type = 'KeyPicker', mode = 'Hold', key = 'Unknown', modifiers = {} },
+                    { idx = 'P10S3D1', type = 'Dropdown', value = 'Under Feet' },
+                    { idx = 'P10S3S6', type = 'Slider', value = 60 },
+                    { idx = 'P10S3S7', type = 'Slider', value = 20 },
+                    { idx = 'P10S3S8', type = 'Slider', value = 8 },
+                    { idx = 'P10S4T1', type = 'Toggle', value = false },
+                    { idx = 'P10S4T2', type = 'Toggle', value = false },
+                    { idx = 'P10S4T3', type = 'Toggle', value = false },
+                    { idx = 'P10S4S1', type = 'Slider', value = 3 },
+                    { idx = 'P10S4S2', type = 'Slider', value = 50 },
+                    { idx = 'P10S4S3', type = 'Slider', value = 180 },
+                    { idx = 'P10S4S4', type = 'Slider', value = 35 },
+                    { idx = 'P10S4S5', type = 'Slider', value = 0.2 },
+                    { idx = 'P10S4T4', type = 'Toggle', value = false },
+                    { idx = 'P10S4T4K', type = 'KeyPicker', mode = 'Toggle', key = 'Unknown', modifiers = {} },
+                    { idx = 'P10S4T5', type = 'Toggle', value = false },
+                    { idx = 'P10S4T5K', type = 'KeyPicker', mode = 'Toggle', key = 'Unknown', modifiers = {} },
+                    { idx = 'P10S4I1', type = 'Input', text = '' },
+                    { idx = 'P10S6T1', type = 'Toggle', value = false },
+                    { idx = 'P10S6I1', type = 'Input', text = '' },
+                    { idx = 'P10S6S1', type = 'Slider', value = 1 },
+                    { idx = 'P10S6S2', type = 'Slider', value = 0 },
+                    { idx = 'P10S6S3', type = 'Slider', value = 100 },
+                    { idx = 'P10S7T1', type = 'Toggle', value = false },
+                    { idx = 'P10S7D1', type = 'Dropdown', value = 'VR' },
+                    { idx = 'P10S2T1', type = 'Toggle', value = false },
+                    { idx = 'P10S2D1', type = 'Dropdown', multi = true, value = {} },
+                    { idx = 'P10S2D2', type = 'Dropdown', multi = true, value = {} },
+                    { idx = 'P10S2C1', type = 'ColorPicker', value = 'faaa46', transparency = 0 },
+                    { idx = 'P5S1T2', type = 'Toggle', value = false },
+                }
+                local ConfigProfileDefaults = {
+                    Legit = {
+                        { idx = 'P2S1T7', type = 'Toggle', value = false },
+                        { idx = 'P8S4T1', type = 'Toggle', value = false },
+                        { idx = 'P8S4T2', type = 'Toggle', value = false },
+                        { idx = 'P8S5T1', type = 'Toggle', value = false },
+                        { idx = 'P8S6T1', type = 'Toggle', value = false },
+                        { idx = 'P4S1T3', type = 'Toggle', value = false },
+                        { idx = 'P4S1T4', type = 'Toggle', value = false },
+                        { idx = 'P8S4T4', type = 'Toggle', value = false },
+                    },
+                    Rage = {
+                        { idx = 'P2S1T7', type = 'Toggle', value = true },
+                        { idx = 'P8S4T1', type = 'Toggle', value = true },
+                        { idx = 'P8S4T2', type = 'Toggle', value = true },
+                        { idx = 'P8S5T1', type = 'Toggle', value = true },
+                        { idx = 'P8S6T1', type = 'Toggle', value = true },
+                        { idx = 'P4S1T3', type = 'Toggle', value = true },
+                        { idx = 'P4S1T4', type = 'Toggle', value = true },
+                        { idx = 'P8S4T4', type = 'Toggle', value = true },
+                    },
+                }
+                local function CloneRivalsConfigProfileValue(value)
+                    if type(value) ~= 'table' then
+                        return value
+                    end
+                    local copy = {}
+                    for key, child in pairs(value) do
+                        copy[key] = CloneRivalsConfigProfileValue(child)
+                    end
+                    return copy
+                end
+                local function CloneRivalsConfigProfileObject(object)
+                    local copy = {}
+                    for key, value in pairs(object) do
+                        copy[key] = CloneRivalsConfigProfileValue(value)
+                    end
+                    return copy
+                end
+                local function BuildRivalsConfigProfileDefaultObjects(config_name)
+                    local profile_defaults = ConfigProfileDefaults[config_name]
+                    if type(profile_defaults) ~= 'table' then
+                        return nil
+                    end
+                    local objects = {}
+                    local indexes_by_id = {}
+                    local function upsert(object)
+                        if type(object) ~= 'table' or type(object.idx) ~= 'string' then
+                            return
+                        end
+                        local cloned = CloneRivalsConfigProfileObject(object)
+                        local existing_index = indexes_by_id[cloned.idx]
+                        if existing_index then
+                            objects[existing_index] = cloned
+                        else
+                            indexes_by_id[cloned.idx] = #objects + 1
+                            objects[#objects + 1] = cloned
+                        end
+                    end
+                    for _, object in ipairs(SharedConfigDefaultObjects) do
+                        upsert(object)
+                    end
+                    for _, object in ipairs(profile_defaults) do
+                        upsert(object)
+                    end
+                    return objects
+                end
+                local function WriteRivalsConfigProfileDefault(config_name)
+                    local objects = BuildRivalsConfigProfileDefaultObjects(config_name)
+                    if not objects then
+                        return false, 'unknown RIVALS config profile: ' .. tostring(config_name)
+                    end
+                    local settings_folder = ScriptPaths.storage_root() .. '/settings'
+                    if not isfolder(settings_folder) then
+                        makefolder(settings_folder)
+                    end
+                    local ok, err = pcall(function()
+                        writefile(ScriptPaths.config_path(config_name), HttpService:JSONEncode({ objects = objects }))
+                    end)
+                    if not ok then
+                        return false, err
+                    end
+                    return true
+                end
+                RivalsConfigProfiles.WriteDefault = WriteRivalsConfigProfileDefault
+                SaveManager:SetIgnoreIndexes({ 'P1S32D1', 'P1S26D6', 'P1S14D1' })
+                local SharedUI = CreateSharedUIAdapter({
+                    window = Window,
+                    settings_tab = Tabs.Settings,
+                    library = Library,
+                    theme_manager = ThemeManager,
+                    script_paths = ScriptPaths,
+                    save_manager = SaveManager,
+                    current_config_name = 'RIVALS',
+                    default_config_name = 'RIVALS Default',
+                    config_names = RivalsConfigProfiles.Names,
+                    use_global_config_names = true,
+                    toggles = Toggles,
+                    options = Options,
+                    local_player = LP,
+                    defaults = {
+                        auto_show = false,
+                        show_notification = true,
+                        show_keybind_states = true,
+                        auto_execute_on_teleport = true,
+                        auto_load_config = true,
+                        auto_save_config = true,
+                        load_config_name = 'Legit',
+                        menu_keybind = 'LeftControl',
+                    },
+                    persist_menu_keybind = false,
+                    queue_on_teleport = queue_on_teleport,
+                    before_save = function(shared_ui, config_name)
+                        local saveName = config_name or (shared_ui and shared_ui:resolve_save_config_name()) or 'Legit'
+                        RivalsRuntimeBridge.SetRivalsCosmeticsConfigName(saveName)
+                        RivalsRuntimeBridge.SetAutoLoadoutConfigName(saveName)
+                        RivalsRuntimeBridge.CaptureSavedRivalsCosmeticsSelections()
+                    end,
+                    on_save = function(shared_ui, config_name)
+                        local saveName = config_name or (shared_ui and shared_ui:resolve_save_config_name()) or 'Legit'
+                        RivalsRuntimeBridge.SetRivalsCosmeticsConfigName(saveName)
+                        RivalsRuntimeBridge.SetAutoLoadoutConfigName(saveName)
+                        RivalsRuntimeBridge.SaveRivalsCosmeticsSelections()
+                        RivalsRuntimeBridge.SaveAutoLoadoutProfiles()
+                    end,
+                    on_load_saved = function(shared_ui, config_name)
+                        local loadName = config_name or (shared_ui and shared_ui:resolve_load_config_name()) or 'Legit'
+                        RivalsRuntimeBridge.SetRivalsCosmeticsConfigName(loadName)
+                        RivalsRuntimeBridge.SetAutoLoadoutConfigName(loadName)
+                        task.defer(GuardRivalsCallback('Cosmetics_LoadSavedSelections', function()
+                            RivalsRuntimeBridge.LoadSavedRivalsCosmeticsSelections()
+                            RivalsRuntimeBridge.RefreshRivalsCosmetics()
+                            RivalsRuntimeBridge.ApplyRivalsCosmetics()
+                        end))
+                        task.defer(GuardRivalsCallback('AutoLoadout_LoadSavedProfiles', RivalsRuntimeBridge.LoadAutoLoadoutProfiles))
+                    end,
+                    on_load_default = function(shared_ui, config_name)
+                        local loadName = config_name or (shared_ui and shared_ui:resolve_save_config_name()) or 'Legit'
+                        RivalsRuntimeBridge.SetRivalsCosmeticsConfigName(loadName)
+                        RivalsRuntimeBridge.SetAutoLoadoutConfigName(loadName)
+                        task.defer(GuardRivalsCallback('Cosmetics_LoadDefaultSelections', function()
+                            RivalsRuntimeBridge.LoadSavedRivalsCosmeticsSelections()
+                            RivalsRuntimeBridge.RefreshRivalsCosmetics()
+                            RivalsRuntimeBridge.ApplyRivalsCosmetics()
+                        end))
+                        task.defer(GuardRivalsCallback('AutoLoadout_LoadDefaultProfiles', RivalsRuntimeBridge.LoadAutoLoadoutProfiles))
+                    end,
+                    reset_config_to_default = function(shared_ui, config_name)
+                        return RivalsConfigProfiles.WriteDefault(config_name)
+                    end,
+                    reconcile_loaded_state = function()
+                        if ReconcileLoadedState then
+                            ReconcileLoadedState()
+                        end
+                    end,
+                })
+                local initialRivalsConfigName = (SharedUI:should_auto_load_config() and SharedUI:resolve_load_config_name()) or 'RIVALS Default'
+                RivalsRuntimeBridge.SetRivalsCosmeticsConfigName(initialRivalsConfigName)
+                RivalsRuntimeBridge.SetAutoLoadoutConfigName(initialRivalsConfigName)
+                ReconcileLoadedState = function()
+                    RefreshEspRenderSettings()
+                    RivalsModsState.EnsureHooks()
+                    RivalsRuntimeBridge.WorldVisuals.RefreshAll()
+                    RivalsRuntimeBridge.ViewmodelVisuals.RefreshAll()
+                    RivalsRuntimeBridge.NativeRemovals.RefreshAll()
+                    RivalsRuntimeBridge.Movement.RefreshAll()
+                    RivalsRuntimeBridge.DeviceSpoof.RefreshAll()
+                    RivalsRuntimeBridge.PlayerSpoofer.RefreshAll()
+                    RivalsRuntimeBridge.AnimationPlayer.RefreshAll()
+                    RivalsRuntimeBridge.RefreshRivalsCosmetics()
+                    RivalsRuntimeBridge.ApplyRivalsCosmetics()
+                end
+                PrepareSharedConfig({
+                    save_manager = SaveManager,
+                    script_paths = ScriptPaths,
+                    current_config_name = 'RIVALS',
+                    default_config_name = 'RIVALS Default',
+                    shared_ui = SharedUI,
+                    toggles = Toggles,
+                    options = Options,
+                    reset_config_to_default = function(shared_ui, config_name)
+                        return RivalsConfigProfiles.WriteDefault(config_name)
+                    end,
+                })
+                RivalsRuntimeBridge.LoadSavedRivalsCosmeticsSelections()
+                task.defer(GuardRivalsCallback('AutoLoadout_LoadInitialProfiles', RivalsRuntimeBridge.LoadAutoLoadoutProfiles))
                 EnsureEspRenderSettingsTracking()
                 RefreshEspRenderSettings()
                 RivalsRuntimeBridge.WorldVisuals.RefreshAll()
@@ -26510,9 +27119,7 @@ local RivalsRuntime = {}
                 RivalsRuntimeBridge.BindAutoLoadoutControllers()
                 RivalsRuntimeBridge.ApplyRivalsCosmetics()
                 RivalsRuntimeBridge.QueueAutoLoadoutSubmission()
-                if Library and type(Library.Notify) == 'function' then
-                    Library:Notify({ Title = 'Kicia', Description = 'Loaded', Time = 5 })
-                end
+                SharedUI:notify_loaded(5)
             end
             RivalsRuntime.Initialize(Window)
             GuardRivalsCallback('EnumLibrary_StartupBarrier', function()
