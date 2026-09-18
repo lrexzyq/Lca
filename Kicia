@@ -97,6 +97,7 @@ local undergroundSnapshotCharacter = nil
 local undergroundFirstRun = true
 local undergroundTick = 0
 local undergroundChaosSeed = 0
+local undergroundLastFakeCF = nil
 local undergroundRemoteList = {}
 local undergroundPhysForces = {}
 local undergroundFallHeight = -500
@@ -129,14 +130,49 @@ local function ugClampY(y)
 end
 
 local UG_HEAD_TO_HRP = 2.6
-local function ugComputeFakeY(hrp, char)
+local function ugIsStableReferenceCF(cf)
+    if cf == nil then return false end
+    local pos = cf.Position
+    return typeof(pos) == "Vector3"
+        and pos.X == pos.X and pos.Y == pos.Y and pos.Z == pos.Z
+        and math.abs(pos.X) < 50000
+        and math.abs(pos.Y) < 50000
+        and math.abs(pos.Z) < 50000
+end
+
+
+local function ugIsOwnFakeCF(cf)
+    if not cf or not undergroundLastFakeCF then return false end
+    local a = cf.Position
+    local b = undergroundLastFakeCF.Position
+    return typeof(a) == "Vector3" and typeof(b) == "Vector3"
+        and (a - b).Magnitude <= 250
+end
+local function ugGetReferenceCF(hrp)
+    if ugIsStableReferenceCF(undergroundRealCF) then
+        return undergroundRealCF
+    end
+    if undergroundSnapshot and ugIsStableReferenceCF(undergroundSnapshot.hrpCFrame) then
+        return undergroundSnapshot.hrpCFrame
+    end
+    if hrp and ugIsStableReferenceCF(hrp.CFrame) then
+        return hrp.CFrame
+    end
+    return nil
+end
+
+local function ugComputeFakeY(hrp, char, referencePosition)
     local headHeight = math.clamp(tonumber(undergroundDepth) or 0.4, 0.2, 0.6)
     local hrpBelowFloor = UG_HEAD_TO_HRP - headHeight
+    local origin = referencePosition or (hrp and hrp.Position)
+    if typeof(origin) ~= "Vector3" then
+        return ugClampY((hrp and hrp.Position.Y or 0) - hrpBelowFloor)
+    end
     local params = RaycastParams.new()
     params.FilterDescendantsInstances = { char }
     params.FilterType = Enum.RaycastFilterType.Exclude
-    local result = Workspace:Raycast(hrp.Position, Vector3.new(0, -500, 0), params)
-    local floorY = result and result.Position.Y or (hrp.Position.Y - hrpBelowFloor)
+    local result = Workspace:Raycast(origin, Vector3.new(0, -500, 0), params)
+    local floorY = result and result.Position.Y or (origin.Y - hrpBelowFloor)
     local fakeY = floorY - hrpBelowFloor
     return ugClampY(fakeY)
 end
@@ -339,6 +375,7 @@ startUnderground = function()
     undergroundEnabled = true
     undergroundTick = 0
     undergroundChaosSeed = math.random(1, 1e9)
+    undergroundLastFakeCF = nil
     ugUpdateFallHeight()
     ugCollectRemotes()
 
@@ -353,13 +390,20 @@ startUnderground = function()
             if hum then
                 pcall(function() hum:ChangeState(Enum.HumanoidStateType.Physics) end)
             end
-            undergroundRealCF = hrp.CFrame
-            undergroundRealVel = hrp.AssemblyLinearVelocity
-            undergroundRealAngVel = hrp.AssemblyAngularVelocity
-            local fakeY = ugComputeFakeY(hrp, char)
+            local currentCF = hrp.CFrame
+            if ugIsStableReferenceCF(currentCF) and not ugIsOwnFakeCF(currentCF) then
+                undergroundRealCF = currentCF
+                undergroundRealVel = hrp.AssemblyLinearVelocity
+                undergroundRealAngVel = hrp.AssemblyAngularVelocity
+            end
+            local referenceCF = ugGetReferenceCF(hrp) or currentCF
+            local referencePosition = referenceCF.Position
+            local fakeY = ugComputeFakeY(hrp, char, referencePosition)
             local chaos1 = math.sin(undergroundTick * 180 + undergroundChaosSeed) * 100
             local chaos2 = math.cos(undergroundTick * 220 + undergroundChaosSeed) * 100
-            hrp.CFrame = CFrame.new(hrp.Position.X + chaos1, fakeY, hrp.Position.Z + chaos2)
+            local fakeCF = CFrame.new(referencePosition.X + chaos1, fakeY, referencePosition.Z + chaos2) * referenceCF.Rotation
+            hrp.CFrame = fakeCF
+            undergroundLastFakeCF = fakeCF
             hrp.AssemblyLinearVelocity = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
         end)
@@ -371,18 +415,28 @@ startUnderground = function()
             local char = ugGetCharacter()
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
             if not char or not hrp or char ~= undergroundSnapshotCharacter then return end
-            local fakeY = ugClampY(ugComputeFakeY(hrp, char))
-            hrp.CFrame = CFrame.new(hrp.Position.X, fakeY, hrp.Position.Z)
+            local referenceCF = ugGetReferenceCF(hrp) or hrp.CFrame
+            local referencePosition = referenceCF.Position
+            local fakeY = ugClampY(ugComputeFakeY(hrp, char, referencePosition))
+            local fakeCF = CFrame.new(referencePosition.X, fakeY, referencePosition.Z) * referenceCF.Rotation
+            hrp.CFrame = fakeCF
+            undergroundLastFakeCF = fakeCF
             hrp.AssemblyLinearVelocity = Vector3.zero
             hrp.AssemblyAngularVelocity = Vector3.zero
         end)
     end)
 
-    undergroundRenderConn = RunService:BindToRenderStep("UndergroundSync", Enum.RenderPriority.First.Value, function()
+    undergroundRenderConn = RunService:BindToRenderStep("UndergroundSync", Enum.RenderPriority.First.Value + 1, function()
         if undergroundEnabled and undergroundRealCF then
             pcall(function()
                 local hrp = ugGetHrp()
                 if not hrp or lp.Character ~= undergroundSnapshotCharacter then return end
+                local currentCF = hrp.CFrame
+                if ugIsStableReferenceCF(currentCF) and not ugIsOwnFakeCF(currentCF) then
+                    undergroundRealCF = currentCF
+                    undergroundRealVel = hrp.AssemblyLinearVelocity
+                    undergroundRealAngVel = hrp.AssemblyAngularVelocity
+                end
                 hrp.CFrame = undergroundRealCF
                 hrp.AssemblyLinearVelocity = undergroundRealVel or Vector3.zero
                 hrp.AssemblyAngularVelocity = undergroundRealAngVel or Vector3.zero
@@ -395,7 +449,11 @@ startUnderground = function()
         pcall(function()
             local hrp = ugGetHrp()
             if hrp and undergroundSnapshotCharacter == lp.Character then
-                hrp.CFrame = CFrame.new(hrp.Position.X, ugClampY(ugComputeFakeY(hrp, lp.Character)), hrp.Position.Z)
+                local referenceCF = ugGetReferenceCF(hrp) or hrp.CFrame
+                local referencePosition = referenceCF.Position
+                local fakeCF = CFrame.new(referencePosition.X, ugClampY(ugComputeFakeY(hrp, lp.Character, referencePosition)), referencePosition.Z) * referenceCF.Rotation
+                hrp.CFrame = fakeCF
+                undergroundLastFakeCF = fakeCF
             end
         end)
     end)
@@ -405,8 +463,12 @@ startUnderground = function()
         pcall(function()
             local hrp = ugGetHrp()
             if not hrp or undergroundSnapshotCharacter ~= lp.Character then return end
-            local pos = hrp.Position
-            hrp.CFrame = CFrame.new(pos.X, ugClampY(pos.Y), pos.Z)
+            local referenceCF = ugGetReferenceCF(hrp) or hrp.CFrame
+            local referencePosition = referenceCF.Position
+            local fakeY = ugClampY(ugComputeFakeY(hrp, lp.Character, referencePosition))
+            local fakeCF = CFrame.new(referencePosition.X, fakeY, referencePosition.Z) * referenceCF.Rotation
+            hrp.CFrame = fakeCF
+            undergroundLastFakeCF = fakeCF
         end)
     end)
 
@@ -461,6 +523,7 @@ stopUnderground = function()
     undergroundRenderConn = nil
     undergroundRenderConn2 = nil
     undergroundRenderConn3 = nil
+    undergroundLastFakeCF = nil
     if undergroundRemoteConn then pcall(function() task.cancel(undergroundRemoteConn) end) undergroundRemoteConn = nil end
     if undergroundFloodConn then pcall(function() task.cancel(undergroundFloodConn) end) undergroundFloodConn = nil end
     if undergroundRestoreConn then undergroundRestoreConn:Disconnect() undergroundRestoreConn = nil end
@@ -2057,6 +2120,9 @@ return {
                 local flight = type(movement) == 'table' and movement.Flight or nil
                 return type(flight) == 'table' and flight.RootPart ~= nil and flight.RootPart.Parent ~= nil
             end
+            local function isUndergroundActive()
+                return undergroundEnabled == true
+            end
             local function flightCombatCFrame(offset, lookAt)
                 local position = VOID_CFRAME.Position + offset
                 if lookAt ~= nil then
@@ -2069,7 +2135,7 @@ return {
                     and ourRootPart.Parent ~= nil
                     and ourRootPart.CFrame
                     or clientCF
-                if isFlightActive() then
+                if isUndergroundActive() or isFlightActive() then
                     return baseCF
                 end
                 return randomEvade(baseCF)
@@ -2157,35 +2223,40 @@ return {
                 end
                 local above = isAbove(target)
                 local offset = above and OFFSET_ABOVE or OFFSET_BELOW
-                local aimHeadPosition = resolveTargetHeadPosition(target, hitboxHead)
                 local flightActive = isFlightActive()
-                if flightActive then
+                local undergroundActive = isUndergroundActive()
+                if flightActive or undergroundActive then
                     self:ClearGlue()
                 end
-                local void = flightActive and ourRootPart.CFrame or self._partGlue:Acquire(ourRootPart, hitboxHead)
-                if not flightActive then
+                local useLocalPosition = flightActive or undergroundActive
+                local void = useLocalPosition and ourRootPart.CFrame or self._partGlue:Acquire(ourRootPart, hitboxHead)
+                if not useLocalPosition then
                     self._gluedOurPart = ourRootPart
                 end
                 local cframe
-                if flightActive then
+                if undergroundActive then
+                    cframe = ourRootPart.CFrame
+                elseif flightActive then
                     if above then
                         cframe = flightCombatCFrame(offset)
                     else
-                        cframe = flightCombatCFrame(offset, aimHeadPosition or hitboxHead.Position)
+                        cframe = flightCombatCFrame(offset, hitboxHead.Position)
                     end
                 elseif above then
                     cframe = void + offset
                 else
-                    cframe = CFrame.new(void.Position + offset, aimHeadPosition or hitboxHead.Position)
+                    cframe = CFrame.new(void.Position + offset, hitboxHead.Position)
                 end
                 local fireNow = self._shootLock:ShouldFire(canFire, math.max(dt, 1 / 240) * Setting.ShootFrames())
                 local objectId = itemObjectId(item)
                 local isRaycast = itemIsRaycast(item)
-                local eyePos = cframe.Position + EYE_ABOVE_OFFSET
-                local headPos = aimHeadPosition or hitboxHead.Position
-                local pitch = resolveHeadPitchPosition(headPos, eyePos, above and PITCH_ABOVE or PITCH_BELOW)
-                local _, aimOy, aimOz = target.rootPart.CFrame:ToOrientation()
-                local aim1, aim2 = buildRealAim(eyePos, headPos, pitch, aimOy, aimOz)
+                local function buildFireArgs(liveHead)
+                    local _, liveOy, liveOz = target.rootPart.CFrame:ToOrientation()
+                    local liveHeadPosition = resolveTargetHeadPosition(target, liveHead) or liveHead.Position
+                    local liveEye = cframe.Position + EYE_ABOVE_OFFSET
+                    local livePitch = resolveHeadPitchPosition(liveHeadPosition, liveEye, above and PITCH_ABOVE or PITCH_BELOW)
+                    return buildRealAim(liveEye, liveHeadPosition, livePitch, liveOy, liveOz)
+                end
                 local function weaponAction()
                     if not fireNow then
                         return false
@@ -2194,12 +2265,7 @@ return {
                     if liveHead == nil then
                         return false
                     end
-                    local _, liveOy, liveOz = target.rootPart.CFrame:ToOrientation()
-                    local liveFallback = above and PITCH_ABOVE or PITCH_BELOW
-                    local liveHeadPosition = resolveTargetHeadPosition(target, liveHead) or liveHead.Position
-                    local liveEye = cframe.Position + EYE_ABOVE_OFFSET
-                    local livePitch = resolveHeadPitchPosition(liveHeadPosition, liveEye, liveFallback)
-                    local liveAim1, liveAim2 = buildRealAim(liveEye, liveHeadPosition, livePitch, liveOy, liveOz)
+                    local liveAim1, liveAim2 = buildFireArgs(liveHead)
                     return fireGun(objectId, isRaycast, liveAim1, liveAim2, liveHead, AIM_EXTRA) == true
                 end
                 return cframe, weaponAction
@@ -2249,41 +2315,50 @@ return {
                 local above = isAbove(target)
                 local offset = above and OFFSET_ABOVE or OFFSET_BELOW
                 local flightActive = isFlightActive()
-                if flightActive then
+                local undergroundActive = isUndergroundActive()
+                if flightActive or undergroundActive then
                     self:ClearGlue()
                 end
-                local void = flightActive and ourRootPart.CFrame or self._partGlue:Acquire(ourRootPart, hitboxHead)
-                if not flightActive then
+                local useLocalPosition = flightActive or undergroundActive
+                local void = useLocalPosition and ourRootPart.CFrame or self._partGlue:Acquire(ourRootPart, hitboxHead)
+                if not useLocalPosition then
                     self._gluedOurPart = ourRootPart
                 end
                 local cframe
-                local aimHeadPosition = resolveTargetHeadPosition(target, hitboxHead)
-                if flightActive then
+                if undergroundActive then
+                    cframe = ourRootPart.CFrame
+                elseif flightActive then
                     if above then
                         cframe = flightCombatCFrame(offset)
                     else
-                        cframe = flightCombatCFrame(offset, aimHeadPosition or hitboxHead.Position)
+                        cframe = flightCombatCFrame(offset, hitboxHead.Position)
                     end
                 elseif above then
                     cframe = void + offset
                 else
-                    cframe = CFrame.new(void.Position + offset, aimHeadPosition or hitboxHead.Position)
+                    cframe = CFrame.new(void.Position + offset, hitboxHead.Position)
                 end
-                local px, oy, oz = target.rootPart.CFrame:ToOrientation()
-                local eyePos = cframe.Position + EYE_ABOVE_OFFSET
-                local headPos = aimHeadPosition or hitboxHead.Position
-                local pitch = resolveHeadPitchPosition(headPos, eyePos, above and PITCH_ABOVE or PITCH_BELOW)
-                local aim1, aim2 = buildRealAim(eyePos, headPos, pitch, oy, oz)
+                local px, oy = target.rootPart.CFrame:ToOrientation()
                 local objectId = itemObjectId(item)
                 local fireNow = self._shootLock:ShouldFire(canFire, math.max(dt, 1 / 240) * Setting.ShootFrames())
                 local now = os.clock()
+                local function buildFireArgs(liveHead)
+                    local _, liveOy, liveOz = target.rootPart.CFrame:ToOrientation()
+                    local liveHeadPosition = resolveTargetHeadPosition(target, liveHead) or liveHead.Position
+                    local liveEye = cframe.Position + EYE_ABOVE_OFFSET
+                    local livePitch = resolveHeadPitchPosition(liveHeadPosition, liveEye, above and PITCH_ABOVE or PITCH_BELOW)
+                    return buildRealAim(liveEye, liveHeadPosition, livePitch, liveOy, liveOz)
+                end
                 if now < self._hitboxWindowUntil then
                     if not fireNow then
                         self:ClearGlue()
                         return ourRootPart.CFrame, nil, nil
                     end
                     return cframe, meleeViewAngles(px, oy), function()
-                        return fireMeleeHeavy(objectId, aim1, aim2, hitboxHead, AIM_EXTRA) == true
+                        local liveHead = resolveLiveHead(target)
+                        if liveHead == nil then return false end
+                        local liveAim1, liveAim2 = buildFireArgs(liveHead)
+                        return fireMeleeHeavy(objectId, liveAim1, liveAim2, liveHead, AIM_EXTRA) == true
                     end
                 end
                 if not fireNow then
@@ -2301,7 +2376,10 @@ return {
                     local behind = targetLook:Dot(ourLook) > 0.45 and targetLook:Dot(relative) < 0
                     if behind then
                         return cframe, meleeViewAngles(px, oy), function()
-                            local fired = fireMeleeHeavy(objectId, aim1, aim2, hitboxHead, AIM_EXTRA) == true
+                            local liveHead = resolveLiveHead(target)
+                            if liveHead == nil then return false end
+                            local liveAim1, liveAim2 = buildFireArgs(liveHead)
+                            local fired = fireMeleeHeavy(objectId, liveAim1, liveAim2, liveHead, AIM_EXTRA) == true
                             if fired then
                                 self:_RecordBackstab()
                             end
@@ -2310,7 +2388,10 @@ return {
                     end
                 end
                 return cframe, nil, function()
-                    return fireMeleeAttack(objectId, aim1, aim2, hitboxHead, AIM_EXTRA) == true
+                    local liveHead = resolveLiveHead(target)
+                    if liveHead == nil then return false end
+                    local liveAim1, liveAim2 = buildFireArgs(liveHead)
+                    return fireMeleeAttack(objectId, liveAim1, liveAim2, liveHead, AIM_EXTRA) == true
                 end
             end
             function MeleeStrategy:ResetState()
@@ -2394,7 +2475,7 @@ return {
                 if mode == 'Off' then
                     return {}
                 end
-                if isFlightActive() then
+                if isUndergroundActive() or isFlightActive() then
                     return { cframe = clientCF }
                 end
                 return { cframe = randomEvade(clientCF) }
@@ -2412,7 +2493,7 @@ return {
                     self._meleeStrategy:ResetState()
                     local item = action.item
                     local index = action.index
-                    return { cframe = fallbackEvadeCFrame(clientCF, ourRootPart), weaponAction = function() equipItem(item, index) end }
+                    return { cframe = clientCF, weaponAction = function() equipItem(item, index) end }
                 end
                 if action.type == 'Reload' then
                     self._hitscanStrategy:ResetState()
@@ -2467,6 +2548,9 @@ return {
                 end
                 local ourRootPart = self._boundRootPart
                 local clientCF = characterController:GetClientCFrame()
+                if isUndergroundActive() and ugIsStableReferenceCF(undergroundRealCF) then
+                    clientCF = undergroundRealCF
+                end
                 local now = os.clock()
                 local target = selectTarget()
                 if target ~= nil then
@@ -2502,7 +2586,12 @@ return {
                 end
                 if mode == 'Translocate' then
                     self:_ApplyForcedCrouch(false)
-                    local translocateCFrame = isFlightActive() and clientCF or translocateEvade(clientCF, hasTargets())
+                    local translocateCFrame
+                    if isUndergroundActive() or isFlightActive() then
+                        translocateCFrame = clientCF
+                    else
+                        translocateCFrame = translocateEvade(clientCF, hasTargets())
+                    end
                     characterController:SetServerCFrame(translocateCFrame)
                     characterController:HeartbeatUpdate()
                     return
