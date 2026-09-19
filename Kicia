@@ -76,13 +76,10 @@ local function ResolveGlobalEnv()
 end
 local undergroundEnabled = false
 local undergroundDepth = 0.5
+local undergroundDesync = nil
 local undergroundConn = nil
-local undergroundRenderConn = nil
 local undergroundSnapshot = nil
 local undergroundSnapshotCharacter = nil
-local undergroundLocalCFrame = nil
-local undergroundLocalVelocity = nil
-local undergroundLocalAngularVelocity = nil
 
 local function undergroundGetCharacter()
     return lp.Character
@@ -104,13 +101,12 @@ local function undergroundGetDepth()
     return depth
 end
 
-local function undergroundFindFloorY(char, root, position)
+local function undergroundFindFloorY(char, root)
     if not root then return nil end
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = { char }
-    local p = position or root.Position
-    local origin = Vector3.new(p.X, p.Y + 8, p.Z)
+    local origin = Vector3.new(root.Position.X, root.Position.Y + 8, root.Position.Z)
     local result = Workspace:Raycast(origin, Vector3.new(0, -64, 0), params)
     return result and result.Position.Y or nil
 end
@@ -126,20 +122,18 @@ local function undergroundCapture(char, root, humanoid)
         humanoidAutoRotate = humanoid and humanoid.AutoRotate or nil,
     }
     undergroundSnapshotCharacter = char
-    undergroundLocalCFrame = root.CFrame
-    undergroundLocalVelocity = root.AssemblyLinearVelocity
-    undergroundLocalAngularVelocity = root.AssemblyAngularVelocity
 end
 
 local function undergroundRestore()
     local snapshot = undergroundSnapshot
     local char = undergroundGetCharacter()
+    if undergroundDesync then
+        pcall(function() undergroundDesync:Destroy() end)
+        undergroundDesync = nil
+    end
     if not snapshot or char ~= snapshot.character then
         undergroundSnapshot = nil
         undergroundSnapshotCharacter = nil
-        undergroundLocalCFrame = nil
-        undergroundLocalVelocity = nil
-        undergroundLocalAngularVelocity = nil
         return
     end
     local root = undergroundGetRoot(char)
@@ -150,7 +144,6 @@ local function undergroundRestore()
             root.AssemblyLinearVelocity = snapshot.rootVelocity
             root.AssemblyAngularVelocity = snapshot.rootAngularVelocity
         end)
-        pcall(function() char:PivotTo(snapshot.pivot) end)
     end
     if humanoid then
         pcall(function()
@@ -164,42 +157,45 @@ local function undergroundRestore()
     end
     undergroundSnapshot = nil
     undergroundSnapshotCharacter = nil
-    undergroundLocalCFrame = nil
-    undergroundLocalVelocity = nil
-    undergroundLocalAngularVelocity = nil
 end
 
-local function undergroundBuildServerCFrame(char, root)
-    local localCFrame = root.CFrame
-    local floorY = undergroundFindFloorY(char, root, localCFrame.Position)
+local function undergroundServerCFrame(char, root)
+    local floorY = undergroundFindFloorY(char, root)
     if floorY == nil then return nil end
     local depth = undergroundGetDepth()
-    local _, yaw = localCFrame:ToOrientation()
-    local laidPivot = CFrame.new(localCFrame.Position)
-        * CFrame.Angles(0, yaw, 0)
-        * CFrame.Angles(math.rad(90), 0, 0)
-    local ok, serverCFrame = pcall(function()
-        root.CFrame = laidPivot
-        local boxCFrame, boxSize = char:GetBoundingBox()
-        local boxTopY = boxCFrame.Position.Y + boxSize.Y * 0.5
-        local correctionY = (floorY - depth) - boxTopY
-        return CFrame.new(0, correctionY, 0) * laidPivot
-    end)
-    if not ok then
-        pcall(function() root.CFrame = localCFrame end)
-        return nil
+    local currentRoot = root.CFrame
+    local _, yaw = currentRoot:ToOrientation()
+    local rotate = CFrame.Angles(math.rad(90), 0, 0)
+    local boxCFrame, boxSize = char:GetBoundingBox()
+    local maxY = -math.huge
+    for x = -1, 1, 2 do
+        for y = -1, 1, 2 do
+            for z = -1, 1, 2 do
+                local corner = boxCFrame:PointToWorldSpace(Vector3.new(boxSize.X * 0.5 * x, boxSize.Y * 0.5 * y, boxSize.Z * 0.5 * z))
+                local localPoint = currentRoot:PointToObjectSpace(corner)
+                local rotatedPoint = rotate:VectorToWorldSpace(localPoint)
+                if rotatedPoint.Y > maxY then
+                    maxY = rotatedPoint.Y
+                end
+            end
+        end
     end
-    return serverCFrame
+    if maxY == -math.huge then return nil end
+    local targetRootY = floorY - depth - maxY
+    return CFrame.new(currentRoot.Position.X, targetRootY, currentRoot.Position.Z)
+        * CFrame.Angles(0, yaw, 0)
+        * rotate
 end
 
 startUnderground = function()
-    if undergroundConn or undergroundRenderConn then return end
+    if undergroundConn then return end
     local char = undergroundGetCharacter()
     local root = undergroundGetRoot(char)
     local humanoid = undergroundGetHumanoid(char)
     if not char or not root or not humanoid then return end
     undergroundGetDepth()
     undergroundCapture(char, root, humanoid)
+    undergroundDesync = RootDesync.new(root)
     undergroundEnabled = true
     undergroundConn = RunService.Heartbeat:Connect(function()
         if not undergroundEnabled then return end
@@ -208,47 +204,19 @@ startUnderground = function()
         local currentHumanoid = undergroundGetHumanoid(currentChar)
         if not currentChar or not currentRoot or not currentHumanoid then return end
         if currentChar ~= undergroundSnapshotCharacter then
-            undergroundSnapshot = nil
-            undergroundSnapshotCharacter = nil
+            undergroundRestore()
             undergroundCapture(currentChar, currentRoot, currentHumanoid)
+            undergroundDesync = RootDesync.new(currentRoot)
         end
-        local ok, serverCFrame = pcall(undergroundBuildServerCFrame, currentChar, currentRoot)
-        if not ok or serverCFrame == nil then
-            undergroundLocalCFrame = currentRoot.CFrame
-            undergroundLocalVelocity = currentRoot.AssemblyLinearVelocity
-            undergroundLocalAngularVelocity = currentRoot.AssemblyAngularVelocity
-            return
+        if not undergroundDesync then
+            undergroundDesync = RootDesync.new(currentRoot)
         end
-        undergroundLocalCFrame = currentRoot.CFrame
-        undergroundLocalVelocity = currentRoot.AssemblyLinearVelocity
-        undergroundLocalAngularVelocity = currentRoot.AssemblyAngularVelocity
-        currentRoot.CFrame = serverCFrame
-        currentRoot.AssemblyLinearVelocity = Vector3.zero
-        currentRoot.AssemblyAngularVelocity = Vector3.zero
-    end)
-    undergroundRenderConn = RunService:BindToRenderStep('Kicia_UndergroundDesync', Enum.RenderPriority.First.Value, function()
-        if not undergroundEnabled then return end
-        local currentChar = undergroundGetCharacter()
-        local currentRoot = undergroundGetRoot(currentChar)
-        if not currentChar or not currentRoot or currentChar ~= undergroundSnapshotCharacter then return end
-        local localCFrame = undergroundLocalCFrame
-        if localCFrame ~= nil then
-            pcall(function()
-                currentRoot.CFrame = localCFrame
-                currentRoot.AssemblyLinearVelocity = undergroundLocalVelocity or Vector3.zero
-                currentRoot.AssemblyAngularVelocity = undergroundLocalAngularVelocity or Vector3.zero
-            end)
+        local serverCF = undergroundServerCFrame(currentChar, currentRoot)
+        if serverCF then
+            undergroundDesync:SetServerCFrame(serverCF)
+            undergroundDesync:HeartbeatUpdate()
         end
     end)
-    local ok, serverCFrame = pcall(undergroundBuildServerCFrame, char, root)
-    if ok and serverCFrame ~= nil then
-        undergroundLocalCFrame = undergroundSnapshot.rootCFrame
-        undergroundLocalVelocity = undergroundSnapshot.rootVelocity
-        undergroundLocalAngularVelocity = undergroundSnapshot.rootAngularVelocity
-        root.CFrame = serverCFrame
-        root.AssemblyLinearVelocity = Vector3.zero
-        root.AssemblyAngularVelocity = Vector3.zero
-    end
 end
 
 stopUnderground = function()
@@ -256,10 +224,6 @@ stopUnderground = function()
     if undergroundConn then
         undergroundConn:Disconnect()
         undergroundConn = nil
-    end
-    if undergroundRenderConn then
-        pcall(function() RunService:UnbindFromRenderStep('Kicia_UndergroundDesync') end)
-        undergroundRenderConn = nil
     end
     undergroundRestore()
 end
@@ -2341,262 +2305,176 @@ return {
                 end
             end
             local BACKSTAB_WINDOW = 0.625
-            local BACKSTAB_COOLDOWN = 1.25
-            local KNIFE_NAME_TOKENS = { 'knife', 'karambit', 'balisong', 'chancla', 'machete', 'candy cane', 'armature', 'daggers', 'axe' }
-            local function isKnifeWeapon(item)
-                local name = itemName(item)
-                if type(name) ~= 'string' then
-                    return false
-                end
-                local low = name:lower()
-                for _, token in ipairs(KNIFE_NAME_TOKENS) do
-                    if low:find(token, 1, true) then
-                        return true
-                    end
-                end
-                return false
-            end
-            local function buildKnifeBackstabCFrame(targetRootPart, hitboxHead)
-                if targetRootPart == nil or targetRootPart.Parent == nil or hitboxHead == nil or hitboxHead.Parent == nil then
-                    return nil
-                end
-                local look = targetRootPart.CFrame.LookVector
-                local flatLook = Vector3.new(look.X, 0, look.Z)
-                if flatLook.Magnitude < 1e-4 then
-                    return nil
-                end
-                local inv = -flatLook.Unit
-                local origin = targetRootPart.Position
-                local desired = origin + inv * 3.0 + Vector3.new(0, 0.6, 0)
-                local params = RaycastParams.new()
-                params.FilterType = Enum.RaycastFilterType.Exclude
-                local ignore = { targetRootPart.Parent }
-                local localCharacter = GetChar()
-                if localCharacter ~= nil then
-                    ignore[#ignore + 1] = localCharacter
-                end
-                params.FilterDescendantsInstances = ignore
-                local hit = WorkspaceRB:Raycast(origin, inv * 3.0, params)
-                if hit ~= nil then
-                    local safeDistance = math.max(0.65, math.min(1.2, (hit.Position - origin).Magnitude - 0.45))
-                    desired = origin + inv * safeDistance + Vector3.new(0, 0.6, 0)
-                end
-                desired = Vector3.new(
-                    desired.X,
-                    math.max(desired.Y, WorkspaceRB.FallenPartsDestroyHeight + 3),
-                    desired.Z
-                )
-                return safeLookCFrame(desired, hitboxHead.Position)
-            end
-            local function isBackstabPosition(position, targetRootPart)
-                if typeof(position) ~= 'Vector3' or not isFiniteVector3(position) then
-                    return false
-                end
-                if targetRootPart == nil or targetRootPart.Parent == nil then
-                    return false
-                end
-                local delta = position - targetRootPart.Position
-                local flat = Vector3.new(delta.X, 0, delta.Z)
-                local look = targetRootPart.CFrame.LookVector
-                local flatLook = Vector3.new(look.X, 0, look.Z)
-                if flat.Magnitude < 0.05 or flatLook.Magnitude < 1e-4 then
-                    return false
-                end
-                local distance = flat.Magnitude
-                return distance <= 5.5 and flatLook.Unit:Dot(flat.Unit) < -0.45
-            end
-            local MeleeStrategy = {}
-            MeleeStrategy.__index = MeleeStrategy
-            local MELEE_DWELL_S = 0.07
-            function MeleeStrategy.new(partGlue)
-                return setmetatable({
-                    _partGlue = partGlue,
-                    _shootLock = ShootLock.new(),
-                    _hitboxWindowUntil = -1,
-                    _attackCooldown = -1,
-                    _gluedOurPart = nil,
-                    _meleeDwellStart = nil,
-                    _meleeDwellTarget = nil,
-                }, MeleeStrategy)
-            end
-            function MeleeStrategy:ClearGlue()
-                local glued = self._gluedOurPart
-                if glued ~= nil then
-                    self._partGlue:Free(glued)
-                    self._gluedOurPart = nil
-                end
-            end
-            local function targetHumanoidViewAngles(target, targetRootPart, hitboxHead)
-                if targetRootPart == nil or targetRootPart.Parent == nil then
-                    return nil
-                end
-                local _, rootYaw = targetRootPart.CFrame:ToOrientation()
-                local pitch = 0
-                local haveHeadPitch = false
-                if hitboxHead and hitboxHead.Parent then
-                    local look = hitboxHead.CFrame.LookVector
-                    if isFiniteVector3(look) and look.Magnitude > 1e-4 then
-                        pitch = math.asin(math.clamp(look.Y / look.Magnitude, -1, 1))
-                        haveHeadPitch = true
-                    end
-                end
-                if not haveHeadPitch then
-                    local cameraPitch, cameraYaw = getTargetCameraRotation(target)
-                    if cameraPitch ~= nil then
-                        pitch = cameraPitch
-                    end
-                    if cameraYaw ~= nil then
-                        rootYaw = cameraYaw
-                    end
-                end
-                return { kind = 'Normalized', pitch = math.deg(pitch), yaw = math.deg(rootYaw) }
-            end
-            local function meleeViewAngles(target, targetRootPart, hitboxHead)
-                return targetHumanoidViewAngles(target, targetRootPart, hitboxHead)
-            end
-            function MeleeStrategy:_RecordBackstab()
-                local now = os.clock()
-                self._hitboxWindowUntil = now + BACKSTAB_WINDOW
-                self._attackCooldown = now + BACKSTAB_COOLDOWN
-            end
-            function MeleeStrategy:Plan(dt, target, item, ourRootPart, canFire, characterController)
-                local hitboxHead = resolveLiveHead(target)
-                if hitboxHead == nil then
-                    self:ClearGlue()
-                    return ourRootPart.CFrame, nil, nil
-                end
-                local targetRootPart = target.rootPart
-                if targetRootPart == nil or targetRootPart.Parent == nil or not targetRootPart:IsA('BasePart') then
-                    self:ClearGlue()
-                    return ourRootPart.CFrame, nil, nil
-                end
-                self:ClearGlue()
-                local profileHeavy = false
-                pcall(function()
-                    local info = item and item.Info
-                    profileHeavy = info ~= nil and info.MaxAmmo == nil and info.CriticalDamage ~= nil and type(info.HeavyAttackCooldown) == 'number'
-                end)
-                local isKnife = isKnifeWeapon(item)
-                local trpLook = targetRootPart.CFrame.LookVector
-                local flatLook = Vector3.new(trpLook.X, 0, trpLook.Z)
-                if flatLook.Magnitude < 1e-4 then
-                    return ourRootPart.CFrame, nil, nil
-                end
-                flatLook = flatLook.Unit
-                local aimWorldPos = resolveTargetHeadPosition(target, hitboxHead, false) or hitboxHead.Position
-                local cframe
-                if isKnife then
-                    cframe = buildKnifeBackstabCFrame(targetRootPart, hitboxHead)
-                elseif profileHeavy then
-                    local desired = targetRootPart.Position - flatLook * 1.2 + Vector3.new(0, 0.6, 0)
-                    desired = Vector3.new(desired.X, math.max(desired.Y, WorkspaceRB.FallenPartsDestroyHeight + 3), desired.Z)
-                    cframe = safeLookCFrame(desired, aimWorldPos)
-                else
-                    local desired = aimWorldPos - flatLook * 0.8 + Vector3.new(0, -0.5, 0)
-                    desired = Vector3.new(desired.X, math.max(desired.Y, WorkspaceRB.FallenPartsDestroyHeight + 3), desired.Z)
-                    cframe = safeLookCFrame(desired, aimWorldPos)
-                end
-                if cframe == nil then
-                    return ourRootPart.CFrame, nil, nil
-                end
-                local viewAngles = meleeViewAngles(target, targetRootPart, hitboxHead)
-                local now = os.clock()
-                local dwellKey = target.player or target.model or target.rootPart or target
-                if self._meleeDwellTarget ~= dwellKey then
-                    self._meleeDwellTarget = dwellKey
-                    self._meleeDwellStart = now
-                elseif self._meleeDwellStart == nil then
-                    self._meleeDwellStart = now
-                end
-                if now - self._meleeDwellStart < MELEE_DWELL_S then
-                    self._shootLock:Reset()
-                    return cframe, viewAngles, nil
-                end
-                local isBackstab = false
-                if isKnife then
-                    isBackstab = isBackstabPosition(cframe.Position, targetRootPart)
-                    if not isBackstab then
-                        self._shootLock:Reset()
-                        return cframe, viewAngles, nil
-                    end
-                end
-                if not self._shootLock:ShouldFire(canFire, math.max(dt, 1 / 240) * Setting.ShootFrames()) then
-                    return cframe, viewAngles, nil
-                end
-                local objectId = itemObjectId(item)
-                local attempts = Setting.ShootFrames()
-                local function weaponAction()
-                    for _ = 1, attempts do
-                        if hitboxHead.Parent == nil or targetRootPart.Parent == nil then
-                            return false
-                        end
-                        local currentAim = resolveTargetHeadPosition(target, hitboxHead, false)
-                        if not currentAim or not isFiniteVector3(currentAim) then
-                            return false
-                        end
-                        local currentCFrame = cframe
-                        local currentLook = targetRootPart.CFrame.LookVector
-                        local currentFlatLook = Vector3.new(currentLook.X, 0, currentLook.Z)
-                        if currentFlatLook.Magnitude > 1e-4 then
-                            currentFlatLook = currentFlatLook.Unit
-                            if isKnife then
-                                local refreshed = buildKnifeBackstabCFrame(targetRootPart, hitboxHead)
-                                if refreshed ~= nil then
-                                    currentCFrame = refreshed
-                                end
-                                if not isBackstabPosition(currentCFrame.Position, targetRootPart) then
-                                    return false
-                                end
-                            elseif profileHeavy then
-                                local desired = targetRootPart.Position - currentFlatLook * 1.2 + Vector3.new(0, 0.6, 0)
-                                desired = Vector3.new(desired.X, math.max(desired.Y, WorkspaceRB.FallenPartsDestroyHeight + 3), desired.Z)
-                                currentCFrame = safeLookCFrame(desired, currentAim) or currentCFrame
-                            else
-                                local desired = currentAim - currentFlatLook * 0.8 + Vector3.new(0, -0.5, 0)
-                                desired = Vector3.new(desired.X, math.max(desired.Y, WorkspaceRB.FallenPartsDestroyHeight + 3), desired.Z)
-                                currentCFrame = safeLookCFrame(desired, currentAim) or currentCFrame
-                            end
-                        end
-                        local eyePos = currentCFrame.Position + Vector3.new(0, EYE_UP_SANE, 0)
-                        local eyeCF = safeLookCFrame(eyePos, currentAim)
-                        if eyeCF == nil then
-                            return false
-                        end
-                        local muzzleCF = eyeCF - Vector3.new(0, EYE_MUZZLE_SEP, 0)
-                        primeMeleeItem(item)
-                        local txPitch, txYaw, txRoll = targetRootPart.CFrame:ToOrientation()
-                        viewAngles = meleeViewAngles(target, targetRootPart, hitboxHead) or viewAngles
-                        if characterController and viewAngles then
-                            pcall(function() characterController:ForceViewAngles(20, viewAngles) end)
-                        end
-                        local aboveNow = isAbove(target)
-                        local aimA = buildAim(aboveNow and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, aboveNow and PITCH_ABOVE or PITCH_BELOW, txYaw, txRoll)
-                        local aimB = buildAim(aboveNow and AIM_ABOVE_END or AIM_BELOW_END, aboveNow and PITCH_ABOVE or PITCH_BELOW, txYaw, txRoll)
-                        local fired = fireMeleeHybrid(item, objectId, profileHeavy or isKnife, hitboxHead, eyeCF, muzzleCF, currentAim, aimA, aimB, AIM_EXTRA)
-                        if fired then
-                            if isKnife then
-                                self:_RecordBackstab()
-                            end
-                            return true
-                        end
-                    end
-                    return false
-                end
-                return cframe, viewAngles, weaponAction
-            end
-            function MeleeStrategy:ResetState()
-                self._hitboxWindowUntil = -1
-                self._attackCooldown = -1
-                self._meleeDwellStart = nil
-                self._meleeDwellTarget = nil
-                self._shootLock:Reset()
-                local glued = self._gluedOurPart
-                if glued ~= nil then
-                    self._partGlue:Free(glued)
-                    self._gluedOurPart = nil
-                end
-            end
-            local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
+local BACKSTAB_COOLDOWN = 1.25
+local KNIFE_NAME_TOKENS = { 'knife', 'karambit', 'balisong', 'chancla', 'machete', 'candy cane', 'armature', 'daggers', 'axe' }
+local function isKnifeWeapon(item)
+    local name = itemName(item)
+    if type(name) ~= 'string' then
+        return false
+    end
+    local low = name:lower()
+    for _, token in ipairs(KNIFE_NAME_TOKENS) do
+        if low:find(token, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+local function meleeProfile(item)
+    local profile = nil
+    pcall(function()
+        local info = item and item.Info
+        if info == nil or info.MaxAmmo ~= nil then return end
+        profile = {
+            heavy = info.CriticalDamage ~= nil and type(info.HeavyAttackCooldown) == 'number',
+        }
+    end)
+    return profile
+end
+local MeleeStrategy = {}
+MeleeStrategy.__index = MeleeStrategy
+local MELEE_DWELL_S = 0.07
+function MeleeStrategy.new(partGlue)
+    return setmetatable({
+        _partGlue = partGlue,
+        _shootLock = ShootLock.new(),
+        _hitboxWindowUntil = -1,
+        _attackCooldown = -1,
+        _meleeDwellStart = nil,
+        _meleeDwellTarget = nil,
+    }, MeleeStrategy)
+end
+function MeleeStrategy:ClearGlue()
+    return
+end
+local function targetHumanoidViewAngles(target, targetRootPart, hitboxHead)
+    if targetRootPart == nil or targetRootPart.Parent == nil then
+        return nil
+    end
+    local _, rootYaw = targetRootPart.CFrame:ToOrientation()
+    local pitch = 0
+    local haveHeadPitch = false
+    if hitboxHead and hitboxHead.Parent then
+        local look = hitboxHead.CFrame.LookVector
+        if isFiniteVector3(look) and look.Magnitude > 1e-4 then
+            pitch = math.asin(math.clamp(look.Y / look.Magnitude, -1, 1))
+            haveHeadPitch = true
+        end
+    end
+    if not haveHeadPitch then
+        local cameraPitch, cameraYaw = getTargetCameraRotation(target)
+        if cameraPitch ~= nil then
+            pitch = cameraPitch
+        end
+        if cameraYaw ~= nil then
+            rootYaw = cameraYaw
+        end
+    end
+    return { kind = 'Normalized', pitch = math.deg(pitch), yaw = math.deg(rootYaw) }
+end
+function MeleeStrategy:_RecordBackstab()
+    local now = os.clock()
+    self._hitboxWindowUntil = now + BACKSTAB_WINDOW
+    self._attackCooldown = now + BACKSTAB_COOLDOWN
+end
+function MeleeStrategy:Plan(dt, target, item, ourRootPart, canFire, characterController)
+    local hitboxHead = resolveLiveHead(target)
+    if hitboxHead == nil then
+        return ourRootPart.CFrame, nil, nil
+    end
+    local targetRootPart = target.rootPart
+    if targetRootPart == nil or targetRootPart.Parent == nil or not targetRootPart:IsA('BasePart') then
+        return ourRootPart.CFrame, nil, nil
+    end
+    local profile = meleeProfile(item)
+    if profile == nil then
+        return ourRootPart.CFrame, nil, nil
+    end
+    local isKnife = isKnifeWeapon(item)
+    local aimWorldPos = resolveTargetHeadPosition(target, hitboxHead, false) or hitboxHead.Position
+    local look = targetRootPart.CFrame.LookVector
+    local flatLook = Vector3.new(look.X, 0, look.Z)
+    if flatLook.Magnitude < 1e-4 then
+        return ourRootPart.CFrame, nil, nil
+    end
+    flatLook = flatLook.Unit
+    local desired
+    if isKnife or profile.heavy then
+        desired = targetRootPart.Position - flatLook * 1.2 + Vector3.new(0, 0.6, 0)
+    else
+        desired = aimWorldPos - flatLook * 0.8 + Vector3.new(0, -0.5, 0)
+    end
+    desired = Vector3.new(desired.X, math.max(desired.Y, WorkspaceRB.FallenPartsDestroyHeight + 3), desired.Z)
+    local cframe = safeLookCFrame(desired, aimWorldPos)
+    if cframe == nil then
+        return ourRootPart.CFrame, nil, nil
+    end
+    local viewAngles = profile.heavy and targetHumanoidViewAngles(target, targetRootPart, hitboxHead) or nil
+    local now = os.clock()
+    local dwellKey = target.player or target.model or target.rootPart or target
+    if self._meleeDwellTarget ~= dwellKey then
+        self._meleeDwellTarget = dwellKey
+        self._meleeDwellStart = now
+    end
+    if self._meleeDwellStart == nil then
+        self._meleeDwellStart = now
+    end
+    if now - self._meleeDwellStart < MELEE_DWELL_S then
+        return cframe, viewAngles, nil
+    end
+    local function weaponAction()
+        local fighter = resolveLocalFighter()
+        local currentItem = fighter and fighter.EquippedItem or item
+        local currentHead, currentRoot = resolveLiveTarget(target)
+        if currentItem == nil or currentHead == nil or currentRoot == nil or currentRoot.Parent == nil then
+            return false
+        end
+        local currentProfile = meleeProfile(currentItem)
+        if currentProfile == nil then
+            return false
+        end
+        local currentKnife = isKnifeWeapon(currentItem)
+        local currentAim = resolveTargetHeadPosition(target, currentHead, false) or currentHead.Position
+        local currentLook = currentRoot.CFrame.LookVector
+        local currentFlatLook = Vector3.new(currentLook.X, 0, currentLook.Z)
+        if currentFlatLook.Magnitude < 1e-4 then
+            return false
+        end
+        currentFlatLook = currentFlatLook.Unit
+        local currentDesired
+        if currentKnife or currentProfile.heavy then
+            currentDesired = currentRoot.Position - currentFlatLook * 1.2 + Vector3.new(0, 0.6, 0)
+        else
+            currentDesired = currentAim - currentFlatLook * 0.8 + Vector3.new(0, -0.5, 0)
+        end
+        currentDesired = Vector3.new(currentDesired.X, math.max(currentDesired.Y, WorkspaceRB.FallenPartsDestroyHeight + 3), currentDesired.Z)
+        local currentCFrame = safeLookCFrame(currentDesired, currentAim)
+        if currentCFrame == nil then
+            return false
+        end
+        local eyePos = currentCFrame.Position + Vector3.new(0, eyeRise(currentCFrame.Position, target.model), 0)
+        local eyeCF = safeLookCFrame(eyePos, currentAim)
+        if eyeCF == nil then
+            return false
+        end
+        local muzzleCF = eyeCF - Vector3.new(0, EYE_MUZZLE_SEP, 0)
+        local objectId = itemObjectId(currentItem)
+        local fired = fireMeleeHybrid(currentItem, objectId, currentProfile.heavy, currentHead, eyeCF, muzzleCF, currentAim, nil, nil, AIM_EXTRA)
+        if fired and currentKnife then
+            self:_RecordBackstab()
+        end
+        return fired == true
+    end
+    return cframe, viewAngles, weaponAction
+end
+function MeleeStrategy:ResetState()
+    self._hitboxWindowUntil = -1
+    self._attackCooldown = -1
+    self._meleeDwellStart = nil
+    self._meleeDwellTarget = nil
+    self._shootLock:Reset()
+end
+local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
             local function applyEnabledFFlags(enabled)
                 if enabled and ORIGINAL_FALLEN_PARTS_HEIGHT == nil then
                     ORIGINAL_FALLEN_PARTS_HEIGHT = WorkspaceRB.FallenPartsDestroyHeight
