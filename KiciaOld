@@ -75,420 +75,157 @@ local function ResolveGlobalEnv()
     return _G
 end
 local undergroundEnabled = false
-local undergroundDepth = 2.5
-local undergroundOffset = Vector3.zero
+local undergroundDepth = 0.5
 local undergroundConn = nil
-local undergroundSteppedConn = nil
-local undergroundRenderConn = nil
-local undergroundRenderConn2 = nil
-local undergroundRenderConn3 = nil
-local undergroundFloodConn = nil
-local undergroundOwnershipConn = nil
-local undergroundRemoteConn = nil
-local undergroundPhysicsConn = nil
-local undergroundJointConn = nil
-local undergroundSafeConn = nil
-local undergroundRestoreConn = nil
-local undergroundRealCF = nil
-local undergroundRealVel = nil
-local undergroundRealAngVel = nil
 local undergroundSnapshot = nil
 local undergroundSnapshotCharacter = nil
-local undergroundFirstRun = true
-local undergroundTick = 0
-local undergroundChaosSeed = 0
-local undergroundRemoteList = {}
-local undergroundPhysForces = {}
-local undergroundFallHeight = -500
-local undergroundSafeBuffer = 100
 
-local function ugGetCharacter()
-    local char = lp.Character
-    return char
+local function undergroundGetCharacter()
+    return lp.Character
 end
 
-local function ugGetHrp()
-    local char = ugGetCharacter()
-    if not char then return nil end
-    return char:FindFirstChild("HumanoidRootPart")
+local function undergroundGetHumanoid(char)
+    return char and char:FindFirstChildOfClass('Humanoid') or nil
 end
 
-local function ugUpdateFallHeight()
-    pcall(function()
-        local fh = Workspace.FallenPartsDestroyHeight
-        if type(fh) == "number" then
-            undergroundFallHeight = fh
-        end
-    end)
+local function undergroundGetRoot(char)
+    return char and char:FindFirstChild('HumanoidRootPart') or nil
 end
 
-local function ugClampY(y)
-    local minY = undergroundFallHeight + undergroundSafeBuffer
-    if y < minY then return minY end
-    return y
+local function undergroundGetDepth()
+    local value = Options and Options.P8S4S6 and Options.P8S4S6.Value
+    local depth = tonumber(value) or undergroundDepth or 0.5
+    depth = math.clamp(depth, 0.36, 0.67)
+    undergroundDepth = depth
+    return depth
 end
 
-local function ugComputeFakeY(hrp, char)
-    local depth = math.clamp(tonumber(undergroundDepth) or 2.5, -15, 30)
+local function undergroundFindFloorY(char, root)
+    if not root then return nil end
     local params = RaycastParams.new()
-    params.FilterDescendantsInstances = { char }
     params.FilterType = Enum.RaycastFilterType.Exclude
-    local result = Workspace:Raycast(hrp.Position, Vector3.new(0, -500, 0), params)
-    local fakeY = result and (result.Position.Y - depth) or (hrp.Position.Y - depth)
-    return ugClampY(fakeY)
+    params.FilterDescendantsInstances = { char }
+    local origin = Vector3.new(root.Position.X, root.Position.Y + 8, root.Position.Z)
+    local result = Workspace:Raycast(origin, Vector3.new(0, -64, 0), params)
+    return result and result.Position.Y or nil
 end
 
-local function ugCollectRemotes()
-    undergroundRemoteList = {}
-    local seen = {}
-    local function scan(container)
-        if not container then return end
-        for _, obj in ipairs(container:GetDescendants()) do
-            if (obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") or obj:IsA("UnreliableRemoteEvent")) and not seen[obj] then
-                seen[obj] = true
-                table.insert(undergroundRemoteList, obj)
-            end
-        end
-    end
-    pcall(scan, game:GetService("ReplicatedStorage"))
-end
-
-local function ugCleanupForces()
-    for _, force in ipairs(undergroundPhysForces) do
-        pcall(function() force:Destroy() end)
-    end
-    undergroundPhysForces = {}
-end
-
-local function ugCaptureSnapshot()
-    local char = ugGetCharacter()
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not char or not hrp then return false end
-    local camera = Workspace.CurrentCamera
-    local snap = {
+local function undergroundCapture(char, root, humanoid)
+    undergroundSnapshot = {
         character = char,
         pivot = char:GetPivot(),
-        camera = camera and camera.CFrame or nil,
-        hrpCFrame = hrp.CFrame,
-        hrpVelocity = hrp.AssemblyLinearVelocity,
-        hrpAngularVelocity = hrp.AssemblyAngularVelocity,
-        humanoidState = nil,
-        humanoidAutoRotate = nil,
+        rootCFrame = root.CFrame,
+        rootVelocity = root.AssemblyLinearVelocity,
+        rootAngularVelocity = root.AssemblyAngularVelocity,
+        humanoidState = humanoid and humanoid:GetState() or nil,
+        humanoidAutoRotate = humanoid and humanoid.AutoRotate or nil,
         parts = {},
-        joints = {},
     }
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if hum then
-        pcall(function() snap.humanoidState = hum:GetState() end)
-        pcall(function() snap.humanoidAutoRotate = hum.AutoRotate end)
-    end
-    for _, obj in ipairs(char:GetDescendants()) do
-        if obj:IsA("BasePart") then
-            snap.parts[obj] = {
-                cframe = obj.CFrame,
-                velocity = obj.AssemblyLinearVelocity,
-                angularVelocity = obj.AssemblyAngularVelocity,
-                anchored = obj.Anchored,
-                collide = obj.CanCollide,
-                touch = obj.CanTouch,
-                query = obj.CanQuery,
-            }
-        elseif obj:IsA("Motor6D") then
-            snap.joints[obj] = {
-                transform = obj.Transform,
-                c0 = obj.C0,
-                c1 = obj.C1,
-                part0 = obj.Part0,
-                part1 = obj.Part1,
-            }
-        elseif obj:IsA("Weld") then
-            snap.joints[obj] = {
-                c0 = obj.C0,
-                c1 = obj.C1,
-                part0 = obj.Part0,
-                part1 = obj.Part1,
-            }
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA('BasePart') then
+            undergroundSnapshot.parts[part] = part.CanCollide
+            pcall(function() part.CanCollide = false end)
         end
     end
-    undergroundSnapshot = snap
     undergroundSnapshotCharacter = char
-    undergroundOldCF = snap.hrpCFrame
-    undergroundOldVel = snap.hrpVelocity
-    undergroundOldAngVel = snap.hrpAngularVelocity
-    undergroundOldCamCF = snap.camera
-    undergroundOldAnchored = hrp.Anchored
-    undergroundOldRootPart0 = nil
-    undergroundFirstRun = false
-    return true
 end
 
-local function ugRestoreSnapshot()
-    local snap = undergroundSnapshot
-    local char = ugGetCharacter()
-    if not snap or not char or snap.character ~= char then
-        return false
+local function undergroundRestore()
+    local snapshot = undergroundSnapshot
+    local char = undergroundGetCharacter()
+    if not snapshot or char ~= snapshot.character then
+        undergroundSnapshot = nil
+        undergroundSnapshotCharacter = nil
+        return
     end
-
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return false end
-
-    pcall(function() char:PivotTo(snap.pivot) end)
-
-    for joint, state in pairs(snap.joints) do
-        if joint and joint.Parent then
-            pcall(function()
-                if state.part0 then joint.Part0 = state.part0 end
-                if state.part1 then joint.Part1 = state.part1 end
-                if state.c0 then joint.C0 = state.c0 end
-                if state.c1 then joint.C1 = state.c1 end
-                if state.transform and joint:IsA("Motor6D") then joint.Transform = state.transform end
-            end)
-        end
-    end
-
-    for part, state in pairs(snap.parts) do
-        if part and part.Parent then
-            pcall(function()
-                part.CFrame = state.cframe
-                part.AssemblyLinearVelocity = state.velocity
-                part.AssemblyAngularVelocity = state.angularVelocity
-                part.Anchored = state.anchored
-                part.CanCollide = state.collide
-                part.CanTouch = state.touch
-                part.CanQuery = state.query
-            end)
-        end
-    end
-
-    pcall(function()
-        hrp.CFrame = snap.hrpCFrame
-        hrp.AssemblyLinearVelocity = snap.hrpVelocity
-        hrp.AssemblyAngularVelocity = snap.hrpAngularVelocity
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum then
-            if snap.humanoidAutoRotate ~= nil then
-                hum.AutoRotate = snap.humanoidAutoRotate
-            end
-            if snap.humanoidState then
-                pcall(function() hum:ChangeState(snap.humanoidState) end)
-            end
-        end
-    end)
-
-    pcall(function()
-        local camera = Workspace.CurrentCamera
-        if camera and snap.camera then camera.CFrame = snap.camera end
-    end)
-
-    return true
-end
-
-local function ugStartRestoreWindow()
-    if undergroundRestoreConn then
-        undergroundRestoreConn:Disconnect()
-        undergroundRestoreConn = nil
-    end
-    local remaining = 12
-    undergroundRestoreConn = RunService.Heartbeat:Connect(function()
-        if ugRestoreSnapshot() then
-            remaining = remaining - 1
-            if remaining <= 0 then
-                undergroundRestoreConn:Disconnect()
-                undergroundRestoreConn = nil
-                undergroundSnapshot = nil
-                undergroundSnapshotCharacter = nil
-            end
-        else
-            undergroundRestoreConn:Disconnect()
-            undergroundRestoreConn = nil
-            undergroundSnapshot = nil
-            undergroundSnapshotCharacter = nil
-        end
-    end)
-end
-
-local function ugSafeTeleport(hrp)
-    if not hrp then return end
-    local pos = hrp.Position
-    local minY = undergroundFallHeight + undergroundSafeBuffer + 50
-    if pos.Y < minY then
+    local root = undergroundGetRoot(char)
+    local humanoid = undergroundGetHumanoid(char)
+    if root then
         pcall(function()
-            hrp.CFrame = CFrame.new(pos.X, minY, pos.Z)
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.AssemblyAngularVelocity = Vector3.zero
+            char:PivotTo(snapshot.pivot)
+            root.CFrame = snapshot.rootCFrame
+            root.AssemblyLinearVelocity = snapshot.rootVelocity
+            root.AssemblyAngularVelocity = snapshot.rootAngularVelocity
         end)
     end
+    for part, canCollide in pairs(snapshot.parts) do
+        if part and part.Parent then
+            pcall(function() part.CanCollide = canCollide end)
+        end
+    end
+    if humanoid then
+        pcall(function()
+            if snapshot.humanoidAutoRotate ~= nil then
+                humanoid.AutoRotate = snapshot.humanoidAutoRotate
+            end
+            if snapshot.humanoidState then
+                humanoid:ChangeState(snapshot.humanoidState)
+            end
+        end)
+    end
+    undergroundSnapshot = nil
+    undergroundSnapshotCharacter = nil
+end
+
+local function undergroundApply(char, root, humanoid)
+    local floorY = undergroundFindFloorY(char, root)
+    if floorY == nil then return end
+    local depth = undergroundGetDepth()
+    local _, yaw = undergroundSnapshot.rootCFrame:ToOrientation()
+    local laidPivot = CFrame.new(root.Position.X, root.Position.Y, root.Position.Z)
+        * CFrame.Angles(0, yaw, 0)
+        * CFrame.Angles(math.rad(90), 0, 0)
+    char:PivotTo(laidPivot)
+    local boxCFrame, boxSize = char:GetBoundingBox()
+    local boxTopY = boxCFrame.Position.Y + boxSize.Y * 0.5
+    local correctionY = (floorY - depth) - boxTopY
+    char:PivotTo(CFrame.new(0, correctionY, 0) * laidPivot)
+    pcall(function()
+        humanoid.AutoRotate = false
+        humanoid:ChangeState(Enum.HumanoidStateType.Physics)
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end)
 end
 
 startUnderground = function()
     if undergroundConn then return end
-    if undergroundRestoreConn then
-        undergroundRestoreConn:Disconnect()
-        undergroundRestoreConn = nil
-    end
-    if not ugCaptureSnapshot() then
-        undergroundEnabled = false
-        return
-    end
-    pcall(function() RunService:UnbindFromRenderStep("UndergroundSync") end)
-    pcall(function() RunService:UnbindFromRenderStep("UndergroundSync2") end)
-    pcall(function() RunService:UnbindFromRenderStep("UndergroundSync3") end)
+    local char = undergroundGetCharacter()
+    local root = undergroundGetRoot(char)
+    local humanoid = undergroundGetHumanoid(char)
+    if not char or not root or not humanoid then return end
+    undergroundGetDepth()
+    undergroundCapture(char, root, humanoid)
     undergroundEnabled = true
-    undergroundTick = 0
-    undergroundChaosSeed = math.random(1, 1e9)
-    ugUpdateFallHeight()
-    ugCollectRemotes()
-
-    undergroundConn = RunService.Heartbeat:Connect(function(dt)
+    undergroundConn = RunService.Heartbeat:Connect(function()
         if not undergroundEnabled then return end
-        undergroundTick = undergroundTick + dt
-        pcall(function()
-            local char = ugGetCharacter()
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            if not char or not hrp or char ~= undergroundSnapshotCharacter then return end
-            local hum = char:FindFirstChildOfClass("Humanoid")
-            if hum then
-                pcall(function() hum:ChangeState(Enum.HumanoidStateType.Physics) end)
-            end
-            undergroundRealCF = hrp.CFrame
-            undergroundRealVel = hrp.AssemblyLinearVelocity
-            undergroundRealAngVel = hrp.AssemblyAngularVelocity
-            local fakeY = ugComputeFakeY(hrp, char)
-            local chaos1 = math.sin(undergroundTick * 180 + undergroundChaosSeed) * 100
-            local chaos2 = math.cos(undergroundTick * 220 + undergroundChaosSeed) * 100
-            hrp.CFrame = CFrame.new(hrp.Position.X + chaos1, fakeY, hrp.Position.Z + chaos2)
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.AssemblyAngularVelocity = Vector3.zero
-        end)
-    end)
-
-    undergroundSteppedConn = RunService.Stepped:Connect(function()
-        if not undergroundEnabled then return end
-        pcall(function()
-            local char = ugGetCharacter()
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            if not char or not hrp or char ~= undergroundSnapshotCharacter then return end
-            local fakeY = ugClampY(ugComputeFakeY(hrp, char))
-            hrp.CFrame = CFrame.new(hrp.Position.X, fakeY, hrp.Position.Z)
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            hrp.AssemblyAngularVelocity = Vector3.zero
-        end)
-    end)
-
-    undergroundRenderConn = RunService:BindToRenderStep("UndergroundSync", Enum.RenderPriority.First.Value, function()
-        if undergroundEnabled and undergroundRealCF then
-            pcall(function()
-                local hrp = ugGetHrp()
-                if not hrp or lp.Character ~= undergroundSnapshotCharacter then return end
-                hrp.CFrame = undergroundRealCF
-                hrp.AssemblyLinearVelocity = undergroundRealVel or Vector3.zero
-                hrp.AssemblyAngularVelocity = undergroundRealAngVel or Vector3.zero
-            end)
+        local currentChar = undergroundGetCharacter()
+        local currentRoot = undergroundGetRoot(currentChar)
+        local currentHumanoid = undergroundGetHumanoid(currentChar)
+        if not currentRoot or not currentHumanoid then
+            return
         end
-    end)
-
-    undergroundRenderConn2 = RunService:BindToRenderStep("UndergroundSync2", Enum.RenderPriority.Camera.Value, function()
-        if not undergroundEnabled then return end
+        if currentChar ~= undergroundSnapshotCharacter then
+            undergroundSnapshot = nil
+            undergroundSnapshotCharacter = nil
+            undergroundCapture(currentChar, currentRoot, currentHumanoid)
+        end
         pcall(function()
-            local hrp = ugGetHrp()
-            if hrp and undergroundSnapshotCharacter == lp.Character then
-                hrp.CFrame = CFrame.new(hrp.Position.X, ugClampY(ugComputeFakeY(hrp, lp.Character)), hrp.Position.Z)
-            end
+            undergroundApply(currentChar, currentRoot, currentHumanoid)
         end)
     end)
-
-    undergroundRenderConn3 = RunService:BindToRenderStep("UndergroundSync3", Enum.RenderPriority.Last.Value, function()
-        if not undergroundEnabled then return end
-        pcall(function()
-            local hrp = ugGetHrp()
-            if not hrp or undergroundSnapshotCharacter ~= lp.Character then return end
-            local pos = hrp.Position
-            hrp.CFrame = CFrame.new(pos.X, ugClampY(pos.Y), pos.Z)
-        end)
-    end)
-
-    undergroundOwnershipConn = RunService.Heartbeat:Connect(function()
-        if not undergroundEnabled then return end
-        pcall(function()
-            local hrp = ugGetHrp()
-            if hrp and undergroundSnapshotCharacter == lp.Character and math.random() < 0.05 then
-                pcall(function() hrp:SetNetworkOwner(lp) end)
-            end
-        end)
-    end)
-
-    undergroundJointConn = RunService.Heartbeat:Connect(function()
-        if not undergroundEnabled then return end
-    end)
-
-    undergroundRemoteConn = nil
-    undergroundPhysicsConn = RunService.Heartbeat:Connect(function()
-        if not undergroundEnabled then return end
-        pcall(function()
-            local char = ugGetCharacter()
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            if not char or not hrp or undergroundSnapshotCharacter ~= char then return end
-            ugCleanupForces()
-        end)
-    end)
-
-    undergroundSafeConn = RunService.Heartbeat:Connect(function()
-        if not undergroundEnabled then return end
-        ugUpdateFallHeight()
-        pcall(function()
-            local char = ugGetCharacter()
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            if not char or not hrp or undergroundSnapshotCharacter ~= char then return end
-            ugSafeTeleport(hrp)
-        end)
+    pcall(function()
+        undergroundApply(char, root, humanoid)
     end)
 end
 
 stopUnderground = function()
     undergroundEnabled = false
-    if undergroundConn then undergroundConn:Disconnect() undergroundConn = nil end
-    if undergroundSteppedConn then undergroundSteppedConn:Disconnect() undergroundSteppedConn = nil end
-    if undergroundOwnershipConn then undergroundOwnershipConn:Disconnect() undergroundOwnershipConn = nil end
-    if undergroundJointConn then undergroundJointConn:Disconnect() undergroundJointConn = nil end
-    if undergroundPhysicsConn then undergroundPhysicsConn:Disconnect() undergroundPhysicsConn = nil end
-    if undergroundSafeConn then undergroundSafeConn:Disconnect() undergroundSafeConn = nil end
-    pcall(function() RunService:UnbindFromRenderStep("UndergroundSync") end)
-    pcall(function() RunService:UnbindFromRenderStep("UndergroundSync2") end)
-    pcall(function() RunService:UnbindFromRenderStep("UndergroundSync3") end)
-    undergroundRenderConn = nil
-    undergroundRenderConn2 = nil
-    undergroundRenderConn3 = nil
-    if undergroundRemoteConn then pcall(function() task.cancel(undergroundRemoteConn) end) undergroundRemoteConn = nil end
-    if undergroundFloodConn then pcall(function() task.cancel(undergroundFloodConn) end) undergroundFloodConn = nil end
-    if undergroundRestoreConn then undergroundRestoreConn:Disconnect() undergroundRestoreConn = nil end
-    ugCleanupForces()
-
-    local restored = ugRestoreSnapshot()
-    if restored then
-        ugStartRestoreWindow()
-    else
-        local char = ugGetCharacter()
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp and undergroundRealCF then
-            pcall(function()
-                hrp.CFrame = undergroundRealCF
-                hrp.AssemblyLinearVelocity = undergroundRealVel or Vector3.zero
-                hrp.AssemblyAngularVelocity = undergroundRealAngVel or Vector3.zero
-            end)
-        end
+    if undergroundConn then
+        undergroundConn:Disconnect()
+        undergroundConn = nil
     end
-
-    undergroundRemoteList = {}
-    undergroundRealCF = nil
-    undergroundRealVel = nil
-    undergroundRealAngVel = nil
-    undergroundOldCF = nil
-    undergroundOldVel = nil
-    undergroundOldAngVel = nil
-    undergroundOldCamCF = nil
-    undergroundOldAnchored = nil
-    undergroundOldRootPart0 = nil
-    undergroundFirstRun = true
+    undergroundRestore()
 end
 
 local __kicia_hook_genv = ResolveGlobalEnv()
@@ -888,7 +625,7 @@ return {
                 IgnoreProtected = function() return togValue('P8S4T9', true) end,
                 OnEmpty = function()
                     local value = optValue('P8S4D1', 'Swap')
-                    if value == 'Reload' or value == 'Swap' then
+                    if value == 'Reload' or value == 'Swap' or value == 'SwapOrReload' then
                         return value
                     end
                     return 'Swap'
@@ -2228,10 +1965,10 @@ return {
                 if equippedItem ~= nil and equippedIndex ~= nil and enabled[equippedIndex] ~= nil then
                     local current = enabled[equippedIndex]
                     if current.type == 'Gun' and itemAmmo(current.item) <= 0 then
-                        if onEmpty == 'Reload' and itemAmmoReserve(current.item) > 0 then
+                        if (onEmpty == 'Reload' or onEmpty == 'SwapOrReload') and itemAmmoReserve(current.item) > 0 then
                             return { type = 'Reload', item = current.item, itemType = current.type, index = current.index }
                         end
-                        if onEmpty == 'Swap' then
+                        if onEmpty == 'Swap' or onEmpty == 'SwapOrReload' then
                             local candidate = nextUsableGun(equippedIndex)
                             if candidate then
                                 return { type = 'Swap', item = candidate.item, itemType = candidate.type, index = candidate.index }
@@ -2246,7 +1983,7 @@ return {
                     if isUsable(current) then
                         return { type = 'Attack', item = current.item, itemType = current.type, index = current.index }
                     end
-                    if current.type == 'Gun' and itemAmmoReserve(current.item) > 0 and onEmpty == 'Reload' then
+                    if current.type == 'Gun' and itemAmmoReserve(current.item) > 0 and (onEmpty == 'Reload' or onEmpty == 'SwapOrReload') then
                         return { type = 'Reload', item = current.item, itemType = current.type, index = current.index }
                     end
                 end
@@ -2634,6 +2371,7 @@ return {
             end
             local MeleeStrategy = {}
             MeleeStrategy.__index = MeleeStrategy
+            local MELEE_DWELL_S = 0.07
             function MeleeStrategy.new(partGlue)
                 return setmetatable({
                     _partGlue = partGlue,
@@ -2641,6 +2379,8 @@ return {
                     _hitboxWindowUntil = -1,
                     _attackCooldown = -1,
                     _gluedOurPart = nil,
+                    _meleeDwellStart = nil,
+                    _meleeDwellTarget = nil,
                 }, MeleeStrategy)
             end
             function MeleeStrategy:ClearGlue()
@@ -2683,7 +2423,7 @@ return {
                 self._hitboxWindowUntil = now + BACKSTAB_WINDOW
                 self._attackCooldown = now + BACKSTAB_COOLDOWN
             end
-            function MeleeStrategy:Plan(dt, target, item, ourRootPart, canFire)
+            function MeleeStrategy:Plan(dt, target, item, ourRootPart, canFire, characterController)
                 local hitboxHead = resolveLiveHead(target)
                 if hitboxHead == nil then
                     self:ClearGlue()
@@ -2723,7 +2463,18 @@ return {
                 if cframe == nil then
                     return ourRootPart.CFrame, nil, nil
                 end
-                local viewAngles = (profileHeavy or isKnife) and meleeViewAngles(target, targetRootPart, hitboxHead) or nil
+                local viewAngles = meleeViewAngles(target, targetRootPart, hitboxHead)
+                local now = os.clock()
+                if self._meleeDwellTarget ~= target then
+                    self._meleeDwellTarget = target
+                    self._meleeDwellStart = now
+                elseif self._meleeDwellStart == nil then
+                    self._meleeDwellStart = now
+                end
+                if now - self._meleeDwellStart < MELEE_DWELL_S then
+                    self._shootLock:Reset()
+                    return cframe, viewAngles, nil
+                end
                 local isBackstab = false
                 if isKnife then
                     isBackstab = isBackstabPosition(cframe.Position, targetRootPart)
@@ -2750,13 +2501,26 @@ return {
                             return false
                         end
                         local currentCFrame = cframe
-                        if isKnife then
-                            local refreshed = buildKnifeBackstabCFrame(targetRootPart, hitboxHead)
-                            if refreshed ~= nil then
-                                currentCFrame = refreshed
-                            end
-                            if not isBackstabPosition(currentCFrame.Position, targetRootPart) then
-                                return false
+                        local currentLook = targetRootPart.CFrame.LookVector
+                        local currentFlatLook = Vector3.new(currentLook.X, 0, currentLook.Z)
+                        if currentFlatLook.Magnitude > 1e-4 then
+                            currentFlatLook = currentFlatLook.Unit
+                            if isKnife then
+                                local refreshed = buildKnifeBackstabCFrame(targetRootPart, hitboxHead)
+                                if refreshed ~= nil then
+                                    currentCFrame = refreshed
+                                end
+                                if not isBackstabPosition(currentCFrame.Position, targetRootPart) then
+                                    return false
+                                end
+                            elseif profileHeavy then
+                                local desired = targetRootPart.Position - currentFlatLook * 1.2 + Vector3.new(0, 0.6, 0)
+                                desired = Vector3.new(desired.X, math.max(desired.Y, WorkspaceRB.FallenPartsDestroyHeight + 3), desired.Z)
+                                currentCFrame = safeLookCFrame(desired, currentAim) or currentCFrame
+                            else
+                                local desired = currentAim - currentFlatLook * 0.8 + Vector3.new(0, -0.5, 0)
+                                desired = Vector3.new(desired.X, math.max(desired.Y, WorkspaceRB.FallenPartsDestroyHeight + 3), desired.Z)
+                                currentCFrame = safeLookCFrame(desired, currentAim) or currentCFrame
                             end
                         end
                         local eyePos = currentCFrame.Position + Vector3.new(0, EYE_UP_SANE, 0)
@@ -2767,6 +2531,10 @@ return {
                         local muzzleCF = eyeCF - Vector3.new(0, EYE_MUZZLE_SEP, 0)
                         primeMeleeItem(item)
                         local txPitch, txYaw, txRoll = targetRootPart.CFrame:ToOrientation()
+                        viewAngles = meleeViewAngles(target, targetRootPart, hitboxHead) or viewAngles
+                        if characterController and viewAngles then
+                            pcall(function() characterController:ForceViewAngles(20, viewAngles) end)
+                        end
                         local aboveNow = isAbove(target)
                         local aimA = buildAim(aboveNow and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, aboveNow and PITCH_ABOVE or PITCH_BELOW, txYaw, txRoll)
                         local aimB = buildAim(aboveNow and AIM_ABOVE_END or AIM_BELOW_END, aboveNow and PITCH_ABOVE or PITCH_BELOW, txYaw, txRoll)
@@ -2785,6 +2553,8 @@ return {
             function MeleeStrategy:ResetState()
                 self._hitboxWindowUntil = -1
                 self._attackCooldown = -1
+                self._meleeDwellStart = nil
+                self._meleeDwellTarget = nil
                 self._shootLock:Reset()
                 local glued = self._gluedOurPart
                 if glued ~= nil then
@@ -2868,7 +2638,7 @@ return {
                 end
                 return { cframe = randomEvade(clientCF) }
             end
-            function Controller:_Plan(dt, action, target, ourRootPart, clientCF, mode, fighter)
+            function Controller:_Plan(dt, action, target, ourRootPart, clientCF, mode, fighter, characterController)
                 local canFire = true
                 if target ~= nil then
                     canFire = not self._spatialLimitGate:Tick(target)
@@ -2908,7 +2678,7 @@ return {
                 end
                 if action.itemType == 'Melee' then
                     self._hitscanStrategy:ResetState()
-                    local cframe, viewAngles, weaponAction = self._meleeStrategy:Plan(dt, target, action.item, ourRootPart, canFire)
+                    local cframe, viewAngles, weaponAction = self._meleeStrategy:Plan(dt, target, action.item, ourRootPart, canFire, characterController)
                     local forceViewBeforeAction = viewAngles ~= nil and weaponAction ~= nil
                     return { cframe = cframe, viewAngles = viewAngles, weaponAction = weaponAction, shouldSkipDefense = true, shouldForceCrouch = true, preActionHeartbeat = weaponAction ~= nil, forceViewBeforeAction = forceViewBeforeAction }
                 end
@@ -2986,7 +2756,7 @@ return {
                     return
                 end
                 self._lastTargetWorld = target ~= nil and target.rootPart.Position or nil
-                local plan = self:_Plan(dt, action, target, ourRootPart, clientCF, mode, fighter)
+                local plan = self:_Plan(dt, action, target, ourRootPart, clientCF, mode, fighter, characterController)
                 self:_ApplyPlan(plan, target, characterController, fighter)
                 self:_ApplyForcedCrouch(plan.shouldForceCrouch == true)
                 local preActionHeartbeat = plan.preActionHeartbeat == true
@@ -15587,10 +15357,16 @@ ErrorReporter.set_game(GameName)
                 if typeof(currentRotation) ~= 'Vector2' then
                     return
                 end
-                local aimSpeed = Options.P2S2S1 and Options.P2S2S1.Value or 35
+                local smoothing = math.clamp(Options.P2S2S1 and Options.P2S2S1.Value or 35, 0, 100)
                 local frameDelta = math.clamp(type(deltaTime) == 'number' and deltaTime or (1 / 60), 0, 0.1)
-                local blendAlpha = math.clamp(1 - math.exp(-frameDelta * (2 + (aimSpeed * 0.58))), 0, 1)
                 local pitch, yaw = CFrame.lookAt(camera.CFrame.Position, worldPosition):ToOrientation()
+                if smoothing <= 0 then
+                    cameraController:SetRotation(Vector2.new(pitch, yaw))
+                    return
+                end
+                local normalized = smoothing / 100
+                local rate = 30 * ((1 - normalized) ^ 2) + 0.05
+                local blendAlpha = math.clamp(1 - math.exp(-frameDelta * rate), 0, 1)
                 cameraController:SetRotation(Vector2.new(
                     currentRotation.X + (pitch - currentRotation.X) * blendAlpha,
                     currentRotation.Y + ((yaw - currentRotation.Y + math.pi) % (2 * math.pi) - math.pi) * blendAlpha
@@ -25147,11 +24923,11 @@ ErrorReporter.set_game(GameName)
                     })
                     local CameraAimSettings = Combat:AddDependencyBox()
                     CameraAimSettings:AddSlider("P2S2S1", {
-                        Text = "Aim Speed",
+                        Text = "Smoothing",
                         Default = 35,
-                        Min = 1,
+                        Min = 0,
                         Max = 100,
-                        Rounding = 0,
+                        Rounding = 2,
                         Compact = true,
                     })
                     CameraAimSettings:SetupDependencies({ { Options.P2S1D1, "Camera" } })
@@ -25358,6 +25134,29 @@ ErrorReporter.set_game(GameName)
                         Text = "Ignore Protected",
                         Default = true,
                     })
+                    Rage:AddToggle("P8S4T10", {
+                        Text = "Underground",
+                        Default = false,
+                        Callback = function(value)
+                            undergroundDepth = Options.P8S4S6 and Options.P8S4S6.Value or undergroundDepth
+                            if value then
+                                startUnderground()
+                            else
+                                stopUnderground()
+                            end
+                        end,
+                    })
+                    local UndergroundBox = Rage:AddDependencyBox()
+                    UndergroundBox:AddSlider("P8S4S6", {
+                        Text = "Floor Gap",
+                        Default = 0.50,
+                        Min = 0.36,
+                        Max = 0.67,
+                        Rounding = 2,
+                        Suffix = " studs",
+                        Compact = true,
+                    })
+                    UndergroundBox:SetupDependencies({ { Toggles.P8S4T10, true } })
                 do
                     local Mods = Tabs.Combat:AddRightGroupbox("Weapon Mods", "swords")
                     Mods:AddToggle("P4S1T1", {
@@ -26936,6 +26735,7 @@ SaveManager:LoadAutoloadConfig()
 
 local RivalsRuntime = {}
             function RivalsRuntime.ResetState()
+                stopUnderground()
                 RivalsRuntimeBridge.WorldVisuals.Destroy()
                 RivalsRuntimeBridge.ViewmodelVisuals.Destroy()
                 RivalsRuntimeBridge.NativeRemovals.Destroy()
@@ -27067,8 +26867,8 @@ local RivalsRuntime = {}
                 Connections:register('CameraModifiers_Render', RunService.RenderStepped:Connect(GuardRivalsCallback('CameraModifiers_Render', RivalsModsState.UpdateCameraModifiers)))
                 Connections:register('MovementRecorder_Render', RunService.RenderStepped:Connect(GuardRivalsCallback('MovementRecorder_Render', RivalsRuntimeBridge.MovementRecorder.UpdateRender)))
                 Connections:register('Flickbot_Render', RunService.RenderStepped:Connect(GuardRivalsCallback('Flickbot_Render', RivalsRuntimeBridge.UpdateFlickbot)))
-                Connections:register('CameraAim_Render', RunService.RenderStepped:Connect(GuardRivalsCallback('CameraAim_Render', RivalsRuntimeBridge.UpdateCameraAim)))
-                Connections:register('Aimbot_Render', RunService.Heartbeat:Connect(GuardRivalsCallback('Aimbot_Render', RivalsRuntimeBridge.UpdateAimbot)))
+                Connections:register('CameraAim_Heartbeat', RunService.Heartbeat:Connect(GuardRivalsCallback('CameraAim_Heartbeat', RivalsRuntimeBridge.UpdateCameraAim)))
+                Connections:register('Aimbot_Heartbeat', RunService.Heartbeat:Connect(GuardRivalsCallback('Aimbot_Heartbeat', RivalsRuntimeBridge.UpdateAimbot)))
                 Connections:register('Ragebot_Heartbeat', RunService.Heartbeat:Connect(GuardRivalsCallback('Ragebot_Heartbeat', RivalsRuntimeBridge.UpdateRagebot)))
                 Connections:register('TripmineAutomation_Heartbeat', RunService.Heartbeat:Connect(GuardRivalsCallback('TripmineAutomation_Heartbeat', RivalsRuntimeBridge.UpdateTripmineAutomation)))
                 local AutoQueueRemotes = ReplicatedStorage:FindFirstChild('Remotes')
