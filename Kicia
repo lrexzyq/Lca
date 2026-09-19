@@ -26975,7 +26975,7 @@ local RivalsRuntime = {}
                     fakeOwned = nil,
                     fakeWeaponOwned = nil,
                     favorites = nil,
-                    enabled = true,
+                    enabled = false,
                     unlockType = 'Skin',
                     unlockRarity = 'Common',
                     specificType = 'Skin',
@@ -27072,6 +27072,7 @@ local RivalsRuntime = {}
                     leaderboardConnections = {},
                     deviceCancel = 0,
                     initialized = false,
+                    duelDataActive = false,
                 }
 
 local AethereaFns = {}
@@ -27242,6 +27243,7 @@ local AethereaFns = {}
                 end
 
                 AethereaFns.refreshSkin = function()
+                    AethereaSkin.enabled = true
                     pcall(function()
                         RivalsRuntimeBridge.RefreshNativeRivalsCosmetics()
                     end)
@@ -28060,9 +28062,9 @@ local AethereaFns = {}
                     AethereaSpoof.spoofPDCGet = originalPDCGet
                     PDC.Get = function(self, key, ...)
                         local value = nil
-                        if key == 'DuelHistory' and AethereaSpoof.duelHistory.history ~= nil then
+                        if key == 'DuelHistory' and AethereaSpoof.duelDataActive and AethereaSpoof.duelHistory.history ~= nil then
                             return AethereaSpoof.duelHistory.history
-                        elseif key == 'LoggedELOEvents' and AethereaSpoof.duelHistory.logged ~= nil then
+                        elseif key == 'LoggedELOEvents' and AethereaSpoof.duelDataActive and AethereaSpoof.duelHistory.logged ~= nil then
                             return AethereaSpoof.duelHistory.logged
                         elseif key == 'WeaponKeys' and AethereaSpoof.currency.keys then
                             return AethereaSpoof.currency.keysValue
@@ -28091,6 +28093,7 @@ local AethereaFns = {}
                 end
 
                 AethereaFns.updateDuelHistory = function()
+                    AethereaSpoof.duelDataActive = true
                     local d = AethereaSpoof.duelHistory
                     if type(d.history) ~= 'table' or type(d.logged) ~= 'table' then return end
                     local match = d.history[d.matchIndex]
