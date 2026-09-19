@@ -1806,6 +1806,140 @@ return {
                     and math.abs(v.Y) < 4194304
                     and math.abs(v.Z) < 4194304
             end
+            -- Temporal target layer borrowed conceptually from luahook:
+            -- keep a very short memory of the last sane head/root sample so a brief
+            -- head replication gap does not immediately destroy the active target.
+            -- Live HitboxHead remains the authoritative shot target; prediction is
+            -- used only while the live head is temporarily unavailable.
+            local TEMPORAL_HOLD_SEC = 0.18
+            local TEMPORAL_LEAD_SEC = 0.08
+            local TEMPORAL_MAX_SPEED = 220
+            local TemporalTargetState = setmetatable({}, { __mode = 'k' })
+
+            local function temporalStateFor(entry)
+                local key = entry and (entry.player or entry.model)
+                if key == nil then
+                    return nil
+                end
+                local state = TemporalTargetState[key]
+                if state == nil then
+                    state = {
+                        character = nil,
+                        lastHead = nil,
+                        lastRoot = nil,
+                        headVelocity = Vector3.zero,
+                        rootVelocity = Vector3.zero,
+                        lastSeenAt = 0,
+                        hiddenSince = nil,
+                    }
+                    TemporalTargetState[key] = state
+                end
+                local character = entry and entry.model or nil
+                if character ~= nil and state.character ~= character then
+                    state.character = character
+                    state.lastHead = nil
+                    state.lastRoot = nil
+                    state.headVelocity = Vector3.zero
+                    state.rootVelocity = Vector3.zero
+                    state.lastSeenAt = 0
+                    state.hiddenSince = nil
+                end
+                return state
+            end
+
+            local function recordTemporalSample(entry, head, root, now)
+                local state = temporalStateFor(entry)
+                if state == nil then return end
+                local t = now or os.clock()
+                if state.lastSeenAt > 0 and t > state.lastSeenAt then
+                    local dtSample = math.clamp(t - state.lastSeenAt, 0.001, 0.25)
+                    if state.lastHead and head and isFiniteVector3(state.lastHead) and isFiniteVector3(head.Position) then
+                        local v = (head.Position - state.lastHead) / dtSample
+                        if isFiniteVector3(v) and v.Magnitude <= TEMPORAL_MAX_SPEED then
+                            state.headVelocity = v
+                        end
+                    end
+                    if state.lastRoot and root and isFiniteVector3(state.lastRoot) and isFiniteVector3(root.Position) then
+                        local v = (root.Position - state.lastRoot) / dtSample
+                        if isFiniteVector3(v) and v.Magnitude <= TEMPORAL_MAX_SPEED then
+                            state.rootVelocity = v
+                        end
+                    end
+                end
+                if head and isFiniteVector3(head.Position) then
+                    state.lastHead = head.Position
+                    state.hiddenSince = nil
+                elseif state.hiddenSince == nil then
+                    state.hiddenSince = t
+                end
+                if root and isFiniteVector3(root.Position) then
+                    state.lastRoot = root.Position
+                end
+                state.lastSeenAt = t
+            end
+
+            local function noteTemporalMissing(entry, root, now)
+                local state = temporalStateFor(entry)
+                if state == nil then return end
+                local t = now or os.clock()
+                if state.hiddenSince == nil then
+                    state.hiddenSince = t
+                end
+                if root and isFiniteVector3(root.Position) then
+                    if state.lastSeenAt > 0 and t > state.lastSeenAt and state.lastRoot and isFiniteVector3(state.lastRoot) then
+                        local dtSample = math.clamp(t - state.lastSeenAt, 0.001, 0.25)
+                        local v = (root.Position - state.lastRoot) / dtSample
+                        if isFiniteVector3(v) and v.Magnitude <= TEMPORAL_MAX_SPEED then
+                            state.rootVelocity = v
+                        end
+                    end
+                    state.lastRoot = root.Position
+                end
+                state.lastSeenAt = t
+            end
+
+            local function temporalFallback(entry)
+                if not entry then return nil end
+                local state = temporalStateFor(entry)
+                if state == nil or state.lastHead == nil or state.hiddenSince == nil then
+                    return nil
+                end
+                local elapsed = os.clock() - state.hiddenSince
+                if elapsed < 0 or elapsed > TEMPORAL_HOLD_SEC then
+                    return nil
+                end
+                local model = entry.model
+                if state.character ~= model then
+                    return nil
+                end
+                local root = model and (model:FindFirstChild('HumanoidRootPart') or model:FindFirstChild('HitboxBody')) or entry.rootPart
+                if root == nil or root.Parent == nil or not root:IsA('BasePart') or not isFiniteVector3(root.Position) then
+                    return nil
+                end
+                local lead = math.min(TEMPORAL_LEAD_SEC, math.max(0, TEMPORAL_HOLD_SEC - elapsed))
+                local predicted = state.lastHead
+                if state.lastRoot and isFiniteVector3(state.lastRoot) then
+                    local offset = state.lastHead - state.lastRoot
+                    if isFiniteVector3(offset) then
+                        local rootVelocity = state.rootVelocity or Vector3.zero
+                        local headVelocity = state.headVelocity or Vector3.zero
+                        predicted = root.Position + offset
+                            + (rootVelocity * 0.75 + headVelocity * 0.25) * lead
+                    end
+                else
+                    predicted = state.lastHead + (state.headVelocity or Vector3.zero) * lead
+                end
+                if not isFiniteVector3(predicted) then
+                    predicted = state.lastHead
+                end
+                return {
+                    predictedHead = predicted,
+                    lastHead = state.lastHead,
+                    elapsed = elapsed,
+                    rootPart = root,
+                    state = state,
+                }
+            end
             local function refreshTargetEntry(entry)
                 if not entry then
                     return nil
@@ -1818,6 +1952,7 @@ return {
                 local body = model:FindFirstChild('HitboxBody')
                 local root = model:FindFirstChild('HumanoidRootPart') or body
                 if not head or not root or not head:IsA('BasePart') or not root:IsA('BasePart') then
+                    noteTemporalMissing(entry, root)
                     return nil
                 end
                 local humanoid = model:FindFirstChildOfClass('Humanoid')
@@ -1836,8 +1971,10 @@ return {
                     entry.hacker = okHacker and marked == true
                 end
                 if not isFiniteVector3(head.Position) or not isFiniteVector3(root.Position) then
+                    noteTemporalMissing(entry, root)
                     return nil
                 end
+                recordTemporalSample(entry, head, root)
                 local headDelta = head.Position - root.Position
                 if isFiniteVector3(headDelta) and headDelta.Magnitude <= 20 then
                     local localOffset = root.CFrame:PointToObjectSpace(head.Position)
@@ -1893,7 +2030,11 @@ return {
                         local hitboxHead = model:FindFirstChild('HitboxHead')
                         local hitboxBody = model:FindFirstChild('HitboxBody')
                         local rootPart = model:FindFirstChild('HumanoidRootPart') or hitboxBody
-                        if not hitboxHead or not rootPart or not hitboxHead:IsA('BasePart') or not rootPart:IsA('BasePart') then
+                        if not rootPart or not rootPart:IsA('BasePart') then
+                            return nil
+                        end
+                        if not hitboxHead or not hitboxHead:IsA('BasePart') then
+                            noteTemporalMissing({ player = player, model = model }, rootPart)
                             return nil
                         end
                         local humanoid = model:FindFirstChildOfClass('Humanoid')
@@ -1922,7 +2063,6 @@ return {
                 return out
             end
             local function isValidTarget(entry)
-                entry = refreshTargetEntry(entry)
                 if entry == nil or not entry.alive or entry.deflecting then
                     return false
                 end
@@ -1931,7 +2071,7 @@ return {
                 end
                 return true
             end
-            local function selectTarget()
+            local function selectTarget(preferredTarget)
                 local enemies = collectEnemies()
                 local myRoot = GetRoot()
                 local valid = {}
@@ -1952,6 +2092,17 @@ return {
                 if #valid == 0 then
                     return nil
                 end
+                if preferredTarget ~= nil then
+                    for _, candidate in ipairs(valid) do
+                        if candidate.player ~= nil and preferredTarget.player ~= nil
+                            and candidate.player == preferredTarget.player then
+                            return candidate
+                        elseif candidate.model ~= nil and preferredTarget.model ~= nil
+                            and candidate.model == preferredTarget.model then
+                            return candidate
+                        end
+                    end
+                end
                 table.sort(valid, function(a, b)
                     if a.hacker ~= b.hacker then
                         return a.hacker == true
@@ -1962,6 +2113,39 @@ return {
                     return a.distance < b.distance
                 end)
                 return valid[1]
+            end
+            local function resolveTemporalTarget(previousTarget)
+                if previousTarget == nil then
+                    return nil
+                end
+                local model = previousTarget.model
+                if model == nil or model.Parent == nil then
+                    return nil
+                end
+                local humanoid = model:FindFirstChildOfClass('Humanoid')
+                if humanoid and humanoid.Health <= 0 then
+                    return nil
+                end
+                local fallback = temporalFallback(previousTarget)
+                if fallback == nil then
+                    return nil
+                end
+                local entry = previousTarget
+                entry.hitboxHead = nil
+                entry.rootPart = fallback.rootPart
+                entry.temporalOnly = true
+                entry.temporalHeadPosition = fallback.predictedHead
+                entry.temporalHeadLastPosition = fallback.lastHead
+                entry.temporalGap = fallback.elapsed
+                entry.distance = math.huge
+                local myRoot = GetRoot()
+                if myRoot and myRoot.Parent then
+                    local delta = fallback.rootPart.Position - myRoot.Position
+                    if isFiniteVector3(delta) then
+                        entry.distance = delta.Magnitude
+                    end
+                end
+                return entry
             end
             local function hasTargets()
                 for _, entry in ipairs(collectEnemies()) do
@@ -2323,7 +2507,23 @@ return {
                 end
             end
             function HitscanStrategy:Plan(dt, target, item, ourRootPart, canFire)
-                local hitboxHead = resolveLiveHead(target)
+                local hitboxHead, targetRootPart = resolveLiveTarget(target)
+                local temporal = nil
+                if hitboxHead == nil and target and target.temporalOnly then
+                    temporal = temporalFallback(target)
+                    targetRootPart = targetRootPart or target.rootPart
+                    if targetRootPart ~= nil and targetRootPart.Parent ~= nil and temporal ~= nil then
+                        self:ClearGlue()
+                        local shieldState = classifyAboveBelow(target)
+                        local above = shieldState ~= 'Below'
+                        local offset = above and OFFSET_ABOVE or OFFSET_BELOW
+                        local aimPoint = temporal.predictedHead
+                        local cframe = CFrame.new(targetRootPart.Position + offset, aimPoint)
+                        -- No synthetic part is fired. The next frame with a live head
+                        -- will go through the normal v6 live-head path.
+                        return cframe, nil
+                    end
+                end
                 if hitboxHead == nil then
                     self:ClearGlue()
                     return ourRootPart.CFrame, nil
@@ -2332,7 +2532,10 @@ return {
                 local above = shieldState ~= 'Below'
                 local directHeadAim = shieldState == 'None'
                 local offset = above and OFFSET_ABOVE or OFFSET_BELOW
-                local aimHeadPosition = resolveTargetHeadPosition(target, hitboxHead)
+                -- Head-only firing: HitboxHead is authoritative for the actual shot point.
+                -- Do not fall back to the visible Head here; that can be offset from the
+                -- server hitbox and makes the shot payload less consistent.
+                local aimHeadPosition = hitboxHead.Position
                 local flightActive = isFlightActive()
                 if flightActive then
                     self:ClearGlue()
@@ -2372,7 +2575,7 @@ return {
                 else
                     cframe = CFrame.new(void.Position + offset, aimHeadPosition or hitboxHead.Position)
                 end
-                local targetRootPart = target.rootPart
+                targetRootPart = target.rootPart
                 if targetRootPart == nil or targetRootPart.Parent == nil or not targetRootPart:IsA('BasePart') then
                     self:ClearGlue()
                     return ourRootPart.CFrame, nil
@@ -2391,8 +2594,8 @@ return {
                     if hitboxHead.Parent == nil or targetRootPart.Parent == nil then
                         return false
                     end
-                    local aimWorldPos = glued and hitboxHead.Position
-                        or (resolveTargetHeadPosition(target, nil, true) or aimHeadPosition or hitboxHead.Position)
+                    -- Always encode the live server hitbox center.
+                    local aimWorldPos = hitboxHead.Position
                     local shotEyeBase = cframe.Position
                     local shotRise = eyeRise(shotEyeBase, target.model)
                     local shotEyePos = shotEyeBase + Vector3.new(0, shotRise, 0)
@@ -2428,7 +2631,6 @@ return {
             local BACKSTAB_WINDOW = 0.625
 local BACKSTAB_COOLDOWN = 1.25
 local MELEE_DWELL_S = 0.07
-local MELEE_KNIFE_TOKENS = { 'knife', 'karambit', 'balisong', 'chancla', 'machete', 'candy cane', 'armature', 'daggers', 'axe' }
 local MeleeStrategy = {}
 MeleeStrategy.__index = MeleeStrategy
 function MeleeStrategy.new(partGlue)
@@ -2451,13 +2653,9 @@ local function meleeProfile(item)
         return nil
     end
     local name = tostring(itemName(item) or ''):lower()
-    local knife = false
-    for _, token in ipairs(MELEE_KNIFE_TOKENS) do
-        if name:find(token, 1, true) then
-            knife = true
-            break
-        end
-    end
+    -- Match main's exact Knife semantics. Other melee weapons remain melee/heavy,
+    -- but they do not enter the Knife backstab cooldown window unless named Knife.
+    local knife = name == 'knife'
     local heavy = info.CriticalDamage ~= nil and type(info.HeavyAttackCooldown) == 'number'
     return { heavy = heavy, knife = knife }
 end
@@ -2476,42 +2674,71 @@ local function meleeObjectId(item)
     return objectId
 end
 function MeleeStrategy:_RecordBackstab()
-    local now = tick()
+    local now = os.clock()
     self._hitboxWindowUntil = now + BACKSTAB_WINDOW
     self._attackCooldown = now + BACKSTAB_COOLDOWN
 end
--- FIX Bug3: nhận characterController làm tham số thứ 6 để cho phép
--- future use (ForceViewAngles trong weaponAction, v.v.).
--- Caller tại _Plan truyền nó; trước đây bị drop silently.
-function MeleeStrategy:Plan(dt, target, item, ourRootPart, canFire, characterController)
+function MeleeStrategy:Plan(dt, target, item, ourRootPart, canFire)
     local hitboxHead, targetRootPart = resolveLiveTarget(target)
-    if hitboxHead == nil or targetRootPart == nil or targetRootPart.Parent == nil then
+    local temporal = nil
+
+    -- A short replication blink should not throw away melee state. Keep the target
+    -- latched, keep the park position stable, and wait for the authoritative
+    -- HitboxHead to return before sending the actual melee action.
+    if hitboxHead == nil and target and target.temporalOnly then
+        temporal = temporalFallback(target)
+        targetRootPart = targetRootPart or (temporal and temporal.rootPart) or target.rootPart
+        if temporal ~= nil and targetRootPart ~= nil and targetRootPart.Parent ~= nil then
+            hitboxHead = nil
+        else
+            temporal = nil
+        end
+    end
+
+    if targetRootPart == nil or targetRootPart.Parent == nil then
         if self._gluedOurPart ~= nil then
             self._partGlue:Free(self._gluedOurPart)
             self._gluedOurPart = nil
         end
+        self._hitboxWindowUntil = -1
+        self._attackCooldown = -1
         self._shootLock:Reset()
+        self._meleeDwellStart = nil
+        self._meleeDwellTarget = nil
         return ourRootPart.CFrame, nil, nil
     end
+
     local profile = meleeProfile(item)
     if profile == nil then
         if self._gluedOurPart ~= nil then
             self._partGlue:Free(self._gluedOurPart)
             self._gluedOurPart = nil
         end
+        self._hitboxWindowUntil = -1
+        self._attackCooldown = -1
         self._shootLock:Reset()
+        self._meleeDwellStart = nil
+        self._meleeDwellTarget = nil
         return ourRootPart.CFrame, nil, nil
     end
+
     local targetKey = target.player or target.model or targetRootPart or target
-    local now = tick()
+    local now = os.clock()
     if self._meleeDwellTarget ~= targetKey then
         self._meleeDwellTarget = targetKey
         self._meleeDwellStart = now
     end
-    local aimWorldPos = targetRootPart.CFrame:PointToWorldSpace(target.headLocalOffset or targetRootPart.CFrame:PointToObjectSpace(hitboxHead.Position))
-    if not isFiniteVector3(aimWorldPos) then
+
+    local aimWorldPos
+    if hitboxHead ~= nil and hitboxHead.Parent ~= nil then
         aimWorldPos = hitboxHead.Position
+    elseif temporal ~= nil then
+        aimWorldPos = temporal.predictedHead
     end
+    if not isFiniteVector3(aimWorldPos) then
+        return ourRootPart.CFrame, nil, nil
+    end
+
     local above = isAbove(target)
     local look = targetRootPart.CFrame.LookVector
     if look.Magnitude < 1e-4 then
@@ -2519,42 +2746,87 @@ function MeleeStrategy:Plan(dt, target, item, ourRootPart, canFire, characterCon
         return ourRootPart.CFrame, profile.heavy and meleeViewAngles(px, oy) or nil, nil
     end
     look = look.Unit
+
     local offset
     if profile.knife or profile.heavy then
         offset = look * -1.2 + Vector3.new(0, 0.6, 0)
     else
         offset = look * -0.8 + Vector3.new(0, -0.5, 0)
     end
-    local ok, void = pcall(function()
-        return self._partGlue:Acquire(ourRootPart, hitboxHead)
-    end)
-    if not ok or void == nil then
+
+    local void
+    if temporal == nil then
+        local ok, result = pcall(function()
+            return self._partGlue:Acquire(ourRootPart, hitboxHead)
+        end)
+        if not ok or result == nil then
+            if self._gluedOurPart ~= nil then
+                self._partGlue:Free(self._gluedOurPart)
+                self._gluedOurPart = nil
+            end
+            self._shootLock:Reset()
+            return ourRootPart.CFrame, nil, nil
+        end
+        void = result
+        self._gluedOurPart = ourRootPart
+    else
+        -- No synthetic hitbox is created: simply keep the local combat park stable
+        -- until the real HitboxHead is available again.
         if self._gluedOurPart ~= nil then
             self._partGlue:Free(self._gluedOurPart)
             self._gluedOurPart = nil
         end
-        return ourRootPart.CFrame, nil, nil
+        void = ourRootPart.CFrame
     end
-    self._gluedOurPart = ourRootPart
-    aimWorldPos = hitboxHead.Position
+
     local cframe
-    if above and not (profile.knife or profile.heavy) then
-        cframe = void + offset
+    if temporal == nil and hitboxHead ~= nil then
+        aimWorldPos = hitboxHead.Position
+        if above and not (profile.knife or profile.heavy) then
+            cframe = void + offset
+        else
+            cframe = CFrame.new(void.Position + offset, aimWorldPos)
+        end
     else
-        cframe = CFrame.new(void.Position + offset, aimWorldPos)
+        cframe = CFrame.new(targetRootPart.Position + offset, aimWorldPos)
     end
+
     local px, oy = targetRootPart.CFrame:ToOrientation()
     local viewAngles = profile.heavy and meleeViewAngles(px, oy) or nil
+
     if now - (self._meleeDwellStart or now) < MELEE_DWELL_S then
         return cframe, viewAngles, nil
     end
-    -- FIX Bug1: ShootLock rate-limit để melee/knife không spam mỗi frame.
-    -- Dùng dt * ShootFrames (không floor 1/240) tránh over-fire khi lag.
-    -- Nếu _attackCooldown chưa hết (sau backstab) cũng chặn fire.
-    local attackBlocked = tick() < self._attackCooldown
-    if attackBlocked or not self._shootLock:ShouldFire(canFire, dt * Setting.ShootFrames()) then
+
+    -- Main-compatible Knife flow:
+    --   1) active backstab window -> HeavyAttack continuation
+    --   2) ShootLock gates a fresh attack window
+    --   3) attack cooldown blocks a fresh attack
+    --   4) exact Knife records the backstab window/cooldown
+    -- During a temporal-only gap we deliberately do not fire; the live head must
+    -- return so the actual action is still head/hitbox authoritative.
+    local forceHeavy = now < self._hitboxWindowUntil
+    if forceHeavy and viewAngles == nil then
+        viewAngles = meleeViewAngles(px, oy)
+    end
+
+    if temporal ~= nil then
         return cframe, viewAngles, nil
     end
+
+    if not forceHeavy then
+        if not self._shootLock:ShouldFire(canFire, (dt or 0) * Setting.ShootFrames()) then
+            return cframe, viewAngles, nil
+        end
+        if now < self._attackCooldown then
+            return cframe, viewAngles, nil
+        end
+        forceHeavy = profile.knife or profile.heavy
+        if profile.knife then
+            self:_RecordBackstab()
+        end
+    end
+
     local function weaponAction()
         local fighter = resolveLocalFighter()
         local currentItem = fighter and fighter.EquippedItem or item
@@ -2562,50 +2834,76 @@ function MeleeStrategy:Plan(dt, target, item, ourRootPart, canFire, characterCon
         if currentItem == nil or currentHead == nil or currentRoot == nil or currentRoot.Parent == nil then
             return false
         end
+
         local currentProfile = meleeProfile(currentItem)
         if currentProfile == nil then
             return false
         end
+
+        -- Re-resolve the live hitbox at execution time. This prevents a stale
+        -- target transform from turning a good park into a bad melee payload.
         local currentAim = currentHead.Position
         if not isFiniteVector3(currentAim) then
             return false
         end
+
         local currentLook = currentRoot.CFrame.LookVector
         if currentLook.Magnitude < 1e-4 then
             return false
         end
         currentLook = currentLook.Unit
+
         local currentOffset
-        if currentProfile.knife or currentProfile.heavy then
+        if forceHeavy or currentProfile.knife or currentProfile.heavy then
             currentOffset = currentLook * -1.2 + Vector3.new(0, 0.6, 0)
         else
             currentOffset = currentLook * -0.8 + Vector3.new(0, -0.5, 0)
         end
+
         local firePark = void.Position + currentOffset
         local eyePos = firePark + Vector3.new(0, eyeRise(firePark, target.model), 0)
         local eyeCF = safeLookCFrame(eyePos, currentAim)
         if eyeCF == nil then
             return false
         end
+
         local muzzleCF = eyeCF - Vector3.new(0, EYE_MUZZLE_SEP, 0)
         local objectId = meleeObjectId(currentItem)
         if objectId == nil then
             return false
         end
+
         local currentAbove = isAbove(target)
         local _, currentOy, currentOz = currentRoot.CFrame:ToOrientation()
         local currentPitch = currentAbove and PITCH_ABOVE or PITCH_BELOW
-        local currentAim1 = buildAim(currentAbove and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, currentPitch, currentOy, currentOz)
-        local currentAim2 = buildAim(currentAbove and AIM_ABOVE_END or AIM_BELOW_END, currentPitch, currentOy, currentOz)
-        local currentHeavy = currentProfile.heavy
-        local fired = fireMeleeHybrid(currentItem, objectId, currentHeavy, currentHead, eyeCF, muzzleCF, currentAim, currentAim1, currentAim2, AIM_EXTRA) == true
-        -- FIX Bug2: gọi _RecordBackstab sau khi fire để set _attackCooldown,
-        -- tránh spam attack liên tục (trước đây _RecordBackstab là dead code).
-        if fired and currentProfile.knife then
-            self:_RecordBackstab()
-        end
-        return fired
+        local currentAim1 = buildAim(
+            currentAbove and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN,
+            currentPitch,
+            currentOy,
+            currentOz
+        )
+        local currentAim2 = buildAim(
+            currentAbove and AIM_ABOVE_END or AIM_BELOW_END,
+            currentPitch,
+            currentOy,
+            currentOz
+        )
+
+        local currentHeavy = forceHeavy or currentProfile.heavy
+        return fireMeleeHybrid(
+            currentItem,
+            objectId,
+            currentHeavy,
+            currentHead,
+            eyeCF,
+            muzzleCF,
+            currentAim,
+            currentAim1,
+            currentAim2,
+            AIM_EXTRA
+        ) == true
     end
+
     return cframe, viewAngles, weaponAction
 end
 function MeleeStrategy:ResetState()
@@ -2650,6 +2948,8 @@ local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
                     _lastTarget = nil,
                     _lastTargetAt = -math.huge,
                     _lastTargetWorld = nil,
+                    _temporalHoldCount = 0,
+                    _temporalLastGap = 0,
                     _lastDefensiveViewAngles = nil,
                 }, Controller)
             end
@@ -2781,13 +3081,30 @@ local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
                 local ourRootPart = self._boundRootPart
                 local clientCF = characterController:GetClientCFrame()
                 local now = os.clock()
-                local target = selectTarget()
+                local target = selectTarget(self._lastTarget)
                 if target ~= nil then
+                    if target.temporalOnly then
+                        self._temporalHoldCount = (self._temporalHoldCount or 0) + 1
+                        self._temporalLastGap = target.temporalGap or 0
+                    else
+                        target.temporalOnly = false
+                    end
                     self._lastTarget = target
                     self._lastTargetAt = now
                 else
-                    self._lastTarget = nil
-                    self._lastTargetAt = -math.huge
+                    local held = nil
+                    if self._lastTarget ~= nil and (now - (self._lastTargetAt or -math.huge)) <= TEMPORAL_HOLD_SEC then
+                        held = resolveTemporalTarget(self._lastTarget)
+                    end
+                    target = held
+                    if target ~= nil then
+                        -- Keep the target latched briefly; do not reset weapon state
+                        -- merely because HitboxHead replication blinked for a frame.
+                        self._lastTargetAt = now
+                    else
+                        self._lastTarget = nil
+                        self._lastTargetAt = -math.huge
+                    end
                 end
                 local action = getAction(fighter)
                 local mode = Setting.EvasionMode()
