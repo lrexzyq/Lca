@@ -27509,7 +27509,7 @@ local RivalsRuntime = {}
                     end
                 end
 
-                local function restoreSkinHooks()
+                AethereaSkin.restoreHooks = function()
                     if not AethereaSkin.patched then return end
                     for name, original in pairs(AethereaSkin.original) do
                         if name == 'PDCGet' and PDC then
