@@ -1107,8 +1107,8 @@ return {
                 else
                     payload = { ['\1'] = inner }
                 end
-                rbFireServerNative(remote, objectId, token, payload, nil)
-                return true
+                local ok = pcall(rbFireServerNative, remote, objectId, token, payload, nil)
+                return ok
             end
             local function fireMeleeAttack(objectId, a, b, c, d)
                 local remote = resolveUseItemRemote()
@@ -1117,8 +1117,8 @@ return {
                 if not remote or not token or not anim or not objectId then
                     return false
                 end
-                rbFireServerNative(remote, objectId, token, { ['\1'] = { ['\0'] = a, ['\1'] = b, ['\2'] = c, ['\3'] = d }, ['\2'] = anim }, nil)
-                return true
+                local ok = pcall(rbFireServerNative, remote, objectId, token, { ['\1'] = { ['\0'] = a, ['\1'] = b, ['\2'] = c, ['\3'] = d }, ['\2'] = anim }, nil)
+                return ok
             end
             local function fireMeleeHeavy(objectId, a, b, c, d)
                 local remote = resolveUseItemRemote()
@@ -1127,8 +1127,8 @@ return {
                 if not remote or not token or not anim or not objectId then
                     return false
                 end
-                rbFireServerNative(remote, objectId, token, { ['\1'] = { ['\0'] = a, ['\1'] = b, ['\2'] = c, ['\3'] = d }, ['\2'] = anim }, nil)
-                return true
+                local ok = pcall(rbFireServerNative, remote, objectId, token, { ['\1'] = { ['\0'] = a, ['\1'] = b, ['\2'] = c, ['\3'] = d }, ['\2'] = anim }, nil)
+                return ok
             end
             local function fireReload(objectId)
                 local remote = resolveUseItemRemote()
@@ -1137,7 +1137,7 @@ return {
                 if not remote or not start or not reload or not objectId then
                     return
                 end
-                rbFireServerNative(remote, objectId, start, { ['\1'] = reload, ['\2'] = reload }, nil)
+                pcall(rbFireServerNative, remote, objectId, start, { ['\1'] = reload, ['\2'] = reload }, nil)
             end
             local function itemObjectId(item)
                 local data = rawget(item, 'Data')
@@ -1684,84 +1684,49 @@ return {
             end
             local function collectEnemies()
                 local out = {}
-                local seenModels = {}
                 local controller = resolveFighterController()
                 local objects = controller and rawget(controller, 'Objects') or nil
-                if type(objects) == 'table' then
-                    for _, fighter in ipairs(objects) do
-                        local ok, entry = pcall(function()
-                            local player = rawget(fighter, 'Player')
-                            local entity = rawget(fighter, 'Entity')
-                            local model = entity and rawget(entity, 'Model') or nil
-                            if not model then
-                                return nil
-                            end
-                            if player ~= nil and not isEnemyPlayer(player) then
-                                return nil
-                            end
-                            local hitboxHead = model:FindFirstChild('HitboxHead')
-                            local hitboxBody = model:FindFirstChild('HitboxBody')
-                            local rootPart = model:FindFirstChild('HumanoidRootPart') or hitboxBody
-                            if not hitboxHead or not rootPart or not hitboxHead:IsA('BasePart') or not rootPart:IsA('BasePart') then
-                                return nil
-                            end
-                            local humanoid = model:FindFirstChildOfClass('Humanoid')
-                            local entry = {
-                                fighter = fighter,
-                                player = player,
-                                entity = entity,
-                                model = model,
-                                hitboxHead = hitboxHead,
-                                hitboxBody = hitboxBody,
-                                rootPart = rootPart,
-                                itemObserver = rawget(fighter, 'itemObserver') or rawget(fighter, 'ItemObserver'),
-                                alive = humanoid == nil or humanoid.Health > 0,
-                                invincible = isTargetInvincible(entity),
-                                hacker = false,
-                                equippedGunProjectile = false,
-                            }
-                            return refreshTargetEntry(entry)
-                        end)
-                        if ok and entry and not seenModels[entry.model] then
-                            seenModels[entry.model] = true
-                            out[#out + 1] = entry
+                if type(objects) ~= 'table' then
+                    return out
+                end
+                for _, fighter in ipairs(objects) do
+                    local ok, entry = pcall(function()
+                        local player = rawget(fighter, 'Player')
+                        local entity = rawget(fighter, 'Entity')
+                        local model = entity and rawget(entity, 'Model') or nil
+                        if not model then
+                            return nil
                         end
+                        if player ~= nil and not isEnemyPlayer(player) then
+                            return nil
+                        end
+                        local hitboxHead = model:FindFirstChild('HitboxHead')
+                        local hitboxBody = model:FindFirstChild('HitboxBody')
+                        local rootPart = model:FindFirstChild('HumanoidRootPart') or hitboxBody
+                        if not hitboxHead or not rootPart or not hitboxHead:IsA('BasePart') or not rootPart:IsA('BasePart') then
+                            return nil
+                        end
+                        local humanoid = model:FindFirstChildOfClass('Humanoid')
+                        local entry = {
+                            fighter = fighter,
+                            player = player,
+                            entity = entity,
+                            model = model,
+                            hitboxHead = hitboxHead,
+                            hitboxBody = hitboxBody,
+                            rootPart = rootPart,
+                            itemObserver = rawget(fighter, 'itemObserver') or rawget(fighter, 'ItemObserver'),
+                            alive = humanoid == nil or humanoid.Health > 0,
+                            invincible = isTargetInvincible(entity),
+                            hacker = false,
+                            equippedGunProjectile = false,
+                        }
+                        return refreshTargetEntry(entry)
+                    end)
+                    if ok and entry then
+                        out[#out + 1] = entry
                     end
                 end
-                for _, player in ipairs(PlayersRB:GetPlayers()) do
-                        if player ~= LPRB and isEnemyPlayer(player) then
-                            local model = player.Character
-                            if model and not seenModels[model] then
-                                local ok, entry = pcall(function()
-                                    local hitboxHead = model:FindFirstChild('HitboxHead')
-                                    local hitboxBody = model:FindFirstChild('HitboxBody')
-                                    local rootPart = model:FindFirstChild('HumanoidRootPart') or hitboxBody
-                                    if not hitboxHead or not rootPart or not hitboxHead:IsA('BasePart') or not rootPart:IsA('BasePart') then
-                                        return nil
-                                    end
-                                    local humanoid = model:FindFirstChildOfClass('Humanoid')
-                                    return refreshTargetEntry({
-                                        fighter = nil,
-                                        player = player,
-                                        entity = nil,
-                                        model = model,
-                                        hitboxHead = hitboxHead,
-                                        hitboxBody = hitboxBody,
-                                        rootPart = rootPart,
-                                        itemObserver = nil,
-                                        alive = humanoid == nil or humanoid.Health > 0,
-                                        invincible = false,
-                                        hacker = false,
-                                        equippedGunProjectile = false,
-                                    })
-                                end)
-                                if ok and entry then
-                                    seenModels[model] = true
-                                    out[#out + 1] = entry
-                                end
-                            end
-                        end
-                    end
                 return out
             end
             local function isValidTarget(entry)
@@ -1778,28 +1743,12 @@ return {
                         end
                     end
                 end
-                local best = nil
-                local bestDistance = math.huge
-                local localChar = GetChar()
-                local localRoot = localChar and GetRoot() or nil
-                local localPosition = localRoot and localRoot.Position or nil
                 for _, entry in ipairs(enemies) do
                     if not (prioritizeHackers and entry.hacker) and isValidTarget(entry) then
-                        local distance = math.huge
-                        if localPosition and isFiniteVector3(localPosition) then
-                            local headPosition = resolveTargetHeadPosition(entry, entry.hitboxHead)
-                            if headPosition then
-                                local delta = headPosition - localPosition
-                                distance = delta:Dot(delta)
-                            end
-                        end
-                        if best == nil or distance < bestDistance then
-                            best = entry
-                            bestDistance = distance
-                        end
+                        return entry
                     end
                 end
-                return best
+                return nil
             end
             local function hasTargets()
                 for _, entry in ipairs(collectEnemies()) do
@@ -1928,16 +1877,15 @@ return {
                 return setmetatable({ _lockedUntil = nil }, ShootLock)
             end
             function ShootLock:ShouldFire(canFire, lockDuration)
-                if not canFire then
-                    self._lockedUntil = nil
-                    return false
-                end
                 local now = os.clock()
-                if self._lockedUntil ~= nil and now < self._lockedUntil then
-                    return false
+                local locked = self._lockedUntil ~= nil and now < self._lockedUntil
+                if canFire then
+                    self._lockedUntil = now + lockDuration
                 end
-                self._lockedUntil = now + math.max(tonumber(lockDuration) or 0, 1 / 240)
-                return true
+                if not locked then
+                    locked = canFire
+                end
+                return locked
             end
             function ShootLock:Reset()
                 self._lockedUntil = nil
@@ -2078,43 +2026,39 @@ return {
                 end
                 return chosen.CFrame * CFrame.new(0, -chosen.Size.Y / 2 + Setting.TranslocateOffset(), 0)
             end
-            local function resolveLiveHead(target)
+            local function resolveLiveTarget(target)
                 if not target then
-                    return nil
+                    return nil, nil
                 end
                 local model = target.model
                 if model and model.Parent then
                     local head = model:FindFirstChild('HitboxHead')
-                    if head and head:IsA('BasePart') and isFiniteVector3(head.Position) then
+                    local body = model:FindFirstChild('HitboxBody')
+                    local root = model:FindFirstChild('HumanoidRootPart') or body
+                    if head and root and head:IsA('BasePart') and root:IsA('BasePart') and isFiniteVector3(head.Position) and isFiniteVector3(root.Position) then
                         target.hitboxHead = head
-                        return head
+                        target.hitboxBody = body
+                        target.rootPart = root
+                        local headDelta = head.Position - root.Position
+                        if isFiniteVector3(headDelta) and headDelta.Magnitude <= 20 then
+                            local localOffset = root.CFrame:PointToObjectSpace(head.Position)
+                            if isFiniteVector3(localOffset) then
+                                target.headLocalOffset = localOffset
+                            end
+                        end
+                        return head, root
                     end
                 end
                 local head = target.hitboxHead
-                if head and head.Parent and head:IsA('BasePart') and isFiniteVector3(head.Position) then
-                    return head
+                local root = target.rootPart
+                if head and root and head.Parent and root.Parent and head:IsA('BasePart') and root:IsA('BasePart') and isFiniteVector3(head.Position) and isFiniteVector3(root.Position) then
+                    return head, root
                 end
-                return nil
+                return nil, nil
             end
-            local function resolveHeadPitchPosition(position, origin, fallback)
-                if not position or not origin or not isFiniteVector3(position) or not isFiniteVector3(origin) then
-                    return fallback
-                end
-                local delta = position - origin
-                if not isFiniteVector3(delta) then
-                    return fallback
-                end
-                local horizontal = math.sqrt(delta.X * delta.X + delta.Z * delta.Z)
-                if horizontal < 0.05 then
-                    return fallback
-                end
-                if math.abs(delta.Y) < 3 then
-                    return fallback
-                end
-                return math.clamp(-math.atan2(delta.Y, horizontal), -math.pi / 2, math.pi / 2)
-            end
-            local function resolveHeadPitch(head, origin, fallback)
-                return resolveHeadPitchPosition(head and head.Position or nil, origin, fallback)
+            local function resolveLiveHead(target)
+                local head = resolveLiveTarget(target)
+                return head
             end
             local HitscanStrategy = {}
             HitscanStrategy.__index = HitscanStrategy
@@ -2141,8 +2085,18 @@ return {
                 if flightActive then
                     self:ClearGlue()
                 end
-                local void = flightActive and ourRootPart.CFrame or self._partGlue:Acquire(ourRootPart, hitboxHead)
-                if not flightActive then
+                local void
+                if flightActive then
+                    void = ourRootPart.CFrame
+                else
+                    local ok, result = pcall(function()
+                        return self._partGlue:Acquire(ourRootPart, hitboxHead)
+                    end)
+                    if not ok or result == nil then
+                        self:ClearGlue()
+                        return ourRootPart.CFrame, nil
+                    end
+                    void = result
                     self._gluedOurPart = ourRootPart
                 end
                 local cframe
@@ -2157,24 +2111,25 @@ return {
                 else
                     cframe = CFrame.new(void.Position + offset, aimHeadPosition or hitboxHead.Position)
                 end
-                local fireNow = self._shootLock:ShouldFire(canFire, math.max(dt, 1 / 240) * Setting.ShootFrames())
+                local targetRootPart = target.rootPart
+                if targetRootPart == nil or targetRootPart.Parent == nil or not targetRootPart:IsA('BasePart') then
+                    self:ClearGlue()
+                    return ourRootPart.CFrame, nil
+                end
+                local _, oy, oz = targetRootPart.CFrame:ToOrientation()
+                local pitch = above and PITCH_ABOVE or PITCH_BELOW
+                local aim1 = buildAim(above and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, pitch, oy, oz)
+                local aim2 = buildAim(above and AIM_ABOVE_END or AIM_BELOW_END, pitch, oy, oz)
+                if not self._shootLock:ShouldFire(canFire, math.max(dt, 1 / 240) * Setting.ShootFrames()) then
+                    return cframe, nil
+                end
                 local objectId = itemObjectId(item)
                 local isRaycast = itemIsRaycast(item)
                 local function weaponAction()
-                    if not fireNow then
+                    if hitboxHead.Parent == nil or targetRootPart.Parent == nil then
                         return false
                     end
-                    local liveHead = resolveLiveHead(target)
-                    if liveHead == nil then
-                        return false
-                    end
-                    local _, liveOy, liveOz = target.rootPart.CFrame:ToOrientation()
-                    local liveFallback = above and PITCH_ABOVE or PITCH_BELOW
-                    local liveHeadPosition = resolveTargetHeadPosition(target, liveHead)
-                    local livePitch = resolveHeadPitchPosition(liveHeadPosition, ourRootPart.Position, liveFallback)
-                    local liveAim1 = buildAim(above and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, livePitch, liveOy, liveOz)
-                    local liveAim2 = buildAim(above and AIM_ABOVE_END or AIM_BELOW_END, livePitch, liveOy, liveOz)
-                    return fireGun(objectId, isRaycast, liveAim1, liveAim2, liveHead, AIM_EXTRA) == true
+                    return fireGun(objectId, isRaycast, aim1, aim2, hitboxHead, AIM_EXTRA) == true
                 end
                 return cframe, weaponAction
             end
@@ -2220,6 +2175,11 @@ return {
                     self:ClearGlue()
                     return ourRootPart.CFrame, nil, nil
                 end
+                local targetRootPart = target.rootPart
+                if targetRootPart == nil or targetRootPart.Parent == nil or not targetRootPart:IsA('BasePart') then
+                    self:ClearGlue()
+                    return ourRootPart.CFrame, nil, nil
+                end
                 local isKnife = itemName(item) == 'Knife'
                 local above = isAbove(target)
                 local offset = above and OFFSET_ABOVE or OFFSET_BELOW
@@ -2227,8 +2187,18 @@ return {
                 if flightActive then
                     self:ClearGlue()
                 end
-                local void = flightActive and ourRootPart.CFrame or self._partGlue:Acquire(ourRootPart, hitboxHead)
-                if not flightActive then
+                local void
+                if flightActive then
+                    void = ourRootPart.CFrame
+                else
+                    local ok, result = pcall(function()
+                        return self._partGlue:Acquire(ourRootPart, hitboxHead)
+                    end)
+                    if not ok or result == nil then
+                        self:ClearGlue()
+                        return ourRootPart.CFrame, nil, nil
+                    end
+                    void = result
                     self._gluedOurPart = ourRootPart
                 end
                 local cframe
@@ -2243,10 +2213,11 @@ return {
                 else
                     cframe = CFrame.new(void.Position + offset, hitboxHead.Position)
                 end
-                local px, oy, oz = target.rootPart.CFrame:ToOrientation()
+                local px, oy, oz = targetRootPart.CFrame:ToOrientation()
+                local pitch = above and PITCH_ABOVE or PITCH_BELOW
                 local now = os.clock()
                 local function isBehindTarget()
-                    local targetRoot = target.rootPart
+                    local targetRoot = targetRootPart
                     if targetRoot == nil or targetRoot.Parent == nil then
                         return false
                     end
@@ -2266,55 +2237,39 @@ return {
                     self._shootLock:Reset()
                     return ourRootPart.CFrame, nil, nil
                 end
-                local fireNow = self._shootLock:ShouldFire(canFire, math.max(dt, 1 / 240) * Setting.ShootFrames())
-                if not fireNow then
+                local aim1 = buildAim(above and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, pitch, oy, oz)
+                local aim2 = buildAim(above and AIM_ABOVE_END or AIM_BELOW_END, pitch, oy, oz)
+                if not self._shootLock:ShouldFire(canFire, math.max(dt, 1 / 240) * Setting.ShootFrames()) then
                     return ourRootPart.CFrame, nil, nil
                 end
                 local objectId = itemObjectId(item)
-                local function buildLiveMeleeAim()
-                    local liveHead = resolveLiveHead(target)
-                    if liveHead == nil then
-                        return nil
-                    end
-                    local liveAbove = isAbove(target)
-                    local liveFallback = liveAbove and PITCH_ABOVE or PITCH_BELOW
-                    local _, liveOy, liveOz = target.rootPart.CFrame:ToOrientation()
-                    local liveHeadPosition = resolveTargetHeadPosition(target, liveHead)
-                    local livePitch = resolveHeadPitchPosition(liveHeadPosition, ourRootPart.Position, liveFallback)
-                    local liveAim1 = buildAim(liveAbove and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, livePitch, liveOy, liveOz)
-                    local liveAim2 = buildAim(liveAbove and AIM_ABOVE_END or AIM_BELOW_END, livePitch, liveOy, liveOz)
-                    return liveHead, liveAim1, liveAim2, liveOy
-                end
                 if now < self._hitboxWindowUntil then
                     return cframe, meleeViewAngles(px, oy), function()
-                        local liveHead, liveAim1, liveAim2, liveOy = buildLiveMeleeAim()
-                        if liveHead == nil then
+                        if hitboxHead.Parent == nil or targetRootPart.Parent == nil then
                             return false
                         end
                         if isKnife and not isBehindTarget() then
                             return false
                         end
-                        return fireMeleeHeavy(objectId, liveAim1, liveAim2, liveHead, AIM_EXTRA) == true
+                        return fireMeleeHeavy(objectId, aim1, aim2, hitboxHead, AIM_EXTRA) == true
                     end
                 end
                 if not isKnife then
                     return cframe, nil, function()
-                        local liveHead, liveAim1, liveAim2 = buildLiveMeleeAim()
-                        if liveHead == nil then
+                        if hitboxHead.Parent == nil or targetRootPart.Parent == nil then
                             return false
                         end
-                        return fireMeleeAttack(objectId, liveAim1, liveAim2, liveHead, AIM_EXTRA) == true
+                        return fireMeleeAttack(objectId, aim1, aim2, hitboxHead, AIM_EXTRA) == true
                     end
                 end
                 return cframe, meleeViewAngles(px, oy), function()
                     if not isBehindTarget() then
                         return false
                     end
-                    local liveHead, liveAim1, liveAim2 = buildLiveMeleeAim()
-                    if liveHead == nil then
+                    if hitboxHead.Parent == nil or targetRootPart.Parent == nil then
                         return false
                     end
-                    local fired = fireMeleeHeavy(objectId, liveAim1, liveAim2, liveHead, AIM_EXTRA) == true
+                    local fired = fireMeleeHeavy(objectId, aim1, aim2, hitboxHead, AIM_EXTRA) == true
                     if fired then
                         self:_RecordBackstab()
                     end
@@ -2476,16 +2431,9 @@ return {
                 if target ~= nil then
                     self._lastTarget = target
                     self._lastTargetAt = now
-                elseif self._lastTarget ~= nil and now - self._lastTargetAt <= 0.5 then
-                    target = refreshTargetEntry(self._lastTarget)
-                    if not isValidTarget(target) then
-                        self._lastTarget = nil
-                        target = nil
-                    else
-                        self._lastTargetAt = now
-                    end
                 else
                     self._lastTarget = nil
+                    self._lastTargetAt = -math.huge
                 end
                 local action = getAction(fighter)
                 local mode = Setting.EvasionMode()
