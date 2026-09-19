@@ -1,0 +1,92 @@
+local Players = game:GetService("Players")
+
+local LocalPlayer = Players.LocalPlayer
+
+local function getCharacter()
+    return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+end
+
+local function getRoot(character)
+    return character and character:FindFirstChild("HumanoidRootPart")
+end
+
+local function teleportToCFrame(targetCFrame)
+    if typeof(targetCFrame) ~= "CFrame" then
+        return false
+    end
+
+    local character = getCharacter()
+    local rootPart = getRoot(character)
+
+    if not rootPart then
+        return false
+    end
+
+    rootPart.CFrame = targetCFrame
+    return true
+end
+
+local function teleportToPosition(position)
+    if typeof(position) ~= "Vector3" then
+        return false
+    end
+
+    return teleportToCFrame(CFrame.new(position))
+end
+
+local function teleportBehind(targetRoot, upOffset, forwardOffset)
+    if not targetRoot or not targetRoot:IsA("BasePart") then
+        return false
+    end
+
+    upOffset = tonumber(upOffset) or 0
+    forwardOffset = tonumber(forwardOffset) or 0
+
+    local targetCFrame = targetRoot.CFrame
+    local _, ry, _ = targetCFrame:ToEulerAnglesYXZ()
+    local yawCFrame = CFrame.fromEulerAnglesYXZ(0, ry, 0)
+    local offsetCFrame = CFrame.new(targetCFrame.Position) * yawCFrame * CFrame.new(0, upOffset, forwardOffset)
+
+    return teleportToCFrame(CFrame.new(offsetCFrame.Position) * yawCFrame)
+end
+
+local function saveCurrentCFrame()
+    local character = getCharacter()
+    local rootPart = getRoot(character)
+
+    if not rootPart then
+        return nil
+    end
+
+    return rootPart.CFrame
+end
+
+local function teleportToSavedCFrame(savedCFrame)
+    return teleportToCFrame(savedCFrame)
+end
+
+local function teleportToPlayer(player)
+    if not player or player == LocalPlayer then
+        return false
+    end
+
+    local character = player.Character
+    local targetRoot = character and character:FindFirstChild("HumanoidRootPart")
+
+    if not targetRoot then
+        return false
+    end
+
+    return teleportToCFrame(targetRoot.CFrame)
+end
+
+local TP = {
+    TeleportToCFrame = teleportToCFrame,
+    TeleportToPosition = teleportToPosition,
+    TeleportBehind = teleportBehind,
+    SaveCurrentCFrame = saveCurrentCFrame,
+    TeleportToSavedCFrame = teleportToSavedCFrame,
+    TeleportToPlayer = teleportToPlayer
+}
+
+return TP
