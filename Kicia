@@ -877,9 +877,11 @@ return {
                 return default
             end
             local Setting = {
-                Stability = function() return optValue('P8S4S1', 0.15) end,
-                ShootFrames = function() return optValue('P8S4S2', 1) end,
-                PrioritizeHackers = function() return togValue('P8S4T4', false) end,
+                Stability = function() return 0.425 end,
+                ShootFrames = function()
+                    local value = tonumber(optValue('P8S4S2', 1)) or 1
+                    return math.clamp(math.floor(value + 0.5), 1, 5)
+                end,
                 WeaponPrimary = function() return togValue('P8S4T5', true) end,
                 WeaponSecondary = function() return togValue('P8S4T6', true) end,
                 WeaponMelee = function() return togValue('P8S4T7', true) end,
@@ -1069,6 +1071,170 @@ return {
                 local controller = resolveFighterController()
                 return controller and rawget(controller, 'LocalFighter') or nil
             end
+            local cachedUtilityModule = nil
+            local utilityLookupDone = false
+            local function resolveUtilityModule()
+                local cached = cachedUtilityModule
+                if type(cached) == 'table' and type(rawget(cached, 'EncodeCFrame')) == 'function' then
+                    return cached
+                end
+                if not utilityLookupDone then
+                    utilityLookupDone = true
+                    local utility = requireModuleRB('Utility')
+                    if type(utility) == 'table' and type(rawget(utility, 'EncodeCFrame')) == 'function' then
+                        cachedUtilityModule = utility
+                        return utility
+                    end
+                end
+                local recorder = RivalsRuntimeBridge.MovementRecorder
+                if type(recorder) == 'table' and type(rawget(recorder, 'EncodeCFrame')) == 'function' then
+                    return recorder
+                end
+                return nil
+            end
+            local function shotFiniteVector3(v)
+                return typeof(v) == 'Vector3' and v.X == v.X and v.Y == v.Y and v.Z == v.Z
+                    and math.abs(v.X) < 1e18 and math.abs(v.Y) < 1e18 and math.abs(v.Z) < 1e18
+            end
+            local function safeLookCFrame(fromPos, toPos)
+                if not shotFiniteVector3(fromPos) or not shotFiniteVector3(toPos) then
+                    return nil
+                end
+                local dir = toPos - fromPos
+                if dir.Magnitude < 1e-4 then
+                    return CFrame.new(fromPos)
+                end
+                local up = Vector3.new(0, 1, 0)
+                if math.abs(dir.Unit.Y) > 0.999 then
+                    up = Vector3.new(0, 0, 1)
+                end
+                return CFrame.lookAt(fromPos, toPos, up)
+            end
+            local function encodeWorldShotFields(inner, eyeCF, muzzleCF, hitPart, aimWorldPos, clampFrac)
+                if type(inner) ~= 'table' or eyeCF == nil or muzzleCF == nil or hitPart == nil or hitPart.Parent == nil then
+                    return false
+                end
+                if typeof(eyeCF) ~= 'CFrame' or typeof(muzzleCF) ~= 'CFrame' or not hitPart:IsA('BasePart') then
+                    return false
+                end
+                if typeof(aimWorldPos) ~= 'Vector3' or not shotFiniteVector3(aimWorldPos) then
+                    return false
+                end
+                local util = resolveUtilityModule()
+                if util == nil then
+                    return false
+                end
+                local objSpace = hitPart.CFrame:PointToObjectSpace(aimWorldPos)
+                local hs = hitPart.Size * (clampFrac or 0.30)
+                if not shotFiniteVector3(objSpace) or not shotFiniteVector3(hs) then
+                    return false
+                end
+                objSpace = Vector3.new(
+                    math.clamp(objSpace.X, -hs.X, hs.X),
+                    math.clamp(objSpace.Y, -hs.Y, hs.Y),
+                    math.clamp(objSpace.Z, -hs.Z, hs.Z)
+                )
+                local hitWorld = hitPart.CFrame:PointToWorldSpace(objSpace)
+                local objSpaceCF = hitPart.CFrame:ToObjectSpace(CFrame.new(hitWorld))
+                local ok0, encoded0 = pcall(util.EncodeCFrame, util, eyeCF)
+                local ok1, encoded1 = pcall(util.EncodeCFrame, util, muzzleCF)
+                local ok3, encoded3 = pcall(util.EncodeCFrame, util, objSpaceCF)
+                if not ok0 or not ok1 or not ok3 or encoded0 == nil or encoded1 == nil or encoded3 == nil then
+                    return false
+                end
+                inner['\0'] = encoded0
+                inner['\1'] = encoded1
+                inner['\2'] = hitPart
+                inner['\3'] = encoded3
+                return true
+            end
+            local function fireGun(objectId, isRaycast, eyeCF, muzzleCF, hitboxHead, aimWorldPos, aim1, aim2, extra)
+                local remote = resolveUseItemRemote()
+                local token = enc('StartShooting')
+                if not remote or not token or not objectId then
+                    return false
+                end
+                local inner = {}
+                local encoded = encodeWorldShotFields(inner, eyeCF, muzzleCF, hitboxHead, aimWorldPos, 0.30)
+                if not encoded then
+                    inner = { ['\0'] = aim1, ['\1'] = aim2, ['\2'] = hitboxHead, ['\3'] = extra }
+                end
+                local payload
+                if isRaycast then
+                    payload = { ['\1'] = inner, ['\2'] = true }
+                else
+                    payload = { ['\1'] = inner }
+                end
+                return pcall(rbFireServerNative, remote, objectId, token, payload, nil)
+            end
+            local function withThreadIdentity2(fn)
+                if type(fn) ~= 'function' then
+                    return false
+                end
+                local getIdentity = rbGetThreadIdentity
+                local setIdentity = rbSetThreadIdentity
+                if type(getIdentity) ~= 'function' or type(setIdentity) ~= 'function' then
+                    return pcall(fn)
+                end
+                local previous = nil
+                local got = pcall(function() previous = getIdentity() end)
+                if not got or previous == nil or previous == 2 then
+                    return pcall(fn)
+                end
+                if not pcall(setIdentity, 2) then
+                    return pcall(fn)
+                end
+                local ok, result = pcall(fn)
+                pcall(setIdentity, previous)
+                return ok, result
+            end
+            local function fireMeleeRemote(objectId, heavy, hitboxHead, eyeCF, muzzleCF, aimWorldPos, aim1, aim2, extra)
+                local remote = resolveUseItemRemote()
+                local token = enc(heavy and 'StartAiming' or 'StartShooting')
+                local anim = enc(heavy and 'HeavyAttackAnimation1' or 'AttackAnimation1')
+                if not remote or not token or not anim or not objectId then
+                    return false
+                end
+                local inner = {}
+                local encoded = encodeWorldShotFields(inner, eyeCF, muzzleCF, hitboxHead, aimWorldPos, 0.30)
+                if not encoded then
+                    inner = { ['\0'] = aim1, ['\1'] = aim2, ['\2'] = hitboxHead, ['\3'] = extra }
+                end
+                local ok = pcall(rbFireServerNative, remote, objectId, token, { ['\1'] = inner, ['\2'] = anim }, nil)
+                return ok
+            end
+            local function fireMeleeHybrid(item, objectId, heavy, hitboxHead, eyeCF, muzzleCF, aimWorldPos, aim1, aim2, extra)
+                if item == nil or hitboxHead == nil then
+                    return false
+                end
+                local hitData = { part = hitboxHead }
+                local methodName = heavy and 'HeavyAttack' or 'Attack'
+                local method = nil
+                pcall(function() method = item[methodName] end)
+                if type(method) == 'function' then
+                    local ok = withThreadIdentity2(function()
+                        method(item, eyeCF, eyeCF, hitData)
+                    end)
+                    if ok then
+                        return true
+                    end
+                end
+                local lf = resolveLocalFighter()
+                local inputName = heavy and 'StartAiming' or 'StartShooting'
+                if lf ~= nil and type(lf.Input) == 'function' then
+                    local ok = withThreadIdentity2(function()
+                        lf:Input(inputName)
+                    end)
+                    if ok then
+                        local cooldown = nil
+                        pcall(function() cooldown = rawget(item, '_attack_cooldown') end)
+                        if type(cooldown) ~= 'number' or cooldown > 0 then
+                            return true
+                        end
+                    end
+                end
+                return fireMeleeRemote(objectId, heavy, hitboxHead, eyeCF, muzzleCF, aimWorldPos, aim1, aim2, extra)
+            end
             local cachedFCPrototype = nil
             local function resolveFighterControllerPrototype()
                 if type(cachedFCPrototype) == 'table' and rawget(cachedFCPrototype, '_CameraReplicationLoop') ~= nil then
@@ -1093,42 +1259,6 @@ return {
                     end
                 end
                 return nil
-            end
-            local function fireGun(objectId, isRaycast, aim1, aim2, hitboxHead, extra)
-                local remote = resolveUseItemRemote()
-                local token = enc('StartShooting')
-                if not remote or not token or not objectId then
-                    return false
-                end
-                local inner = { ['\0'] = aim1, ['\1'] = aim2, ['\2'] = hitboxHead, ['\3'] = extra }
-                local payload
-                if isRaycast then
-                    payload = { ['\1'] = inner, ['\2'] = true }
-                else
-                    payload = { ['\1'] = inner }
-                end
-                local ok = pcall(rbFireServerNative, remote, objectId, token, payload, nil)
-                return ok
-            end
-            local function fireMeleeAttack(objectId, a, b, c, d)
-                local remote = resolveUseItemRemote()
-                local token = enc('StartShooting')
-                local anim = enc('AttackAnimation1')
-                if not remote or not token or not anim or not objectId then
-                    return false
-                end
-                local ok = pcall(rbFireServerNative, remote, objectId, token, { ['\1'] = { ['\0'] = a, ['\1'] = b, ['\2'] = c, ['\3'] = d }, ['\2'] = anim }, nil)
-                return ok
-            end
-            local function fireMeleeHeavy(objectId, a, b, c, d)
-                local remote = resolveUseItemRemote()
-                local token = enc('StartAiming')
-                local anim = enc('HeavyAttackAnimation1')
-                if not remote or not token or not anim or not objectId then
-                    return false
-                end
-                local ok = pcall(rbFireServerNative, remote, objectId, token, { ['\1'] = { ['\0'] = a, ['\1'] = b, ['\2'] = c, ['\3'] = d }, ['\2'] = anim }, nil)
-                return ok
             end
             local function fireReload(objectId)
                 local remote = resolveUseItemRemote()
@@ -1652,8 +1782,15 @@ return {
                 entry.hitboxBody = body
                 entry.rootPart = root
                 entry.alive = humanoid == nil or humanoid.Health > 0
+                entry.health = humanoid and humanoid.Health or math.huge
                 entry.invincible = isTargetInvincible(entry.entity)
                 entry.deflecting = entry.deflecting == true
+                entry.hacker = false
+                local rageHackerCheck = RivalsRuntimeBridge and RivalsRuntimeBridge.IsRageHacker
+                if type(rageHackerCheck) == 'function' and entry.player ~= nil then
+                    local okHacker, marked = pcall(rageHackerCheck, entry.player)
+                    entry.hacker = okHacker and marked == true
+                end
                 if not isFiniteVector3(head.Position) or not isFiniteVector3(root.Position) then
                     return nil
                 end
@@ -1717,6 +1854,7 @@ return {
                             rootPart = rootPart,
                             itemObserver = rawget(fighter, 'itemObserver') or rawget(fighter, 'ItemObserver'),
                             alive = humanoid == nil or humanoid.Health > 0,
+                            health = humanoid and humanoid.Health or math.huge,
                             invincible = isTargetInvincible(entity),
                             hacker = false,
                             equippedGunProjectile = false,
@@ -1735,20 +1873,35 @@ return {
             end
             local function selectTarget()
                 local enemies = collectEnemies()
-                local prioritizeHackers = Setting.PrioritizeHackers()
-                if prioritizeHackers then
-                    for _, entry in ipairs(enemies) do
-                        if entry.hacker and isValidTarget(entry) then
-                            return entry
-                        end
-                    end
-                end
+                local myRoot = GetRoot()
+                local valid = {}
                 for _, entry in ipairs(enemies) do
-                    if not (prioritizeHackers and entry.hacker) and isValidTarget(entry) then
-                        return entry
+                    if isValidTarget(entry) then
+                        local distance = math.huge
+                        if myRoot and myRoot.Parent and entry.rootPart and entry.rootPart.Parent then
+                            local delta = entry.rootPart.Position - myRoot.Position
+                            if isFiniteVector3(delta) then
+                                distance = delta.Magnitude
+                            end
+                        end
+                        entry.distance = distance
+                        entry.health = tonumber(entry.health) or math.huge
+                        valid[#valid + 1] = entry
                     end
                 end
-                return nil
+                if #valid == 0 then
+                    return nil
+                end
+                table.sort(valid, function(a, b)
+                    if a.hacker ~= b.hacker then
+                        return a.hacker == true
+                    end
+                    if math.abs(a.health - b.health) > 10 then
+                        return a.health < b.health
+                    end
+                    return a.distance < b.distance
+                end)
+                return valid[1]
             end
             local function hasTargets()
                 for _, entry in ipairs(collectEnemies()) do
@@ -2133,7 +2286,11 @@ return {
                     if hitboxHead.Parent == nil or targetRootPart.Parent == nil then
                         return false
                     end
-                    return fireGun(objectId, isRaycast, aim1, aim2, hitboxHead, AIM_EXTRA) == true
+                    local aimWorldPos = hitboxHead.Position
+                    local shotEyePos = cframe.Position + Vector3.new(0, 2.5, 0)
+                    local shotEyeCF = safeLookCFrame(shotEyePos, aimWorldPos)
+                    local shotMuzzleCF = shotEyeCF and (shotEyeCF - Vector3.new(0, 0.07, 0)) or nil
+                    return fireGun(objectId, isRaycast, shotEyeCF, shotMuzzleCF, hitboxHead, aimWorldPos, aim1, aim2, AIM_EXTRA) == true
                 end
                 return cframe, weaponAction
             end
@@ -2147,6 +2304,69 @@ return {
             end
             local BACKSTAB_WINDOW = 0.625
             local BACKSTAB_COOLDOWN = 1.25
+            local KNIFE_NAME_TOKENS = { 'knife', 'karambit', 'balisong', 'chancla', 'machete', 'candy cane', 'armature', 'daggers', 'axe' }
+            local function isKnifeWeapon(item)
+                local name = itemName(item)
+                if type(name) ~= 'string' then
+                    return false
+                end
+                local low = name:lower()
+                for _, token in ipairs(KNIFE_NAME_TOKENS) do
+                    if low:find(token, 1, true) then
+                        return true
+                    end
+                end
+                return false
+            end
+            local function buildKnifeBackstabCFrame(targetRootPart, hitboxHead)
+                if targetRootPart == nil or targetRootPart.Parent == nil or hitboxHead == nil or hitboxHead.Parent == nil then
+                    return nil
+                end
+                local look = targetRootPart.CFrame.LookVector
+                local flatLook = Vector3.new(look.X, 0, look.Z)
+                if flatLook.Magnitude < 1e-4 then
+                    return nil
+                end
+                local inv = -flatLook.Unit
+                local origin = targetRootPart.Position
+                local dist = 3.0
+                local desired = origin + inv * dist
+                local params = RaycastParams.new()
+                params.FilterType = Enum.RaycastFilterType.Exclude
+                local ignore = { targetRootPart.Parent }
+                local localCharacter = GetChar()
+                if localCharacter ~= nil then
+                    ignore[#ignore + 1] = localCharacter
+                end
+                params.FilterDescendantsInstances = ignore
+                local hit = WorkspaceRB:Raycast(origin, inv * dist, params)
+                if hit ~= nil then
+                    desired = hit.Position - inv * 0.5
+                end
+                desired = Vector3.new(
+                    desired.X,
+                    math.max(desired.Y, WorkspaceRB.FallenPartsDestroyHeight + 3),
+                    desired.Z
+                )
+                return safeLookCFrame(desired, hitboxHead.Position)
+            end
+            local function isBackstabPosition(position, targetRootPart)
+                if typeof(position) ~= 'Vector3' or not isFiniteVector3(position) then
+                    return false
+                end
+                if targetRootPart == nil or targetRootPart.Parent == nil then
+                    return false
+                end
+                local delta = position - targetRootPart.Position
+                local flat = Vector3.new(delta.X, 0, delta.Z)
+                local look = targetRootPart.CFrame.LookVector
+                local flatLook = Vector3.new(look.X, 0, look.Z)
+                if flat.Magnitude < 0.05 or flatLook.Magnitude < 1e-4 then
+                    return false
+                end
+                local distance = flat.Magnitude
+                return distance <= 5.5 and flatLook.Unit:Dot(flat.Unit) < -0.45
+            end
             local MeleeStrategy = {}
             MeleeStrategy.__index = MeleeStrategy
             function MeleeStrategy.new(partGlue)
@@ -2184,100 +2404,103 @@ return {
                     self:ClearGlue()
                     return ourRootPart.CFrame, nil, nil
                 end
-                local isKnife = itemName(item) == 'Knife'
+                local isKnife = isKnifeWeapon(item)
                 local above = isAbove(target)
                 local offset = above and OFFSET_ABOVE or OFFSET_BELOW
                 local flightActive = isFlightActive()
-                if flightActive then
+                local cframe
+                if isKnife then
                     self:ClearGlue()
-                end
-                local void
-                if flightActive then
-                    void = ourRootPart.CFrame
-                else
-                    local ok, result = pcall(function()
-                        return self._partGlue:Acquire(ourRootPart, hitboxHead)
-                    end)
-                    if not ok or result == nil then
-                        self:ClearGlue()
+                    cframe = buildKnifeBackstabCFrame(targetRootPart, hitboxHead)
+                    if cframe == nil then
                         return ourRootPart.CFrame, nil, nil
                     end
-                    void = result
-                    self._gluedOurPart = ourRootPart
-                end
-                local cframe
-                if flightActive then
-                    if above then
-                        cframe = flightCombatCFrame(offset)
-                    else
-                        cframe = flightCombatCFrame(offset, hitboxHead.Position)
-                    end
-                elseif above then
-                    cframe = void + offset
                 else
-                    cframe = CFrame.new(void.Position + offset, hitboxHead.Position)
+                    if flightActive then
+                        self:ClearGlue()
+                    end
+                    local void
+                    if flightActive then
+                        void = ourRootPart.CFrame
+                    else
+                        local ok, result = pcall(function()
+                            return self._partGlue:Acquire(ourRootPart, hitboxHead)
+                        end)
+                        if not ok or result == nil then
+                            self:ClearGlue()
+                            return ourRootPart.CFrame, nil, nil
+                        end
+                        void = result
+                        self._gluedOurPart = ourRootPart
+                    end
+                    if flightActive then
+                        if above then
+                            cframe = flightCombatCFrame(offset)
+                        else
+                            cframe = flightCombatCFrame(offset, hitboxHead.Position)
+                        end
+                    elseif above then
+                        cframe = void + offset
+                    else
+                        cframe = CFrame.new(void.Position + offset, hitboxHead.Position)
+                    end
                 end
                 local px, oy, oz = targetRootPart.CFrame:ToOrientation()
                 local pitch = above and PITCH_ABOVE or PITCH_BELOW
                 local now = os.clock()
                 local function isBehindTarget()
-                    local targetRoot = targetRootPart
-                    if targetRoot == nil or targetRoot.Parent == nil then
-                        return false
-                    end
-                    local delta = ourRootPart.Position - targetRoot.Position
-                    if not isFiniteVector3(delta) or delta.Magnitude < 0.05 then
-                        return false
-                    end
-                    local targetLook = targetRoot.CFrame.LookVector
-                    local ourLook = ourRootPart.CFrame.LookVector
-                    if not isFiniteVector3(targetLook) or not isFiniteVector3(ourLook) then
-                        return false
-                    end
-                    return targetLook:Dot(ourLook) > 0.45 and targetLook:Dot(delta.Unit) < 0
+                    return isBackstabPosition(cframe.Position, targetRootPart)
                 end
                 if isKnife and now >= self._hitboxWindowUntil and not isBehindTarget() then
-                    self:ClearGlue()
                     self._shootLock:Reset()
-                    return ourRootPart.CFrame, nil, nil
+                    return cframe, nil, nil
                 end
                 local aim1 = buildAim(above and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, pitch, oy, oz)
                 local aim2 = buildAim(above and AIM_ABOVE_END or AIM_BELOW_END, pitch, oy, oz)
                 if not self._shootLock:ShouldFire(canFire, math.max(dt, 1 / 240) * Setting.ShootFrames()) then
-                    return ourRootPart.CFrame, nil, nil
+                    return cframe, nil, nil
                 end
                 local objectId = itemObjectId(item)
-                if now < self._hitboxWindowUntil then
-                    return cframe, meleeViewAngles(px, oy), function()
+                if objectId == nil then
+                    return cframe, nil, nil
+                end
+                local function weaponAction(heavy)
+                    local attempts = Setting.ShootFrames()
+                    for _ = 1, attempts do
                         if hitboxHead.Parent == nil or targetRootPart.Parent == nil then
                             return false
                         end
                         if isKnife and not isBehindTarget() then
                             return false
                         end
-                        return fireMeleeHeavy(objectId, aim1, aim2, hitboxHead, AIM_EXTRA) == true
+                        local aimWorldPos = hitboxHead.Position
+                        local shotEyePos = cframe.Position + Vector3.new(0, 2.5, 0)
+                        local shotEyeCF = safeLookCFrame(shotEyePos, aimWorldPos)
+                        local shotMuzzleCF = shotEyeCF and (shotEyeCF - Vector3.new(0, 0.07, 0)) or nil
+                        if shotEyeCF ~= nil and shotMuzzleCF ~= nil then
+                            local fired = fireMeleeHybrid(item, objectId, heavy, hitboxHead, shotEyeCF, shotMuzzleCF, aimWorldPos, aim1, aim2, AIM_EXTRA)
+                            if fired then
+                                if isKnife and heavy then
+                                    self:_RecordBackstab()
+                                end
+                                return true
+                            end
+                        end
                     end
+                    return false
                 end
                 if not isKnife then
                     return cframe, nil, function()
-                        if hitboxHead.Parent == nil or targetRootPart.Parent == nil then
-                            return false
-                        end
-                        return fireMeleeAttack(objectId, aim1, aim2, hitboxHead, AIM_EXTRA) == true
+                        return weaponAction(false)
+                    end
+                end
+                if now < self._hitboxWindowUntil then
+                    return cframe, meleeViewAngles(px, oy), function()
+                        return weaponAction(true)
                     end
                 end
                 return cframe, meleeViewAngles(px, oy), function()
-                    if not isBehindTarget() then
-                        return false
-                    end
-                    if hitboxHead.Parent == nil or targetRootPart.Parent == nil then
-                        return false
-                    end
-                    local fired = fireMeleeHeavy(objectId, aim1, aim2, hitboxHead, AIM_EXTRA) == true
-                    if fired then
-                        self:_RecordBackstab()
-                    end
-                    return fired
+                    return weaponAction(true)
                 end
             end
             function MeleeStrategy:ResetState()
@@ -2372,6 +2595,8 @@ return {
                     canFire = not self._spatialLimitGate:Tick(target)
                 end
                 if action == nil then
+                    self._hitscanStrategy:ResetState()
+                    self._meleeStrategy:ResetState()
                     return self:_EvadePlan(clientCF, mode)
                 end
                 if action.type == 'Swap' then
@@ -2388,16 +2613,23 @@ return {
                     return { cframe = fallbackEvadeCFrame(clientCF, ourRootPart), weaponAction = function() reloadItem(item) end }
                 end
                 if target == nil then
+                    self._hitscanStrategy:ResetState()
+                    self._meleeStrategy:ResetState()
                     return self:_EvadePlan(clientCF, mode)
                 end
                 if action.itemType == 'Melee' then
+                    self._hitscanStrategy:ResetState()
                     local cframe, viewAngles, weaponAction = self._meleeStrategy:Plan(dt, target, action.item, ourRootPart, canFire)
                     return { cframe = cframe, viewAngles = viewAngles, weaponAction = weaponAction, shouldSkipDefense = true, shouldForceCrouch = true }
                 end
                 if action.itemType ~= 'Gun' then
+                    self._hitscanStrategy:ResetState()
+                    self._meleeStrategy:ResetState()
                     return {}
                 end
+                self._meleeStrategy:ResetState()
                 if itemIsReloading(action.item) then
+                    self._hitscanStrategy:ResetState()
                     return self:_EvadePlan(clientCF, mode)
                 end
                 local cframe, weaponAction = self._hitscanStrategy:Plan(dt, target, action.item, ourRootPart, canFire)
@@ -16429,6 +16661,13 @@ ErrorReporter.set_game(GameName)
                 end
                 return bestPlayer, bestCount
             end
+            function RivalsRagebot.IsPlayerMarkedCheater(player)
+                if player == nil then return false end
+                local entry = RivalsRagebotState.HostileTeleports[player]
+                if entry == nil then return false end
+                return (entry.Teleports and #entry.Teleports or 0) >= RivalsRagebot.HostileTeleportMinCount
+            end
+            RivalsRuntimeBridge.IsRageHacker = RivalsRagebot.IsPlayerMarkedCheater
             function RivalsRagebot.GetCheaterOffsetPrediction(player)
                 local entry = player and RivalsRagebotState.HostileTeleports and RivalsRagebotState.HostileTeleports[player]
                 if not entry or not entry.Offsets then return nil end
@@ -16627,6 +16866,10 @@ ErrorReporter.set_game(GameName)
             function RivalsRagebot.Update(deltaTime)
                 local now = tick()
                 local flightActive = isRivalsFlightActive()
+                local enabled = RivalsRagebot.IsEnabled()
+                if enabled and not flightActive then
+                    RivalsRagebot.UpdateHostileTeleportTracker(now)
+                end
                 if flightActive and RivalsRagebot.IsBaitModeEnabled() then
                     RivalsRagebotState.Target = nil
                     RivalsRagebotState.HoldCFrame = nil
@@ -16634,7 +16877,6 @@ ErrorReporter.set_game(GameName)
                     RivalsRagebotState.PhaseClockSec = 0
                 end
                 if RivalsRagebot.IsBaitModeEnabled() and not flightActive then
-                    RivalsRagebot.UpdateHostileTeleportTracker(now)
                     if RivalsRagebot.IsHostileCheating() then
                         if RivalsRuntimeBridge.ResetKiciaRagebot then
                             RivalsRuntimeBridge.ResetKiciaRagebot()
@@ -16675,7 +16917,6 @@ ErrorReporter.set_game(GameName)
                         return
                     end
                 end
-                local enabled = RivalsRagebot.IsEnabled()
                 if not enabled then
                     RivalsRagebotState.Target = nil
                     RivalsRagebotState.HoldCFrame = nil
@@ -24756,18 +24997,6 @@ ErrorReporter.set_game(GameName)
                         Mode = "Always",
                         Text = "Ragebot",
                         NoUI = false,
-                    })
-                    Rage:AddToggle("P8S4T4", {
-                        Text = "Prioritize Hackers",
-                        Default = false,
-                    })
-                    Rage:AddSlider("P8S4S1", {
-                        Text = "Stability",
-                        Default = 0.15,
-                        Min = 0,
-                        Max = 1.5,
-                        Rounding = 3,
-                        Compact = true,
                     })
                     Rage:AddSlider("P8S4S2", {
                         Text = "Shoot Frames",
