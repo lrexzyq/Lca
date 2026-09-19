@@ -80,6 +80,41 @@ local undergroundDesync = nil
 local undergroundConn = nil
 local undergroundSnapshot = nil
 local undergroundSnapshotCharacter = nil
+local UndergroundRootDesync = {}
+UndergroundRootDesync.__index = UndergroundRootDesync
+function UndergroundRootDesync.new(rootPart)
+    local self = setmetatable({
+        _rootPart = rootPart,
+        _boundId = tostring({}),
+        _oldCFrame = rootPart.CFrame,
+        _cframe = nil,
+    }, UndergroundRootDesync)
+    RunService:BindToRenderStep(self._boundId, Enum.RenderPriority.First.Value, function()
+        local old = self._oldCFrame
+        if old ~= nil and self._rootPart and self._rootPart.Parent then
+            self._rootPart.CFrame = old
+            self._oldCFrame = nil
+        end
+    end)
+    return self
+end
+function UndergroundRootDesync:SetServerCFrame(cf)
+    self._cframe = cf
+end
+function UndergroundRootDesync:HeartbeatUpdate()
+    local rootPart = self._rootPart
+    local cf = self._cframe
+    if rootPart and rootPart.Parent and cf ~= nil then
+        self._oldCFrame = rootPart.CFrame
+        rootPart.CFrame = cf
+    end
+end
+function UndergroundRootDesync:Destroy()
+    pcall(function() RunService:UnbindFromRenderStep(self._boundId) end)
+    self._rootPart = nil
+    self._oldCFrame = nil
+    self._cframe = nil
+end
 
 local function undergroundGetCharacter()
     return lp.Character
@@ -195,7 +230,7 @@ startUnderground = function()
     if not char or not root or not humanoid then return end
     undergroundGetDepth()
     undergroundCapture(char, root, humanoid)
-    undergroundDesync = RootDesync.new(root)
+    undergroundDesync = UndergroundRootDesync.new(root)
     undergroundEnabled = true
     undergroundConn = RunService.Heartbeat:Connect(function()
         if not undergroundEnabled then return end
@@ -206,10 +241,10 @@ startUnderground = function()
         if currentChar ~= undergroundSnapshotCharacter then
             undergroundRestore()
             undergroundCapture(currentChar, currentRoot, currentHumanoid)
-            undergroundDesync = RootDesync.new(currentRoot)
+            undergroundDesync = UndergroundRootDesync.new(currentRoot)
         end
         if not undergroundDesync then
-            undergroundDesync = RootDesync.new(currentRoot)
+            undergroundDesync = UndergroundRootDesync.new(currentRoot)
         end
         local serverCF = undergroundServerCFrame(currentChar, currentRoot)
         if serverCF then
