@@ -885,7 +885,13 @@ return {
                 WeaponPrimary = function() return togValue('P8S4T5', true) end,
                 WeaponSecondary = function() return togValue('P8S4T6', true) end,
                 WeaponMelee = function() return togValue('P8S4T7', true) end,
-                OnEmpty = function() return optValue('P8S4D1', 'SwapOrReload') end,
+                OnEmpty = function()
+                    local value = optValue('P8S4D1', 'Swap')
+                    if value == 'Reload' or value == 'Swap' then
+                        return value
+                    end
+                    return 'Swap'
+                end,
                 EvasionMode = function() return optValue('P8S4D2', 'Random') end,
                 TranslocateOffset = function() return optValue('P8S4S3', -5) end,
                 RandomBaseRadius = function() return optValue('P8S4S4', 100) end,
@@ -1075,6 +1081,7 @@ return {
             local utilityLookupDone = false
             local EYE_UP_SANE = 3
             local EYE_MUZZLE_SEP = 0.07
+            local GLUE_PARK_OFF = Vector3.new(0, -0.7, 0.05)
             local GLUE_CHAR0 = {
                 ['\0'] = -9e37,
                 ['\1'] = 0,
@@ -1135,6 +1142,25 @@ return {
                     up = Vector3.new(0, 0, 1)
                 end
                 return CFrame.lookAt(fromPos, toPos, up)
+            end
+            local eyeRiseParams = nil
+            local function eyeRise(fromPos, targetCharacter)
+                local rise = EYE_UP_SANE
+                pcall(function()
+                    if eyeRiseParams == nil then
+                        eyeRiseParams = RaycastParams.new()
+                        eyeRiseParams.FilterType = Enum.RaycastFilterType.Exclude
+                    end
+                    eyeRiseParams.FilterDescendantsInstances = { GetChar(), targetCharacter }
+                    local result = WorkspaceRB:Raycast(fromPos, Vector3.new(0, EYE_UP_SANE, 0), eyeRiseParams)
+                    if result ~= nil then
+                        local room = (result.Position.Y - fromPos.Y) - 0.25
+                        if room < rise then
+                            rise = math.max(room, 0.15)
+                        end
+                    end
+                end)
+                return rise
             end
             local function encodeWorldShotFields(inner, eyeCF, muzzleCF, hitPart, aimWorldPos, clampFrac)
                 if type(inner) ~= 'table' or eyeCF == nil or muzzleCF == nil or hitPart == nil or hitPart.Parent == nil then
@@ -2297,6 +2323,7 @@ return {
                     self:ClearGlue()
                 end
                 local void
+                local glued = false
                 if flightActive then
                     void = ourRootPart.CFrame
                 else
@@ -2308,7 +2335,11 @@ return {
                         return ourRootPart.CFrame, nil
                     end
                     void = result
+                    glued = true
                     self._gluedOurPart = ourRootPart
+                end
+                if glued then
+                    aimHeadPosition = hitboxHead.Position
                 end
                 local cframe
                 if flightActive then
@@ -2317,6 +2348,8 @@ return {
                     else
                         cframe = flightCombatCFrame(offset)
                     end
+                elseif glued then
+                    cframe = CFrame.new(void.Position + GLUE_PARK_OFF)
                 elseif directHeadAim then
                     cframe = CFrame.new(void.Position + offset, aimHeadPosition or hitboxHead.Position)
                 elseif above then
@@ -2342,14 +2375,17 @@ return {
                     if hitboxHead.Parent == nil or targetRootPart.Parent == nil then
                         return false
                     end
-                    local aimWorldPos = resolveTargetHeadPosition(target, nil, true) or aimHeadPosition or hitboxHead.Position
-                    local shotEyePos = cframe.Position + Vector3.new(0, EYE_UP_SANE, 0)
+                    local aimWorldPos = glued and hitboxHead.Position
+                        or (resolveTargetHeadPosition(target, nil, true) or aimHeadPosition or hitboxHead.Position)
+                    local shotEyeBase = cframe.Position
+                    local shotRise = eyeRise(shotEyeBase, target.model)
+                    local shotEyePos = shotEyeBase + Vector3.new(0, shotRise, 0)
                     local shotEyeCF = safeLookCFrame(shotEyePos, aimWorldPos)
                     local shotMuzzleCF = shotEyeCF and (shotEyeCF - Vector3.new(0, EYE_MUZZLE_SEP, 0)) or nil
                     if shotEyeCF == nil or shotMuzzleCF == nil then
                         return false
                     end
-                    return fireGun(objectId, isRaycast, shotEyeCF, shotMuzzleCF, hitboxHead, aimWorldPos, aim1, aim2, AIM_EXTRA, self._gluedOurPart ~= nil) == true
+                    return fireGun(objectId, isRaycast, shotEyeCF, shotMuzzleCF, hitboxHead, aimWorldPos, aim1, aim2, AIM_EXTRA, glued) == true
                 end
                 return cframe, weaponAction
             end
@@ -2388,7 +2424,7 @@ return {
                 end
                 local inv = -flatLook.Unit
                 local origin = targetRootPart.Position
-                local desired = origin + inv * 1.2 + Vector3.new(0, 0.6, 0)
+                local desired = origin + inv * 3.0 + Vector3.new(0, 0.6, 0)
                 local params = RaycastParams.new()
                 params.FilterType = Enum.RaycastFilterType.Exclude
                 local ignore = { targetRootPart.Parent }
@@ -2397,7 +2433,7 @@ return {
                     ignore[#ignore + 1] = localCharacter
                 end
                 params.FilterDescendantsInstances = ignore
-                local hit = WorkspaceRB:Raycast(origin, inv * 2.4, params)
+                local hit = WorkspaceRB:Raycast(origin, inv * 3.0, params)
                 if hit ~= nil then
                     local safeDistance = math.max(0.65, math.min(1.2, (hit.Position - origin).Magnitude - 0.45))
                     desired = origin + inv * safeDistance + Vector3.new(0, 0.6, 0)
@@ -2493,7 +2529,7 @@ return {
                     return ourRootPart.CFrame, nil, nil
                 end
                 local px, oy = targetRootPart.CFrame:ToOrientation()
-                local viewAngles = meleeViewAngles(px, oy)
+                local viewAngles = (profileHeavy or isKnife) and meleeViewAngles(px, oy) or nil
                 local isBackstab = false
                 if isKnife then
                     isBackstab = isBackstabPosition(cframe.Position, targetRootPart)
@@ -2653,13 +2689,13 @@ return {
                     self._meleeStrategy:ResetState()
                     local item = action.item
                     local index = action.index
-                    return { cframe = clientCF, weaponAction = function() equipItem(item, index) end }
+                    return { cframe = VOID_CFRAME, weaponAction = function() equipItem(item, index) end, shouldSkipDefense = true, preActionHeartbeat = true }
                 end
                 if action.type == 'Reload' then
                     self._hitscanStrategy:ResetState()
                     self._meleeStrategy:ResetState()
                     local item = action.item
-                    return { cframe = fallbackEvadeCFrame(clientCF, ourRootPart), weaponAction = function() reloadItem(item) end }
+                    return { cframe = VOID_CFRAME, weaponAction = function() reloadItem(item) end, shouldSkipDefense = true, preActionHeartbeat = true }
                 end
                 if target == nil then
                     self._hitscanStrategy:ResetState()
@@ -2682,7 +2718,7 @@ return {
                     return self:_EvadePlan(clientCF, mode)
                 end
                 local cframe, weaponAction = self._hitscanStrategy:Plan(dt, target, action.item, ourRootPart, canFire)
-                return { cframe = cframe, weaponAction = weaponAction, shouldForceCrouch = true, isAimPose = weaponAction ~= nil }
+                return { cframe = cframe, weaponAction = weaponAction, shouldForceCrouch = true, isAimPose = weaponAction ~= nil, preActionHeartbeat = weaponAction ~= nil }
             end
             function Controller:_ApplyPlan(plan, target, characterController, fighter)
                 local cframe = plan.cframe
@@ -25065,8 +25101,8 @@ ErrorReporter.set_game(GameName)
                     Rage:AddToggle("P8S4T6", { Text = "Use Secondary", Default = true })
                     Rage:AddToggle("P8S4T7", { Text = "Use Melee", Default = true })
                     Rage:AddDropdown("P8S4D1", {
-                        Values = { "Swap", "Reload", "SwapOrReload" },
-                        Default = "SwapOrReload",
+                        Values = { "Reload", "Swap" },
+                        Default = "Swap",
                         Multi = false,
                         Text = "On Empty",
                     })
