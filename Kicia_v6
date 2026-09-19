@@ -2381,7 +2381,8 @@ return {
                 local pitch = above and PITCH_ABOVE or PITCH_BELOW
                 local aim1 = buildAim(above and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, pitch, oy, oz)
                 local aim2 = buildAim(above and AIM_ABOVE_END or AIM_BELOW_END, pitch, oy, oz)
-                if not self._shootLock:ShouldFire(canFire, math.max(dt, 1 / 240) * Setting.ShootFrames()) then
+                -- FIX Bug4: dt thuần thay vì math.max(dt, 1/240) tránh over-fire khi lag/nhảy.
+                if not self._shootLock:ShouldFire(canFire, dt * Setting.ShootFrames()) then
                     return cframe, nil
                 end
                 local objectId = itemObjectId(item)
@@ -2479,13 +2480,17 @@ function MeleeStrategy:_RecordBackstab()
     self._hitboxWindowUntil = now + BACKSTAB_WINDOW
     self._attackCooldown = now + BACKSTAB_COOLDOWN
 end
-function MeleeStrategy:Plan(dt, target, item, ourRootPart, canFire)
+-- FIX Bug3: nhận characterController làm tham số thứ 6 để cho phép
+-- future use (ForceViewAngles trong weaponAction, v.v.).
+-- Caller tại _Plan truyền nó; trước đây bị drop silently.
+function MeleeStrategy:Plan(dt, target, item, ourRootPart, canFire, characterController)
     local hitboxHead, targetRootPart = resolveLiveTarget(target)
     if hitboxHead == nil or targetRootPart == nil or targetRootPart.Parent == nil then
         if self._gluedOurPart ~= nil then
             self._partGlue:Free(self._gluedOurPart)
             self._gluedOurPart = nil
         end
+        self._shootLock:Reset()
         return ourRootPart.CFrame, nil, nil
     end
     local profile = meleeProfile(item)
@@ -2494,6 +2499,7 @@ function MeleeStrategy:Plan(dt, target, item, ourRootPart, canFire)
             self._partGlue:Free(self._gluedOurPart)
             self._gluedOurPart = nil
         end
+        self._shootLock:Reset()
         return ourRootPart.CFrame, nil, nil
     end
     local targetKey = target.player or target.model or targetRootPart or target
@@ -2542,6 +2548,13 @@ function MeleeStrategy:Plan(dt, target, item, ourRootPart, canFire)
     if now - (self._meleeDwellStart or now) < MELEE_DWELL_S then
         return cframe, viewAngles, nil
     end
+    -- FIX Bug1: ShootLock rate-limit để melee/knife không spam mỗi frame.
+    -- Dùng dt * ShootFrames (không floor 1/240) tránh over-fire khi lag.
+    -- Nếu _attackCooldown chưa hết (sau backstab) cũng chặn fire.
+    local attackBlocked = tick() < self._attackCooldown
+    if attackBlocked or not self._shootLock:ShouldFire(canFire, dt * Setting.ShootFrames()) then
+        return cframe, viewAngles, nil
+    end
     local function weaponAction()
         local fighter = resolveLocalFighter()
         local currentItem = fighter and fighter.EquippedItem or item
@@ -2585,7 +2598,13 @@ function MeleeStrategy:Plan(dt, target, item, ourRootPart, canFire)
         local currentAim1 = buildAim(currentAbove and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, currentPitch, currentOy, currentOz)
         local currentAim2 = buildAim(currentAbove and AIM_ABOVE_END or AIM_BELOW_END, currentPitch, currentOy, currentOz)
         local currentHeavy = currentProfile.heavy
-        return fireMeleeHybrid(currentItem, objectId, currentHeavy, currentHead, eyeCF, muzzleCF, currentAim, currentAim1, currentAim2, AIM_EXTRA) == true
+        local fired = fireMeleeHybrid(currentItem, objectId, currentHeavy, currentHead, eyeCF, muzzleCF, currentAim, currentAim1, currentAim2, AIM_EXTRA) == true
+        -- FIX Bug2: gọi _RecordBackstab sau khi fire để set _attackCooldown,
+        -- tránh spam attack liên tục (trước đây _RecordBackstab là dead code).
+        if fired and currentProfile.knife then
+            self:_RecordBackstab()
+        end
+        return fired
     end
     return cframe, viewAngles, weaponAction
 end
