@@ -2671,8 +2671,15 @@ return {
                     self._gluedOurPart = nil
                 end
             end
+            -- Kicia-accurate melee path. The working combat planner uses
+            -- Item:Attack()/Item:HeavyAttack(), whose helper encodes both CFrames and
+            -- the closest point on the target hit part. Do not substitute the ragebot-only
+            -- AIM_EXTRA sentinel here: it is a different packet shape.
+            local MELEE_DWELL_S = 0.06666666666666667
             local BACKSTAB_WINDOW = 0.625
             local BACKSTAB_COOLDOWN = 1.25
+            local MELEE_OFFSET_ABOVE = Vector3.new(0, 0.5, 0)
+            local MELEE_OFFSET_BELOW = Vector3.new(0, -3, 0)
             local MeleeStrategy = {}
             MeleeStrategy.__index = MeleeStrategy
 
@@ -2680,6 +2687,8 @@ return {
                 return setmetatable({
                     _partGlue = partGlue,
                     _shootLock = ShootLock.new(),
+                    _attackStart = nil,
+                    _attackStartTarget = nil,
                     _hitboxWindowUntil = -1,
                     _attackCooldown = -1,
                     _gluedOurPart = nil,
@@ -2696,9 +2705,59 @@ return {
                     return nil
                 end
                 local name = tostring(itemName(item) or '')
-                local knife = name == 'Knife'
-                local heavy = info.CriticalDamage ~= nil and type(info.HeavyAttackCooldown) == 'number'
-                return { heavy = heavy, knife = knife }
+                return { knife = name == 'Knife' }
+            end
+
+            local function fireKiciaMeleeAttack(item, heavy, attackCF, hitboxHead)
+                if item == nil or attackCF == nil or hitboxHead == nil or hitboxHead.Parent == nil then
+                    return false
+                end
+                local util = resolveUtilityModule()
+                local remote = resolveUseItemRemote()
+                local objectId = meleeObjectId(item)
+                local actionToken = enc(heavy and 'StartAiming' or 'StartShooting')
+                local animationToken = enc(heavy and 'HeavyAttackAnimation1' or 'AttackAnimation1')
+                if util == nil or remote == nil or objectId == nil or actionToken == nil or animationToken == nil then
+                    return false
+                end
+
+                -- Exact semantic equivalent of Kicia's Item:Attack()/HeavyAttack():
+                -- p1 = encoded attack CFrame, p2 = encoded attack CFrame,
+                -- p3 = actual HitboxHead, p4 = encoded CFrame at closest surface point.
+                local ok0, encoded0 = pcall(util.EncodeCFrame, util, attackCF)
+                local ok1, encoded1 = pcall(util.EncodeCFrame, util, attackCF)
+                if not ok0 or not ok1 or encoded0 == nil or encoded1 == nil then
+                    return false
+                end
+
+                local closestPoint
+                pcall(function()
+                    closestPoint = hitboxHead:GetClosestPointOnSurface(attackCF.Position)
+                end)
+                if typeof(closestPoint) ~= 'Vector3' or not shotFiniteVector3(closestPoint) then
+                    closestPoint = hitboxHead.Position
+                end
+                local ok3, encoded3 = pcall(util.EncodeCFrame, util, CFrame.new(closestPoint))
+                if not ok3 or encoded3 == nil then
+                    return false
+                end
+
+                local inner = {
+                    ['\0'] = encoded0,
+                    ['\1'] = encoded1,
+                    ['\2'] = hitboxHead,
+                    ['\3'] = encoded3,
+                }
+                local payload = {
+                    ['\1'] = inner,
+                    ['\2'] = animationToken,
+                }
+
+                local sendOK = false
+                withThreadIdentity2(function()
+                    sendOK = pcall(rbFireServerNative, remote, objectId, actionToken, payload, nil)
+                end)
+                return sendOK == true
             end
 
             function MeleeStrategy:_RecordBackstab()
@@ -2711,22 +2770,29 @@ return {
                 local hitboxHead, targetRootPart = resolveLiveTarget(target)
                 if hitboxHead == nil or hitboxHead.Parent == nil
                     or targetRootPart == nil or targetRootPart.Parent == nil then
+                    self._attackStart = nil
+                    self._attackStartTarget = nil
                     return ourRootPart.CFrame, nil, nil
                 end
 
                 local profile = meleeProfile(item)
                 if profile == nil then
+                    self._attackStart = nil
+                    self._attackStartTarget = nil
                     return ourRootPart.CFrame, nil, nil
                 end
 
-                -- Full Kicia melee execution:
-                --   * PartGlue against the real HitboxHead
-                --   * Kicia above/below offsets and encoded aim payload
-                --   * active Knife continuation -> HeavyAttackEncoded
-                --   * non-Knife melee -> AttackEncoded / heavy melee -> HeavyAttackEncoded
-                --   * no Input()/hybrid remote fallback
+                local targetKey = target.player or target.model or targetRootPart
+                local now = os.clock()
+                if self._attackStartTarget ~= targetKey then
+                    self._attackStartTarget = targetKey
+                    self._attackStart = now
+                elseif self._attackStart == nil then
+                    self._attackStart = now
+                end
+
                 local above = isAbove(target)
-                local offset = above and OFFSET_ABOVE or OFFSET_BELOW
+                local offset = above and MELEE_OFFSET_ABOVE or MELEE_OFFSET_BELOW
                 local acquired
                 local okAcquire = pcall(function()
                     acquired = self._partGlue:Acquire(ourRootPart, hitboxHead)
@@ -2741,55 +2807,65 @@ return {
                 end
                 self._gluedOurPart = ourRootPart
 
-                local cframe
+                local parkCF
                 if above then
-                    cframe = acquired + offset
+                    parkCF = CFrame.new(acquired.Position + offset)
                 else
-                    cframe = CFrame.new(acquired.Position + offset, hitboxHead.Position)
-                end
-
-                local pitch, yaw, roll = targetRootPart.CFrame:ToOrientation()
-                local viewAngles = profile.heavy and meleeViewAngles(pitch, yaw) or nil
-                local aimPitch = above and PITCH_ABOVE or PITCH_BELOW
-                local aim1 = buildAim(above and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, aimPitch, yaw, roll)
-                local aim2 = buildAim(above and AIM_ABOVE_END or AIM_BELOW_END, aimPitch, yaw, roll)
-                local now = os.clock()
-
-                local function encodedAction(useHeavy)
-                    -- Do not resolve a second item/head here. Kicia's planner captures
-                    -- the selected Item interface, hitbox head and encoded aim payload
-                    -- during Plan(), then sends that exact attack packet.
-                    return fireKiciaMeleeEncoded(item, useHeavy, aim1, aim2, hitboxHead)
-                end
-
-                -- Kicia's Knife state machine: during the recorded hitbox window,
-                -- immediately continue the heavy attack without opening a new cycle.
-                if now < self._hitboxWindowUntil then
-                    return cframe, viewAngles, function()
-                        return encodedAction(true)
-                    end
+                    parkCF = CFrame.new(acquired.Position + offset, hitboxHead.Position)
                 end
 
                 if not self._shootLock:ShouldFire(canFire, (dt or 0) * Setting.ShootFrames()) then
-                    return ourRootPart.CFrame, nil, nil
-                end
-                if now < self._attackCooldown then
-                    return ourRootPart.CFrame, nil, nil
+                    self._attackStart = nil
+                    return CFrame.new(
+                        math.random(-1000000, 1000000),
+                        math.random(5000, 10000),
+                        math.random(-1000000, 1000000)
+                    ), nil, nil
                 end
 
-                if not profile.knife then
-                    return cframe, nil, function()
-                        return encodedAction(false)
+                if now - self._attackStart < MELEE_DWELL_S then
+                    return parkCF, nil, nil
+                end
+
+                -- Exact Kicia combat planner behavior: build two identical look-at CFrames.
+                local attackCF = CFrame.new(parkCF.Position, hitboxHead.Position)
+                local viewAngles = nil
+                if profile.knife then
+                    local pitch, yaw = targetRootPart.CFrame:ToOrientation()
+                    viewAngles = meleeViewAngles(pitch, yaw)
+                end
+
+                if now < self._hitboxWindowUntil then
+                    return parkCF, viewAngles, function()
+                        return fireKiciaMeleeAttack(item, true, attackCF, hitboxHead)
                     end
                 end
 
-                self:_RecordBackstab()
-                return cframe, viewAngles, function()
-                    return encodedAction(true)
+                if now < self._attackCooldown then
+                    return CFrame.new(
+                        math.random(-1000000, 1000000),
+                        math.random(5000, 10000),
+                        math.random(-1000000, 1000000)
+                    ), nil, nil
+                end
+
+                if profile.knife then
+                    self:_RecordBackstab()
+                    return parkCF, viewAngles, function()
+                        return fireKiciaMeleeAttack(item, true, attackCF, hitboxHead)
+                    end
+                end
+
+                -- Kicia uses ordinary Attack() for every non-Knife melee item,
+                -- even when its metadata exposes a heavy/critical attack field.
+                return parkCF, nil, function()
+                    return fireKiciaMeleeAttack(item, false, attackCF, hitboxHead)
                 end
             end
 
             function MeleeStrategy:ResetState()
+                self._attackStart = nil
+                self._attackStartTarget = nil
                 self._hitboxWindowUntil = -1
                 self._attackCooldown = -1
                 self._shootLock:Reset()
