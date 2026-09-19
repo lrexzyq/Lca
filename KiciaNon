@@ -1545,27 +1545,12 @@ return {
                 if self._jointsRestore ~= nil then
                     return true
                 end
-                local joints = nil
-                pcall(function()
-                    local playerScripts = lp and lp:FindFirstChild('PlayerScripts')
-                    local modules = playerScripts and playerScripts:FindFirstChild('Modules')
-                    local replicated = modules and modules:FindFirstChild('ClientReplicatedClasses')
-                    local clientFighter = replicated and replicated:FindFirstChild('ClientFighter')
-                    local character = clientFighter and clientFighter:FindFirstChild('ClientFighterCharacter')
-                    local jointsModule = character and character:FindFirstChild('Joints')
-                    if jointsModule then
-                        joints = require(jointsModule)
-                    end
-                end)
-                if type(joints) ~= 'table' then
-                    joints = requireModuleRB('ClientFighterCharacterJoints')
-                end
+                local joints = requireModuleRB('ClientFighterCharacterJoints')
                 local original = joints and rawget(joints, 'Update') or nil
                 if not joints or original == nil then
                     return false
                 end
                 local driver = self
-                if setreadonly then pcall(setreadonly, joints, false) end
                 local function hooked(jointsSelf, a, b)
                     local cfc = rawget(jointsSelf, 'ClientFighterCharacter')
                     local cf = cfc and rawget(cfc, 'ClientFighter') or nil
@@ -1580,14 +1565,7 @@ return {
                     end
                     return original(jointsSelf, a, b)
                 end
-                local okSet = pcall(rawset, joints, 'Update', hooked)
-                if not okSet then
-                    if setreadonly then pcall(setreadonly, joints, false) end
-                    okSet = pcall(function() joints.Update = hooked end)
-                end
-                if not okSet then
-                    return false
-                end
+                rawset(joints, 'Update', hooked)
                 self._jointsRestore = { joints = joints, original = original }
                 return true
             end
@@ -1667,24 +1645,6 @@ return {
                     rbFireServerNative(remote, anglesToEncoded(winning), nil)
                 end
             end
-            function ViewAngleDriver:Force(priority, value)
-                if value == nil then
-                    return false
-                end
-                self._slots[priority] = value
-                self:_Resolve()
-                if self._winning == nil then
-                    return false
-                end
-                self._dirty = false
-                self:_LoadJointsHook()
-                self:_LoadReplicationHook()
-                local remote = resolveCameraRotationRemote()
-                if not remote then
-                    return false
-                end
-                return pcall(rbFireServerNative, remote, anglesToEncoded(self._winning), nil)
-            end
             function ViewAngleDriver:ClearAll()
                 table.clear(self._slots)
                 self._winning = nil
@@ -1726,9 +1686,6 @@ return {
                     self._rootDesync:HeartbeatUpdate()
                 end
                 self._viewAngleDriver:Flush()
-            end
-            function CharacterController:ForceViewAngles(priority, value)
-                return self._viewAngleDriver:Force(priority, value)
             end
             function CharacterController:Destroy()
                 self._viewAngleDriver:ClearAll()
@@ -2748,8 +2705,7 @@ return {
                 if action.itemType == 'Melee' then
                     self._hitscanStrategy:ResetState()
                     local cframe, viewAngles, weaponAction = self._meleeStrategy:Plan(dt, target, action.item, ourRootPart, canFire)
-                    local forceViewBeforeAction = viewAngles ~= nil and weaponAction ~= nil
-                    return { cframe = cframe, viewAngles = viewAngles, weaponAction = weaponAction, shouldSkipDefense = true, shouldForceCrouch = true, preActionHeartbeat = weaponAction ~= nil, forceViewBeforeAction = forceViewBeforeAction }
+                    return { cframe = cframe, viewAngles = viewAngles, weaponAction = weaponAction, shouldSkipDefense = true, shouldForceCrouch = true, preActionHeartbeat = weaponAction ~= nil }
                 end
                 if action.itemType ~= 'Gun' then
                     self._hitscanStrategy:ResetState()
@@ -2831,9 +2787,6 @@ return {
                 local preActionHeartbeat = plan.preActionHeartbeat == true
                 if preActionHeartbeat then
                     characterController:HeartbeatUpdate()
-                end
-                if plan.forceViewBeforeAction and plan.viewAngles ~= nil then
-                    characterController:ForceViewAngles(20, plan.viewAngles)
                 end
                 if plan.weaponAction ~= nil then
                     local fired = plan.weaponAction() == true
