@@ -2078,7 +2078,9 @@ return {
                     self:ClearGlue()
                     return ourRootPart.CFrame, nil
                 end
-                local above = isAbove(target)
+                local shieldState = classifyAboveBelow(target)
+                local above = shieldState ~= 'Below'
+                local directHeadAim = shieldState == 'None'
                 local offset = above and OFFSET_ABOVE or OFFSET_BELOW
                 local aimHeadPosition = resolveTargetHeadPosition(target, hitboxHead)
                 local flightActive = isFlightActive()
@@ -2101,11 +2103,13 @@ return {
                 end
                 local cframe
                 if flightActive then
-                    if above then
-                        cframe = flightCombatCFrame(offset)
-                    else
+                    if directHeadAim or not above then
                         cframe = flightCombatCFrame(offset, aimHeadPosition or hitboxHead.Position)
+                    else
+                        cframe = flightCombatCFrame(offset)
                     end
+                elseif directHeadAim then
+                    cframe = CFrame.new(void.Position + offset, aimHeadPosition or hitboxHead.Position)
                 elseif above then
                     cframe = void + offset
                 else
