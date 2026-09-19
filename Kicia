@@ -27074,7 +27074,8 @@ local RivalsRuntime = {}
                     initialized = false,
                 }
 
-                local function cloneTable(value)
+local AethereaFns = {}
+                AethereaFns.cloneTable = function(value)
                     if type(value) ~= 'table' then
                         return {}
                     end
@@ -27101,7 +27102,7 @@ local RivalsRuntime = {}
                     return out
                 end
 
-                local function resolveAethModules()
+                AethereaFns.resolveAethModules = function()
                     local ps = LP:FindFirstChild('PlayerScripts')
                     local controllers = ps and ps:FindFirstChild('Controllers')
                     local modulesFolder = ReplicatedStorage:FindFirstChild('Modules')
@@ -27125,7 +27126,7 @@ local RivalsRuntime = {}
                     return out
                 end
 
-                local AM = resolveAethModules()
+                local AM = AethereaFns.resolveAethModules()
                 local PDC = AM.PlayerDataController
                 local CL = AM.CosmeticLibrary
                 local IL = AM.ItemLibrary
@@ -27135,11 +27136,11 @@ local RivalsRuntime = {}
                 local Season = AM.SeasonLibrary
 
                 if PDC and type(PDC.Get) == 'function' then
-                    AethereaSkin.fakeOwned = cloneTable(PDC:Get('CosmeticInventory'))
-                    AethereaSkin.fakeWeaponOwned = cloneTable(PDC:Get('WeaponInventory'))
-                    AethereaSkin.favorites = cloneTable(PDC:Get('FavoritedCosmetics'))
-                    AethereaSpoof.duelHistory.history = cloneTable(PDC:Get('DuelHistory'))
-                    AethereaSpoof.duelHistory.logged = cloneTable(PDC:Get('LoggedELOEvents'))
+                    AethereaSkin.fakeOwned = AethereaFns.cloneTable(PDC:Get('CosmeticInventory'))
+                    AethereaSkin.fakeWeaponOwned = AethereaFns.cloneTable(PDC:Get('WeaponInventory'))
+                    AethereaSkin.favorites = AethereaFns.cloneTable(PDC:Get('FavoritedCosmetics'))
+                    AethereaSpoof.duelHistory.history = AethereaFns.cloneTable(PDC:Get('DuelHistory'))
+                    AethereaSpoof.duelHistory.logged = AethereaFns.cloneTable(PDC:Get('LoggedELOEvents'))
                     AethereaSpoof.currency.keysValue = tonumber(PDC:Get('WeaponKeys')) or 0
                     AethereaSpoof.currency.tokensValue = tonumber(PDC:Get('UnlockTokens')) or 0
                     AethereaSpoof.currency.eventCurrencyValue = tonumber(PDC:Get('EventCurrency')) or 0
@@ -27153,18 +27154,18 @@ local RivalsRuntime = {}
                     AethereaSpoof.duelHistory.logged = {}
                 end
 
-                local function cosmeticCatalog()
+                AethereaFns.cosmeticCatalog = function()
                     return CL and type(CL.Cosmetics) == 'table' and CL.Cosmetics or {}
                 end
 
-                local function cosmeticByName(name)
-                    local catalog = cosmeticCatalog()
+                AethereaFns.cosmeticByName = function(name)
+                    local catalog = AethereaFns.cosmeticCatalog()
                     return type(name) == 'string' and catalog[name] or nil
                 end
 
-                local function getCosmeticsByRarity(rarity)
+                AethereaFns.getCosmeticsByRarity = function(rarity)
                     local result = {}
-                    for name, data in pairs(cosmeticCatalog()) do
+                    for name, data in pairs(AethereaFns.cosmeticCatalog()) do
                         if type(data) == 'table' and data.Rarity == rarity then
                             result[#result + 1] = name
                         end
@@ -27172,9 +27173,9 @@ local RivalsRuntime = {}
                     return result
                 end
 
-                local function getCosmeticsByType(kind)
+                AethereaFns.getCosmeticsByType = function(kind)
                     local result = {}
-                    for name, data in pairs(cosmeticCatalog()) do
+                    for name, data in pairs(AethereaFns.cosmeticCatalog()) do
                         if type(data) == 'table' and data.Type == kind then
                             result[#result + 1] = name
                         end
@@ -27182,8 +27183,8 @@ local RivalsRuntime = {}
                     return result
                 end
 
-                local function getSpecificCosmetic(kind, name, weapon)
-                    local data = cosmeticByName(name)
+                AethereaFns.getSpecificCosmetic = function(kind, name, weapon)
+                    local data = AethereaFns.cosmeticByName(name)
                     if type(data) ~= 'table' or data.Type ~= kind then
                         return nil
                     end
@@ -27193,9 +27194,9 @@ local RivalsRuntime = {}
                     return name
                 end
 
-                local function getAllForWeapon(weapon)
+                AethereaFns.getAllForWeapon = function(weapon)
                     local result = {}
-                    for name, data in pairs(cosmeticCatalog()) do
+                    for name, data in pairs(AethereaFns.cosmeticCatalog()) do
                         if type(data) == 'table' then
                             if data.Type == 'Skin' then
                                 if data.ItemName == weapon then
@@ -27209,19 +27210,19 @@ local RivalsRuntime = {}
                     return result
                 end
 
-                local function getAllCosmetics()
+                AethereaFns.getAllCosmetics = function()
                     local result = {}
-                    for name in pairs(cosmeticCatalog()) do
+                    for name in pairs(AethereaFns.cosmeticCatalog()) do
                         result[#result + 1] = name
                     end
                     return result
                 end
 
-                local function isRealCosmeticName(name)
+                AethereaFns.isRealCosmeticName = function(name)
                     return type(name) == 'string' and name ~= '' and not name:find('MISSING_', 1, true)
                 end
 
-                local function setSelection(weapon, kind, value, inverted)
+                AethereaFns.setSelection = function(weapon, kind, value, inverted)
                     if type(weapon) ~= 'string' or weapon == '' then
                         return false
                     end
@@ -27240,7 +27241,7 @@ local RivalsRuntime = {}
                     return ok == true
                 end
 
-                local function refreshSkin()
+                AethereaFns.refreshSkin = function()
                     pcall(function()
                         RivalsRuntimeBridge.RefreshNativeRivalsCosmetics()
                     end)
@@ -27249,59 +27250,59 @@ local RivalsRuntime = {}
                     end)
                 end
 
-                local function unlockRarity()
-                    for _, name in ipairs(getCosmeticsByRarity(AethereaSkin.unlockRarity)) do
-                        if isRealCosmeticName(name) then
+                AethereaFns.unlockRarity = function()
+                    for _, name in ipairs(AethereaFns.getCosmeticsByRarity(AethereaSkin.unlockRarity)) do
+                        if AethereaFns.isRealCosmeticName(name) then
                             AethereaSkin.fakeOwned[name] = true
                         end
                     end
-                    refreshSkin()
+                    AethereaFns.refreshSkin()
                 end
 
-                local function lockRarity()
-                    for _, name in ipairs(getCosmeticsByRarity(AethereaSkin.unlockRarity)) do
-                        if isRealCosmeticName(name) then
+                AethereaFns.lockRarity = function()
+                    for _, name in ipairs(AethereaFns.getCosmeticsByRarity(AethereaSkin.unlockRarity)) do
+                        if AethereaFns.isRealCosmeticName(name) then
                             AethereaSkin.fakeOwned[name] = nil
                         end
                     end
-                    refreshSkin()
+                    AethereaFns.refreshSkin()
                 end
 
-                local function unlockType()
-                    for _, name in ipairs(getCosmeticsByType(AethereaSkin.unlockType)) do
-                        if isRealCosmeticName(name) then
+                AethereaFns.unlockType = function()
+                    for _, name in ipairs(AethereaFns.getCosmeticsByType(AethereaSkin.unlockType)) do
+                        if AethereaFns.isRealCosmeticName(name) then
                             AethereaSkin.fakeOwned[name] = true
                         end
                     end
-                    refreshSkin()
+                    AethereaFns.refreshSkin()
                 end
 
-                local function lockType()
-                    for _, name in ipairs(getCosmeticsByType(AethereaSkin.unlockType)) do
-                        if isRealCosmeticName(name) then
+                AethereaFns.lockType = function()
+                    for _, name in ipairs(AethereaFns.getCosmeticsByType(AethereaSkin.unlockType)) do
+                        if AethereaFns.isRealCosmeticName(name) then
                             AethereaSkin.fakeOwned[name] = nil
                         end
                     end
-                    refreshSkin()
+                    AethereaFns.refreshSkin()
                 end
 
-                local function unlockSpecific()
-                    local name = getSpecificCosmetic(AethereaSkin.specificType, AethereaSkin.specificCosmetic, AethereaSkin.specificWeapon)
+                AethereaFns.unlockSpecific = function()
+                    local name = AethereaFns.getSpecificCosmetic(AethereaSkin.specificType, AethereaSkin.specificCosmetic, AethereaSkin.specificWeapon)
                     if name then
                         AethereaSkin.fakeOwned[name] = true
-                        refreshSkin()
+                        AethereaFns.refreshSkin()
                     end
                 end
 
-                local function lockSpecific()
-                    local name = getSpecificCosmetic(AethereaSkin.specificType, AethereaSkin.specificCosmetic, AethereaSkin.specificWeapon)
+                AethereaFns.lockSpecific = function()
+                    local name = AethereaFns.getSpecificCosmetic(AethereaSkin.specificType, AethereaSkin.specificCosmetic, AethereaSkin.specificWeapon)
                     if name then
                         AethereaSkin.fakeOwned[name] = nil
-                        refreshSkin()
+                        AethereaFns.refreshSkin()
                     end
                 end
 
-                local function unlockSpecificWeapon()
+                AethereaFns.unlockSpecificWeapon = function()
                     local weapon = AethereaSkin.specificWeapon
                     if weapon == '' then return end
                     for _, data in ipairs(AethereaSkin.fakeWeaponOwned) do
@@ -27316,10 +27317,10 @@ local RivalsRuntime = {}
                         IsFavorited = false,
                         Skin = nil,
                     }
-                    refreshSkin()
+                    AethereaFns.refreshSkin()
                 end
 
-                local function lockSpecificWeapon()
+                AethereaFns.lockSpecificWeapon = function()
                     local weapon = AethereaSkin.specificWeapon
                     if weapon == '' then return end
                     for i = #AethereaSkin.fakeWeaponOwned, 1, -1 do
@@ -27328,10 +27329,10 @@ local RivalsRuntime = {}
                             table.remove(AethereaSkin.fakeWeaponOwned, i)
                         end
                     end
-                    refreshSkin()
+                    AethereaFns.refreshSkin()
                 end
 
-                local function unlockAllWeapons()
+                AethereaFns.unlockAllWeapons = function()
                     if not SL or type(SL.GetReleasedOwnableWeapons) ~= 'function' then
                         return
                     end
@@ -27353,55 +27354,55 @@ local RivalsRuntime = {}
                             }
                         end
                     end
-                    refreshSkin()
+                    AethereaFns.refreshSkin()
                 end
 
-                local function lockAllWeapons()
+                AethereaFns.lockAllWeapons = function()
                     AethereaSkin.fakeWeaponOwned = {}
-                    refreshSkin()
+                    AethereaFns.refreshSkin()
                 end
 
-                local function unlockAllForWeapon()
+                AethereaFns.unlockAllForWeapon = function()
                     if AethereaSkin.specificWeapon == '' then return end
-                    for _, name in ipairs(getAllForWeapon(AethereaSkin.specificWeapon)) do
-                        if isRealCosmeticName(name) then
+                    for _, name in ipairs(AethereaFns.getAllForWeapon(AethereaSkin.specificWeapon)) do
+                        if AethereaFns.isRealCosmeticName(name) then
                             AethereaSkin.fakeOwned[name] = true
                         end
                     end
-                    refreshSkin()
+                    AethereaFns.refreshSkin()
                 end
 
-                local function lockAllForWeapon()
+                AethereaFns.lockAllForWeapon = function()
                     if AethereaSkin.specificWeapon == '' then return end
-                    for _, name in ipairs(getAllForWeapon(AethereaSkin.specificWeapon)) do
-                        if isRealCosmeticName(name) then
+                    for _, name in ipairs(AethereaFns.getAllForWeapon(AethereaSkin.specificWeapon)) do
+                        if AethereaFns.isRealCosmeticName(name) then
                             AethereaSkin.fakeOwned[name] = nil
                         end
                     end
-                    refreshSkin()
+                    AethereaFns.refreshSkin()
                 end
 
-                local function unlockAll()
-                    for _, name in ipairs(getAllCosmetics()) do
-                        if isRealCosmeticName(name) then
+                AethereaFns.unlockAll = function()
+                    for _, name in ipairs(AethereaFns.getAllCosmetics()) do
+                        if AethereaFns.isRealCosmeticName(name) then
                             AethereaSkin.fakeOwned[name] = true
                         end
                     end
-                    refreshSkin()
+                    AethereaFns.refreshSkin()
                 end
 
-                local function lockAll()
+                AethereaFns.lockAll = function()
                     AethereaSkin.fakeOwned = {}
-                    refreshSkin()
+                    AethereaFns.refreshSkin()
                 end
 
-                local function equipApply()
+                AethereaFns.equipApply = function()
                     local weapon = AethereaSkin.equipWeapon
                     if weapon == '' then return end
                     local kind = AethereaSkin.equipType
                     local name = AethereaSkin.equipCosmetic
                     if name == '' then name = 'None' end
-                    setSelection(weapon, kind, name, AethereaSkin.equipInverted)
+                    AethereaFns.setSelection(weapon, kind, name, AethereaSkin.equipInverted)
                     local remoteFolder = ReplicatedStorage:FindFirstChild('Remotes')
                     local dataRemotes = remoteFolder and remoteFolder:FindFirstChild('Data')
                     local remote = dataRemotes and dataRemotes:FindFirstChild('EquipCosmetic')
@@ -27412,10 +27413,10 @@ local RivalsRuntime = {}
                         end
                         pcall(remote.FireServer, remote, weapon, kind, name == 'None' and nil or name, options)
                     end
-                    refreshSkin()
+                    AethereaFns.refreshSkin()
                 end
 
-                local function equipApplyAll()
+                AethereaFns.equipApplyAll = function()
                     local kind = AethereaSkin.equipType
                     if kind == 'Skin' or AethereaSkin.equipCosmetic == '' then return end
                     local name = AethereaSkin.equipCosmetic
@@ -27435,10 +27436,10 @@ local RivalsRuntime = {}
                             pcall(remote.FireServer, remote, weapon, kind, name, options)
                         end
                     end
-                    refreshSkin()
+                    AethereaFns.refreshSkin()
                 end
 
-                local function installSkinHooks()
+                AethereaFns.installSkinHooks = function()
                     if AethereaSkin.patched then return end
                     if not CL or not PDC then return end
                     AethereaSkin.patched = true
@@ -27497,7 +27498,7 @@ local RivalsRuntime = {}
                             IL.GetViewModelImageFromWeaponData = function(self, data, high)
                                 local weapon = type(data) == 'table' and data.Name or nil
                                 local selected = weapon and AethereaSkin.selected and AethereaSkin.selected[weapon]
-                                if selected and selected.Skin and cosmeticByName(selected.Skin) then
+                                if selected and selected.Skin and AethereaFns.cosmeticByName(selected.Skin) then
                                     local vm = self.ViewModels and self.ViewModels[selected.Skin]
                                     if vm then
                                         return vm[high and 'ImageHighResolution' or 'Image'] or vm.Image
@@ -27523,9 +27524,9 @@ local RivalsRuntime = {}
                     AethereaSkin.patched = false
                 end
 
-                local function randomFromFavorites(kind, weapon)
+                AethereaFns.randomFromFavorites = function(kind, weapon)
                     local list = {}
-                    for name, data in pairs(cosmeticCatalog()) do
+                    for name, data in pairs(AethereaFns.cosmeticCatalog()) do
                         if type(data) == 'table' and data.Type == kind then
                             if kind ~= 'Skin' or data.ItemName == weapon then
                                 local fav = AethereaSkin.favorites[weapon]
@@ -27539,7 +27540,7 @@ local RivalsRuntime = {}
                     return list[math.random(1, #list)]
                 end
 
-                local function createDispatcher()
+                AethereaFns.createDispatcher = function()
                     local dispatcher = {
                         original = nil,
                         hooked = false,
@@ -27561,7 +27562,7 @@ local RivalsRuntime = {}
                                         if kind == 'Wrap' then
                                             AethereaSkin.selected[weapon][kind .. 'Inverted'] = options.IsInverted == true
                                         end
-                                        setSelection(weapon, kind, name or 'None', options.IsInverted == true)
+                                        AethereaFns.setSelection(weapon, kind, name or 'None', options.IsInverted == true)
                                     end
                                     return nil
                                 end
@@ -27587,10 +27588,10 @@ local RivalsRuntime = {}
                     return dispatcher
                 end
 
-                local dispatcher = createDispatcher()
+                local dispatcher = AethereaFns.createDispatcher()
 
                 local spoofOriginal = {}
-                local function setDevice(useOld)
+                AethereaFns.setDevice = function(useOld)
                     local map = {
                         Desktop = 'MouseKeyboard',
                         Mobile = 'Touch',
@@ -27623,25 +27624,25 @@ local RivalsRuntime = {}
                     end
                 end
 
-                local function deviceSpam()
+                AethereaFns.deviceSpam = function()
                     AethereaSpoof.deviceCancel = AethereaSpoof.deviceCancel + 1
                     local token = AethereaSpoof.deviceCancel
                     task.spawn(function()
                         while AethereaSpoof.deviceSpam and token == AethereaSpoof.deviceCancel do
                             local values = {'Desktop','Mobile','Console','VR'}
                             AethereaSpoof.device = values[math.random(1,#values)]
-                            setDevice(false)
+                            AethereaFns.setDevice(false)
                             task.wait(math.max(0.1, tonumber(AethereaSpoof.spamRate) or 1))
                         end
-                        setDevice(true)
+                        AethereaFns.setDevice(true)
                     end)
                 end
 
-                local function isTextObject(obj)
+                AethereaFns.isTextObject = function(obj)
                     return obj:IsA('TextLabel') or obj:IsA('TextButton') or obj:IsA('TextBox')
                 end
 
-                local function formatNumber(value)
+                AethereaFns.formatNumber = function(value)
                     local text = tostring(value)
                     local sign = ''
                     if text:sub(1, 1) == '-' then
@@ -27659,7 +27660,7 @@ local RivalsRuntime = {}
                     return sign .. whole .. suffix
                 end
 
-                local function spoofedNameFor(player)
+                AethereaFns.spoofedNameFor = function(player)
                     if type(AethereaSpoof.fakeNames[player]) ~= 'string' then
                         local alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
                         local chars = {}
@@ -27673,13 +27674,13 @@ local RivalsRuntime = {}
                     return AethereaSpoof.fakeNames[player]
                 end
 
-                local function applyName(obj)
-                    if not isTextObject(obj) then return end
+                AethereaFns.applyName = function(obj)
+                    if not AethereaFns.isTextObject(obj) then return end
                     local text = obj.Text
                     if typeof(text) ~= 'string' then return end
                     if AethereaSpoof.anonymousMode then
                         local player = LP
-                        local fake = spoofedNameFor(player)
+                        local fake = AethereaFns.spoofedNameFor(player)
                         if obj.Name == 'DisplayName' or obj.Name == 'Name' or obj.Name == 'HeaderText' or obj.Name == 'Title' then
                             text = text:gsub(LP.DisplayName, fake)
                         elseif obj.Name == 'Username' or obj.Name == 'Handle' then
@@ -27694,21 +27695,21 @@ local RivalsRuntime = {}
                         end
                     end
                     if AethereaSpoof.leaderboard.Wins and obj.Name == 'Wins' then
-                        text = formatNumber(AethereaSpoof.leaderboard.wins)
+                        text = AethereaFns.formatNumber(AethereaSpoof.leaderboard.wins)
                     end
                     if AethereaSpoof.leaderboard.Level and obj.Parent and obj.Parent.Name == 'Level' and obj.Name == 'Value' then
-                        text = formatNumber(AethereaSpoof.leaderboard.level)
+                        text = AethereaFns.formatNumber(AethereaSpoof.leaderboard.level)
                     end
                     if AethereaSpoof.leaderboard.Streak and obj.Parent and obj.Parent.Name == 'Streak' and obj.Name == 'Value' then
-                        text = formatNumber(AethereaSpoof.leaderboard.streak)
+                        text = AethereaFns.formatNumber(AethereaSpoof.leaderboard.streak)
                     end
                     if obj.Text ~= text then
                         obj.Text = text
                     end
                 end
 
-                local function registerText(obj)
-                    if not isTextObject(obj) then return end
+                AethereaFns.registerText = function(obj)
+                    if not AethereaFns.isTextObject(obj) then return end
                     local allowed = {
                         DisplayName = true,
                         Username = true,
@@ -27723,11 +27724,11 @@ local RivalsRuntime = {}
                     }
                     if not allowed[obj.Name] then return end
                     if not AethereaSpoof.textConnections[obj] then
-                        applyName(obj)
+                        AethereaFns.applyName(obj)
                         local connection = obj:GetPropertyChangedSignal('Text'):Connect(function()
                             task.defer(function()
                                 if obj.Parent then
-                                    applyName(obj)
+                                    AethereaFns.applyName(obj)
                                 end
                             end)
                         end)
@@ -27738,11 +27739,11 @@ local RivalsRuntime = {}
                             AethereaSpoof.textConnections[obj] = nil
                         end)
                     else
-                        applyName(obj)
+                        AethereaFns.applyName(obj)
                     end
                 end
 
-                local function copyHeadVisuals(realHead, sourceHead)
+                AethereaFns.copyHeadVisuals = function(realHead, sourceHead)
                     if not realHead or not sourceHead then return end
                     for _, child in ipairs(realHead:GetChildren()) do
                         if child:IsA('Decal') or child:IsA('Texture') or child:IsA('SpecialMesh') or child:IsA('Mesh') then
@@ -27773,26 +27774,26 @@ local RivalsRuntime = {}
                     end
                 end
 
-                local function findAttachment(model, name)
+                AethereaFns.findAttachment = function(model, name)
                     for _, child in ipairs(model:GetChildren()) do
                         if child:IsA('Attachment') and child.Name == name then
                             return child
                         end
                         if not child:IsA('Accoutrement') and not child:IsA('Tool') then
-                            local found = findAttachment(child, name)
+                            local found = AethereaFns.findAttachment(child, name)
                             if found then return found end
                         end
                     end
                     return nil
                 end
 
-                local function addAccessory(character, accessory)
+                AethereaFns.addAccessory = function(character, accessory)
                     accessory.Parent = character
                     local handle = accessory:FindFirstChild('Handle')
                     if not handle then return end
                     local attachment = handle:FindFirstChildOfClass('Attachment')
                     if attachment then
-                        local target = findAttachment(character, attachment.Name)
+                        local target = AethereaFns.findAttachment(character, attachment.Name)
                         if target then
                             local weld = Instance.new('Weld')
                             weld.Part0 = target.Parent
@@ -27812,7 +27813,7 @@ local RivalsRuntime = {}
                     end
                 end
 
-                local function setAvatar(useOld)
+                AethereaFns.setAvatar = function(useOld)
                     local userId = useOld and LP.UserId or tonumber(AethereaSpoof.avatarUserId)
                     if not userId then return end
                     local character = LP.Character
@@ -27831,7 +27832,7 @@ local RivalsRuntime = {}
                     end
                     for _, child in ipairs(rig:GetChildren()) do
                         if child:IsA('Accessory') then
-                            pcall(function() addAccessory(character, child:Clone()) end)
+                            pcall(function() AethereaFns.addAccessory(character, child:Clone()) end)
                         elseif child:IsA('Shirt') or child:IsA('Pants') or child:IsA('ShirtGraphic')
                             or child:IsA('BodyColors') or child:IsA('LayeredClothing') or child:IsA('CharacterMesh') then
                             pcall(function() child:Clone().Parent = character end)
@@ -27839,16 +27840,16 @@ local RivalsRuntime = {}
                     end
                     local head = rig:FindFirstChild('Head')
                     if head then
-                        copyHeadVisuals(character:FindFirstChild('Head'), head)
+                        AethereaFns.copyHeadVisuals(character:FindFirstChild('Head'), head)
                     end
                     pcall(rig.Destroy, rig)
                 end
 
-                local function avatarSpoof()
-                    setAvatar(AethereaSpoof.spoofAvatar ~= true)
+                AethereaFns.avatarSpoof = function()
+                    AethereaFns.setAvatar(AethereaSpoof.spoofAvatar ~= true)
                 end
 
-                local function applyImage(obj)
+                AethereaFns.applyImage = function(obj)
                     if not obj:IsA('ImageLabel') then return end
                     if not AethereaSpoof.spoofAvatar and not AethereaSpoof.anonymousMode then return end
                     local image = tostring(obj.Image)
@@ -27869,7 +27870,7 @@ local RivalsRuntime = {}
                     end
                 end
 
-                local function registerImage(obj)
+                AethereaFns.registerImage = function(obj)
                     if not obj:IsA('ImageLabel') then return end
                     local allowed = {
                         AvatarThumbnail = true,
@@ -27877,11 +27878,11 @@ local RivalsRuntime = {}
                         ImageLabel = true,
                     }
                     if not allowed[obj.Name] then return end
-                    applyImage(obj)
+                    AethereaFns.applyImage(obj)
                     if AethereaSpoof.imageConnections[obj] then return end
                     local connection = obj:GetPropertyChangedSignal('Image'):Connect(function()
                         task.defer(function()
-                            if obj.Parent then applyImage(obj) end
+                            if obj.Parent then AethereaFns.applyImage(obj) end
                         end)
                     end)
                     AethereaSpoof.imageConnections[obj] = connection
@@ -27892,16 +27893,16 @@ local RivalsRuntime = {}
                     end)
                 end
 
-                local function refreshUI()
+                AethereaFns.refreshUI = function()
                     for obj in pairs(AethereaSpoof.textConnections) do
-                        if obj and obj.Parent then applyName(obj) end
+                        if obj and obj.Parent then AethereaFns.applyName(obj) end
                     end
                     for obj in pairs(AethereaSpoof.imageConnections) do
-                        if obj and obj.Parent then applyImage(obj) end
+                        if obj and obj.Parent then AethereaFns.applyImage(obj) end
                     end
                 end
 
-                local function insertLeaderboard(list, userId, value)
+                AethereaFns.insertLeaderboard = function(list, userId, value)
                     for i = #list, 1, -1 do
                         local item = list[i]
                         if tonumber(item.UserId or item.UserID or item.PlayerId or item.key) == userId then
@@ -27924,7 +27925,7 @@ local RivalsRuntime = {}
                     })
                 end
 
-                local function resetLeaderboard(name)
+                AethereaFns.resetLeaderboard = function(name)
                     if not LBC then return end
                     local serial = LBC.LeaderboardSerials and LBC.LeaderboardSerials[name]
                     if not serial or type(serial.Players) ~= 'table' then return end
@@ -27940,11 +27941,11 @@ local RivalsRuntime = {}
                     end
                 end
 
-                local function modifyLeaderboard(name, value)
+                AethereaFns.modifyLeaderboard = function(name, value)
                     if not LBC then return end
                     local serial = LBC.LeaderboardSerials and LBC.LeaderboardSerials[name]
                     if not serial or type(serial.Players) ~= 'table' then return end
-                    insertLeaderboard(serial.Players, LP.UserId, value)
+                    AethereaFns.insertLeaderboard(serial.Players, LP.UserId, value)
                     if LBC.Refreshed and type(LBC.Refreshed.Fire) == 'function' then
                         pcall(LBC.Refreshed.Fire, LBC.Refreshed, name)
                     end
@@ -27983,7 +27984,7 @@ local RivalsRuntime = {}
                     [3] = function() return AethereaSpoof.charm.s3 end,
                 }
 
-                local function updateLeaderboard()
+                AethereaFns.updateLeaderboard = function()
                     local data = AethereaSpoof.leaderboard
                     local values = {
                         ELO = {'Highest ELO', data.elo},
@@ -27994,9 +27995,9 @@ local RivalsRuntime = {}
                     }
                     for key, pair in pairs(values) do
                         if data[key] then
-                            modifyLeaderboard(pair[1], pair[2])
+                            AethereaFns.modifyLeaderboard(pair[1], pair[2])
                         else
-                            resetLeaderboard(pair[1])
+                            AethereaFns.resetLeaderboard(pair[1])
                         end
                     end
                     if data.Streak then
@@ -28011,10 +28012,10 @@ local RivalsRuntime = {}
                     elseif data.oldLevel ~= nil then
                         LP:SetAttribute('Level', data.oldLevel)
                     end
-                    refreshUI()
+                    AethereaFns.refreshUI()
                 end
 
-                local function updateBadges()
+                AethereaFns.updateBadges = function()
                     pcall(function()
                         LP:SetAttribute('IsInfluencer', AethereaSpoof.badges.Influencer == true)
                         LP:SetAttribute('IsRobloxEmployee', AethereaSpoof.badges.Admin == true)
@@ -28078,7 +28079,7 @@ local RivalsRuntime = {}
                     end
                 end
 
-                local function updateCurrency()
+                AethereaFns.updateCurrency = function()
                     if not PDC or not PDC.CurrentData then return end
                     pcall(function()
                         PDC.CurrentData:Replicate('WeaponKeys')
@@ -28089,7 +28090,7 @@ local RivalsRuntime = {}
                     end)
                 end
 
-                local function updateDuelHistory()
+                AethereaFns.updateDuelHistory = function()
                     local d = AethereaSpoof.duelHistory
                     if type(d.history) ~= 'table' or type(d.logged) ~= 'table' then return end
                     local match = d.history[d.matchIndex]
@@ -28120,22 +28121,22 @@ local RivalsRuntime = {}
                     end)
                 end
 
-                local function initializeSpoofHooks()
+                AethereaFns.initializeSpoofHooks = function()
                     if not AethereaSpoof.initialized then
                         for _, obj in ipairs(game:GetDescendants()) do
-                            registerText(obj)
-                            registerImage(obj)
+                            AethereaFns.registerText(obj)
+                            AethereaFns.registerImage(obj)
                         end
                         AethereaSpoof.miscConnections[#AethereaSpoof.miscConnections + 1] = game.DescendantAdded:Connect(function(obj)
-                            registerText(obj)
-                            registerImage(obj)
+                            AethereaFns.registerText(obj)
+                            AethereaFns.registerImage(obj)
                         end)
                         AethereaSpoof.miscConnections[#AethereaSpoof.miscConnections + 1] = LP.CharacterAdded:Connect(function()
                             task.defer(function()
                                 if AethereaSpoof.spoofAvatar then
-                                    avatarSpoof()
+                                    AethereaFns.avatarSpoof()
                                 end
-                                refreshUI()
+                                AethereaFns.refreshUI()
                             end)
                         end)
                         AethereaSpoof.initialized = true
@@ -28147,11 +28148,11 @@ local RivalsRuntime = {}
                 Platform:AddDropdown('AethSpoofDevice', {Values={'Desktop','Mobile','Console','VR'}, Default='Desktop', Multi=false, Text='Device'})
                 Platform:AddToggle('AethSpoofDeviceToggle', {Text='Spoof Device', Default=false, Callback=function(value)
                     AethereaSpoof.spoofDevice = value == true
-                    setDevice(not AethereaSpoof.spoofDevice)
+                    AethereaFns.setDevice(not AethereaSpoof.spoofDevice)
                 end})
                 Platform:AddToggle('AethSpoofDeviceSpam', {Text='Device Spam', Default=false, Callback=function(value)
                     AethereaSpoof.deviceSpam = value == true
-                    deviceSpam()
+                    AethereaFns.deviceSpam()
                 end})
                 Platform:AddSlider('AethSpoofRate', {Text='Spam Rate', Default=1, Min=0.1, Max=5, Rounding=2, Compact=true})
                 Options.AethSpoofRate:OnChanged(function(value)
@@ -28165,11 +28166,11 @@ local RivalsRuntime = {}
                 Options.AethSpoofUsername:OnChanged(function(value) AethereaSpoof.usernameValue = tostring(value or '') end)
                 PlayerGroup:AddToggle('AethSpoofDisplayToggle', {Text='Spoof Display Name', Default=false, Callback=function(value)
                     AethereaSpoof.displayName = value == true
-                    refreshUI()
+                    AethereaFns.refreshUI()
                 end})
                 PlayerGroup:AddToggle('AethSpoofUsernameToggle', {Text='Spoof Username', Default=false, Callback=function(value)
                     AethereaSpoof.username = value == true
-                    refreshUI()
+                    AethereaFns.refreshUI()
                 end})
                 PlayerGroup:AddInput('AethSpoofAvatarId', {Text='Victim User Id', Default=tostring(LP.UserId), AllowEmpty=false})
                 Options.AethSpoofAvatarId:OnChanged(function(value)
@@ -28177,31 +28178,31 @@ local RivalsRuntime = {}
                 end)
                 PlayerGroup:AddToggle('AethSpoofAvatarToggle', {Text='Spoof Avatar', Default=false, Callback=function(value)
                     AethereaSpoof.spoofAvatar = value == true
-                    avatarSpoof()
-                    refreshUI()
+                    AethereaFns.avatarSpoof()
+                    AethereaFns.refreshUI()
                 end})
                 PlayerGroup:AddToggle('AethSpoofAnon', {Text='Anonymous Mode', Default=false, Callback=function(value)
                     AethereaSpoof.anonymousMode = value == true
-                    refreshUI()
+                    AethereaFns.refreshUI()
                 end})
 
                 local Badges = SpoofTab:AddRightGroupbox('Badges')
                 Badges:AddToggle('AethSpoofPremium', {Text='Premium', Default=false, Callback=function(v) AethereaSpoof.badges.Premium=v end})
                 Badges:AddToggle('AethSpoofVerified', {Text='Verified', Default=false, Callback=function(v) AethereaSpoof.badges.Verified=v end})
-                Badges:AddToggle('AethSpoofInfluencer', {Text='Influencer', Default=false, Callback=function(v) AethereaSpoof.badges.Influencer=v; updateBadges() end})
-                Badges:AddToggle('AethSpoofAdmin', {Text='Admin', Default=false, Callback=function(v) AethereaSpoof.badges.Admin=v; updateBadges() end})
+                Badges:AddToggle('AethSpoofInfluencer', {Text='Influencer', Default=false, Callback=function(v) AethereaSpoof.badges.Influencer=v; AethereaFns.updateBadges() end})
+                Badges:AddToggle('AethSpoofAdmin', {Text='Admin', Default=false, Callback=function(v) AethereaSpoof.badges.Admin=v; AethereaFns.updateBadges() end})
 
                 local Leader = SpoofTab:AddLeftGroupbox('Leaderboard')
-                local function addLB(name, id, field, default)
+                AethereaFns.addLB = function(name, id, field, default)
                     Leader:AddInput(id .. 'Value', {Text=name, Default=tostring(default), AllowEmpty=true})
-                    Options[id .. 'Value']:OnChanged(function(v) AethereaSpoof.leaderboard[field:lower() == field and field or field] = tonumber(v) or 0; updateLeaderboard() end)
-                    Leader:AddToggle(id .. 'Toggle', {Text='Spoof '..name, Default=false, Callback=function(v) AethereaSpoof.leaderboard[field]=v; updateLeaderboard() end})
+                    Options[id .. 'Value']:OnChanged(function(v) AethereaSpoof.leaderboard[field:lower() == field and field or field] = tonumber(v) or 0; AethereaFns.updateLeaderboard() end)
+                    Leader:AddToggle(id .. 'Toggle', {Text='Spoof '..name, Default=false, Callback=function(v) AethereaSpoof.leaderboard[field]=v; AethereaFns.updateLeaderboard() end})
                 end
-                addLB('ELO','AethLB_ELO','ELO',AethereaSpoof.leaderboard.elo)
-                addLB('Streak','AethLB_Streak','Streak',AethereaSpoof.leaderboard.streak)
-                addLB('Kills','AethLB_Kills','Kills',AethereaSpoof.leaderboard.kills)
-                addLB('Wins','AethLB_Wins','Wins',AethereaSpoof.leaderboard.wins)
-                addLB('Level','AethLB_Level','Level',AethereaSpoof.leaderboard.level)
+                AethereaFns.addLB('ELO','AethLB_ELO','ELO',AethereaSpoof.leaderboard.elo)
+                AethereaFns.addLB('Streak','AethLB_Streak','Streak',AethereaSpoof.leaderboard.streak)
+                AethereaFns.addLB('Kills','AethLB_Kills','Kills',AethereaSpoof.leaderboard.kills)
+                AethereaFns.addLB('Wins','AethLB_Wins','Wins',AethereaSpoof.leaderboard.wins)
+                AethereaFns.addLB('Level','AethLB_Level','Level',AethereaSpoof.leaderboard.level)
 
                 local Charm = SpoofTab:AddRightGroupbox('Charm')
                 Charm:AddDropdown('AethCharmRank', {Values={
@@ -28217,53 +28218,53 @@ local RivalsRuntime = {}
                 Charm:AddToggle('AethCharmS3', {Text='Season 3 Charm', Default=false, Callback=function(v) AethereaSpoof.charm.s3=v end})
 
                 local Currency = SpoofTab:AddLeftGroupbox('Currency')
-                local function addCurrency(label, id, field, toggleField)
+                AethereaFns.addCurrency = function(label, id, field, toggleField)
                     Currency:AddInput(id..'Value',{Text=label,Default=tostring(AethereaSpoof.currency[field]),AllowEmpty=true})
-                    Options[id..'Value']:OnChanged(function(v) AethereaSpoof.currency[field]=tonumber(v) or 0; updateCurrency() end)
-                    Currency:AddToggle(id..'Toggle',{Text='Spoof '..label,Default=false,Callback=function(v) AethereaSpoof.currency[toggleField]=v; updateCurrency() end})
+                    Options[id..'Value']:OnChanged(function(v) AethereaSpoof.currency[field]=tonumber(v) or 0; AethereaFns.updateCurrency() end)
+                    Currency:AddToggle(id..'Toggle',{Text='Spoof '..label,Default=false,Callback=function(v) AethereaSpoof.currency[toggleField]=v; AethereaFns.updateCurrency() end})
                 end
-                addCurrency('Keys','AethCurKeys','keysValue','keys')
-                addCurrency('Tokens','AethCurTokens','tokensValue','tokens')
-                addCurrency('Event Currency','AethCurEvent','eventCurrencyValue','eventCurrency')
-                addCurrency('Glory','AethCurGlory','gloryValue','glory')
-                addCurrency('Tickets','AethCurTickets','ticketsValue','tickets')
+                AethereaFns.addCurrency('Keys','AethCurKeys','keysValue','keys')
+                AethereaFns.addCurrency('Tokens','AethCurTokens','tokensValue','tokens')
+                AethereaFns.addCurrency('Event Currency','AethCurEvent','eventCurrencyValue','eventCurrency')
+                AethereaFns.addCurrency('Glory','AethCurGlory','gloryValue','glory')
+                AethereaFns.addCurrency('Tickets','AethCurTickets','ticketsValue','tickets')
 
                 local Duel = SpoofTab:AddRightGroupbox('Duel History')
                 Duel:AddSlider('AethDuelMatch',{Text='Match Index',Default=1,Min=1,Max=25,Rounding=0,Compact=true})
-                Options.AethDuelMatch:OnChanged(function(v) AethereaSpoof.duelHistory.matchIndex=math.max(1,math.floor(tonumber(v) or 1)); updateDuelHistory() end)
-                Duel:AddDropdown('AethDuelMode',{Values={'Ranked','Casual'},Default='Ranked',Multi=false,Text='Mode',Callback=function(v) AethereaSpoof.duelHistory.mode=v; updateDuelHistory() end})
-                Duel:AddDropdown('AethDuelResult',{Values={'Victory','Defeat'},Default='Victory',Multi=false,Text='Result',Callback=function(v) AethereaSpoof.duelHistory.result=v; updateDuelHistory() end})
+                Options.AethDuelMatch:OnChanged(function(v) AethereaSpoof.duelHistory.matchIndex=math.max(1,math.floor(tonumber(v) or 1)); AethereaFns.updateDuelHistory() end)
+                Duel:AddDropdown('AethDuelMode',{Values={'Ranked','Casual'},Default='Ranked',Multi=false,Text='Mode',Callback=function(v) AethereaSpoof.duelHistory.mode=v; AethereaFns.updateDuelHistory() end})
+                Duel:AddDropdown('AethDuelResult',{Values={'Victory','Defeat'},Default='Victory',Multi=false,Text='Result',Callback=function(v) AethereaSpoof.duelHistory.result=v; AethereaFns.updateDuelHistory() end})
                 Duel:AddInput('AethDuelMap',{Text='Map',Default='Factory',AllowEmpty=true})
-                Options.AethDuelMap:OnChanged(function(v) AethereaSpoof.duelHistory.map=tostring(v or 'Factory'); updateDuelHistory() end)
+                Options.AethDuelMap:OnChanged(function(v) AethereaSpoof.duelHistory.map=tostring(v or 'Factory'); AethereaFns.updateDuelHistory() end)
                 Duel:AddSlider('AethDuelTeam1',{Text='Team 1 Score',Default=5,Min=0,Max=100,Rounding=0,Compact=true})
                 Duel:AddSlider('AethDuelTeam2',{Text='Team 2 Score',Default=0,Min=0,Max=100,Rounding=0,Compact=true})
-                Options.AethDuelTeam1:OnChanged(function(v) AethereaSpoof.duelHistory.team1=tonumber(v) or 0; updateDuelHistory() end)
-                Options.AethDuelTeam2:OnChanged(function(v) AethereaSpoof.duelHistory.team2=tonumber(v) or 0; updateDuelHistory() end)
+                Options.AethDuelTeam1:OnChanged(function(v) AethereaSpoof.duelHistory.team1=tonumber(v) or 0; AethereaFns.updateDuelHistory() end)
+                Options.AethDuelTeam2:OnChanged(function(v) AethereaSpoof.duelHistory.team2=tonumber(v) or 0; AethereaFns.updateDuelHistory() end)
                 Duel:AddInput('AethDuelUsername',{Text='Username',Default='',AllowEmpty=true})
                 Duel:AddInput('AethDuelDisplay',{Text='Display Name',Default='',AllowEmpty=true})
-                Options.AethDuelUsername:OnChanged(function(v) AethereaSpoof.duelHistory.username=tostring(v or ''); updateDuelHistory() end)
-                Options.AethDuelDisplay:OnChanged(function(v) AethereaSpoof.duelHistory.displayName=tostring(v or ''); updateDuelHistory() end)
+                Options.AethDuelUsername:OnChanged(function(v) AethereaSpoof.duelHistory.username=tostring(v or ''); AethereaFns.updateDuelHistory() end)
+                Options.AethDuelDisplay:OnChanged(function(v) AethereaSpoof.duelHistory.displayName=tostring(v or ''); AethereaFns.updateDuelHistory() end)
                 Duel:AddSlider('AethDuelKills',{Text='Kills',Default=15,Min=0,Max=999,Rounding=0,Compact=true})
                 Duel:AddSlider('AethDuelDeaths',{Text='Deaths',Default=2,Min=0,Max=999,Rounding=0,Compact=true})
                 Duel:AddSlider('AethDuelAssists',{Text='Assists',Default=6,Min=0,Max=999,Rounding=0,Compact=true})
                 Duel:AddSlider('AethDuelDamage',{Text='Damage',Default=5000,Min=0,Max=100000,Rounding=0,Compact=true})
-                Options.AethDuelKills:OnChanged(function(v) AethereaSpoof.duelHistory.kills=tonumber(v) or 0; updateDuelHistory() end)
-                Options.AethDuelDeaths:OnChanged(function(v) AethereaSpoof.duelHistory.deaths=tonumber(v) or 0; updateDuelHistory() end)
-                Options.AethDuelAssists:OnChanged(function(v) AethereaSpoof.duelHistory.assists=tonumber(v) or 0; updateDuelHistory() end)
-                Options.AethDuelDamage:OnChanged(function(v) AethereaSpoof.duelHistory.damage=tonumber(v) or 0; updateDuelHistory() end)
+                Options.AethDuelKills:OnChanged(function(v) AethereaSpoof.duelHistory.kills=tonumber(v) or 0; AethereaFns.updateDuelHistory() end)
+                Options.AethDuelDeaths:OnChanged(function(v) AethereaSpoof.duelHistory.deaths=tonumber(v) or 0; AethereaFns.updateDuelHistory() end)
+                Options.AethDuelAssists:OnChanged(function(v) AethereaSpoof.duelHistory.assists=tonumber(v) or 0; AethereaFns.updateDuelHistory() end)
+                Options.AethDuelDamage:OnChanged(function(v) AethereaSpoof.duelHistory.damage=tonumber(v) or 0; AethereaFns.updateDuelHistory() end)
                 Duel:AddSlider('AethDuelELO',{Text='ELO',Default=2000,Min=0,Max=5000,Rounding=0,Compact=true})
                 Duel:AddSlider('AethDuelELOChange',{Text='ELO Change',Default=35,Min=-1000,Max=1000,Rounding=0,Compact=true})
-                Options.AethDuelELO:OnChanged(function(v) AethereaSpoof.duelHistory.elo=tonumber(v) or 0; updateDuelHistory() end)
-                Options.AethDuelELOChange:OnChanged(function(v) AethereaSpoof.duelHistory.eloChange=tonumber(v) or 0; updateDuelHistory() end)
+                Options.AethDuelELO:OnChanged(function(v) AethereaSpoof.duelHistory.elo=tonumber(v) or 0; AethereaFns.updateDuelHistory() end)
+                Options.AethDuelELOChange:OnChanged(function(v) AethereaSpoof.duelHistory.eloChange=tonumber(v) or 0; AethereaFns.updateDuelHistory() end)
 
                 local SkinTab = Tabs.Cosmetic
                 local Unlocker = SkinTab:AddLeftGroupbox('Unlocker')
                 Unlocker:AddDropdown('AethSkinUnlockType',{Values={'Skin','Wrap','Charm','Finisher'},Default='Skin',Multi=false,Text='Type',Callback=function(v) AethereaSkin.unlockType=v end})
                 Unlocker:AddDropdown('AethSkinUnlockRarity',{Values={'Common','Rare','Legendary','Mythical','Unique','Unobtainable'},Default='Common',Multi=false,Text='Rarity',Callback=function(v) AethereaSkin.unlockRarity=v end})
-                Unlocker:AddButton({Text='Unlock Selected Rarity',Func=unlockRarity})
-                Unlocker:AddButton({Text='Lock Selected Rarity',Func=lockRarity})
-                Unlocker:AddButton({Text='Unlock All of Type',Func=unlockType})
-                Unlocker:AddButton({Text='Lock All of Type',Func=lockType})
+                Unlocker:AddButton({Text='Unlock Selected Rarity',Func=AethereaFns.unlockRarity})
+                Unlocker:AddButton({Text='Lock Selected Rarity',Func=AethereaFns.lockRarity})
+                Unlocker:AddButton({Text='Unlock All of Type',Func=AethereaFns.unlockType})
+                Unlocker:AddButton({Text='Lock All of Type',Func=AethereaFns.lockType})
 
                 local Specific = SkinTab:AddRightGroupbox('Specific')
                 Specific:AddDropdown('AethSkinSpecificType',{Values={'Skin','Wrap','Charm','Finisher'},Default='Skin',Multi=false,Text='Type',Callback=function(v) AethereaSkin.specificType=v end})
@@ -28271,10 +28272,10 @@ local RivalsRuntime = {}
                 Specific:AddInput('AethSkinSpecificWeapon',{Text='Weapon',Default='',AllowEmpty=true})
                 Options.AethSkinSpecificCosmetic:OnChanged(function(v) AethereaSkin.specificCosmetic=tostring(v or '') end)
                 Options.AethSkinSpecificWeapon:OnChanged(function(v) AethereaSkin.specificWeapon=tostring(v or '') end)
-                Specific:AddButton({Text='Unlock Specific',Func=unlockSpecific})
-                Specific:AddButton({Text='Lock Specific',Func=lockSpecific})
-                Specific:AddButton({Text='Unlock Specific Weapon',Func=unlockSpecificWeapon})
-                Specific:AddButton({Text='Lock Specific Weapon',Func=lockSpecificWeapon})
+                Specific:AddButton({Text='Unlock Specific',Func=AethereaFns.unlockSpecific})
+                Specific:AddButton({Text='Lock Specific',Func=AethereaFns.lockSpecific})
+                Specific:AddButton({Text='Unlock Specific Weapon',Func=AethereaFns.unlockSpecificWeapon})
+                Specific:AddButton({Text='Lock Specific Weapon',Func=AethereaFns.lockSpecificWeapon})
 
                 local Equip = SkinTab:AddLeftGroupbox('Equip')
                 Equip:AddDropdown('AethSkinEquipType',{Values={'Skin','Wrap','Charm','Finisher'},Default='Skin',Multi=false,Text='Type',Callback=function(v) AethereaSkin.equipType=v end})
@@ -28283,32 +28284,32 @@ local RivalsRuntime = {}
                 Equip:AddToggle('AethSkinEquipInverted',{Text='Inverted',Default=false,Callback=function(v) AethereaSkin.equipInverted=v end})
                 Options.AethSkinEquipCosmetic:OnChanged(function(v) AethereaSkin.equipCosmetic=tostring(v or '') end)
                 Options.AethSkinEquipWeapon:OnChanged(function(v) AethereaSkin.equipWeapon=tostring(v or '') end)
-                Equip:AddButton({Text='Apply',Func=equipApply})
-                Equip:AddButton({Text='Apply to all weapons',Func=equipApplyAll})
+                Equip:AddButton({Text='Apply',Func=AethereaFns.equipApply})
+                Equip:AddButton({Text='Apply to all weapons',Func=AethereaFns.equipApplyAll})
 
                 local Bulk = SkinTab:AddRightGroupbox('Bulk')
-                Bulk:AddButton({Text='Unlock All Weapons',Func=unlockAllWeapons})
-                Bulk:AddButton({Text='Lock All Weapons',Func=lockAllWeapons})
-                Bulk:AddButton({Text='Unlock All for Weapon',Func=unlockAllForWeapon})
-                Bulk:AddButton({Text='Lock All for Weapon',Func=lockAllForWeapon})
-                Bulk:AddButton({Text='Unlock All',Func=unlockAll})
-                Bulk:AddButton({Text='Lock All',Func=lockAll})
-                Bulk:AddButton({Text='Refresh',Func=refreshSkin})
+                Bulk:AddButton({Text='Unlock All Weapons',Func=AethereaFns.unlockAllWeapons})
+                Bulk:AddButton({Text='Lock All Weapons',Func=AethereaFns.lockAllWeapons})
+                Bulk:AddButton({Text='Unlock All for Weapon',Func=AethereaFns.unlockAllForWeapon})
+                Bulk:AddButton({Text='Lock All for Weapon',Func=AethereaFns.lockAllForWeapon})
+                Bulk:AddButton({Text='Unlock All',Func=AethereaFns.unlockAll})
+                Bulk:AddButton({Text='Lock All',Func=AethereaFns.lockAll})
+                Bulk:AddButton({Text='Refresh',Func=AethereaFns.refreshSkin})
 
-                installSkinHooks()
-                initializeSpoofHooks()
+                AethereaFns.installSkinHooks()
+                AethereaFns.initializeSpoofHooks()
 
                 RivalsRuntimeBridge.AethereaSkin = AethereaSkin
                 RivalsRuntimeBridge.AethereaSpoof = AethereaSpoof
-                RivalsRuntimeBridge.AethereaSkinUnlockRarity = unlockRarity
-                RivalsRuntimeBridge.AethereaSkinUnlockType = unlockType
-                RivalsRuntimeBridge.AethereaSkinUnlockAll = unlockAll
-                RivalsRuntimeBridge.AethereaSkinEquip = equipApply
-                RivalsRuntimeBridge.AethereaSpoofSetDevice = setDevice
-                RivalsRuntimeBridge.AethereaSpoofUpdateLeaderboard = updateLeaderboard
-                RivalsRuntimeBridge.AethereaSpoofUpdateBadges = updateBadges
-                RivalsRuntimeBridge.AethereaSpoofUpdateCurrency = updateCurrency
-                RivalsRuntimeBridge.AethereaSpoofUpdateDuelHistory = updateDuelHistory
+                RivalsRuntimeBridge.AethereaSkinUnlockRarity = AethereaFns.unlockRarity
+                RivalsRuntimeBridge.AethereaSkinUnlockType = AethereaFns.unlockType
+                RivalsRuntimeBridge.AethereaSkinUnlockAll = AethereaFns.unlockAll
+                RivalsRuntimeBridge.AethereaSkinEquip = AethereaFns.equipApply
+                RivalsRuntimeBridge.AethereaSpoofSetDevice = AethereaFns.setDevice
+                RivalsRuntimeBridge.AethereaSpoofUpdateLeaderboard = AethereaFns.updateLeaderboard
+                RivalsRuntimeBridge.AethereaSpoofUpdateBadges = AethereaFns.updateBadges
+                RivalsRuntimeBridge.AethereaSpoofUpdateCurrency = AethereaFns.updateCurrency
+                RivalsRuntimeBridge.AethereaSpoofUpdateDuelHistory = AethereaFns.updateDuelHistory
             end
 
             RivalsRuntime.Initialize(Window)
