@@ -77,11 +77,12 @@ end
 local undergroundEnabled = false
 local undergroundDepth = 0.5
 local undergroundConn = nil
-local undergroundPreSimulationConn = nil
-local undergroundCameraConn = nil
+local undergroundRenderConn = nil
 local undergroundSnapshot = nil
 local undergroundSnapshotCharacter = nil
-local undergroundCameraHeight = nil
+local undergroundLocalCFrame = nil
+local undergroundLocalVelocity = nil
+local undergroundLocalAngularVelocity = nil
 
 local function undergroundGetCharacter()
     return lp.Character
@@ -103,19 +104,18 @@ local function undergroundGetDepth()
     return depth
 end
 
-local function undergroundFindFloorY(char, root)
+local function undergroundFindFloorY(char, root, position)
     if not root then return nil end
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = { char }
-    local origin = Vector3.new(root.Position.X, root.Position.Y + 8, root.Position.Z)
+    local p = position or root.Position
+    local origin = Vector3.new(p.X, p.Y + 8, p.Z)
     local result = Workspace:Raycast(origin, Vector3.new(0, -64, 0), params)
     return result and result.Position.Y or nil
 end
 
 local function undergroundCapture(char, root, humanoid)
-    local floorY = undergroundFindFloorY(char, root)
-    local camera = Workspace.CurrentCamera
     undergroundSnapshot = {
         character = char,
         pivot = char:GetPivot(),
@@ -124,21 +124,11 @@ local function undergroundCapture(char, root, humanoid)
         rootAngularVelocity = root.AssemblyAngularVelocity,
         humanoidState = humanoid and humanoid:GetState() or nil,
         humanoidAutoRotate = humanoid and humanoid.AutoRotate or nil,
-        floorY = floorY,
-        parts = {},
     }
-    if camera and floorY ~= nil then
-        undergroundCameraHeight = camera.CFrame.Position.Y - floorY
-    else
-        undergroundCameraHeight = nil
-    end
-    for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA('BasePart') then
-            undergroundSnapshot.parts[part] = part.CanCollide
-            pcall(function() part.CanCollide = false end)
-        end
-    end
     undergroundSnapshotCharacter = char
+    undergroundLocalCFrame = root.CFrame
+    undergroundLocalVelocity = root.AssemblyLinearVelocity
+    undergroundLocalAngularVelocity = root.AssemblyAngularVelocity
 end
 
 local function undergroundRestore()
@@ -147,23 +137,20 @@ local function undergroundRestore()
     if not snapshot or char ~= snapshot.character then
         undergroundSnapshot = nil
         undergroundSnapshotCharacter = nil
-        undergroundCameraHeight = nil
+        undergroundLocalCFrame = nil
+        undergroundLocalVelocity = nil
+        undergroundLocalAngularVelocity = nil
         return
     end
     local root = undergroundGetRoot(char)
     local humanoid = undergroundGetHumanoid(char)
     if root then
         pcall(function()
-            char:PivotTo(snapshot.pivot)
             root.CFrame = snapshot.rootCFrame
             root.AssemblyLinearVelocity = snapshot.rootVelocity
             root.AssemblyAngularVelocity = snapshot.rootAngularVelocity
         end)
-    end
-    for part, canCollide in pairs(snapshot.parts) do
-        if part and part.Parent then
-            pcall(function() part.CanCollide = canCollide end)
-        end
+        pcall(function() char:PivotTo(snapshot.pivot) end)
     end
     if humanoid then
         pcall(function()
@@ -177,54 +164,36 @@ local function undergroundRestore()
     end
     undergroundSnapshot = nil
     undergroundSnapshotCharacter = nil
-    undergroundCameraHeight = nil
+    undergroundLocalCFrame = nil
+    undergroundLocalVelocity = nil
+    undergroundLocalAngularVelocity = nil
 end
 
-local function undergroundApply(char, root, humanoid)
-    local floorY = undergroundFindFloorY(char, root)
-    if floorY == nil then return end
+local function undergroundBuildServerCFrame(char, root)
+    local localCFrame = root.CFrame
+    local floorY = undergroundFindFloorY(char, root, localCFrame.Position)
+    if floorY == nil then return nil end
     local depth = undergroundGetDepth()
-    local snapshot = undergroundSnapshot
-    local sourceCFrame = snapshot and snapshot.rootCFrame or root.CFrame
-    local _, yaw = sourceCFrame:ToOrientation()
-    local laidPivot = CFrame.new(root.Position.X, root.Position.Y, root.Position.Z)
+    local _, yaw = localCFrame:ToOrientation()
+    local laidPivot = CFrame.new(localCFrame.Position)
         * CFrame.Angles(0, yaw, 0)
         * CFrame.Angles(math.rad(90), 0, 0)
-    char:PivotTo(laidPivot)
-    local boxCFrame, boxSize = char:GetBoundingBox()
-    local boxTopY = boxCFrame.Position.Y + boxSize.Y * 0.5
-    local correctionY = (floorY - depth) - boxTopY
-    local targetPivot = CFrame.new(0, correctionY, 0) * laidPivot
-    char:PivotTo(targetPivot)
-    pcall(function()
-        root.CFrame = targetPivot
-        humanoid.AutoRotate = false
-        humanoid:ChangeState(Enum.HumanoidStateType.Physics)
-        root.AssemblyLinearVelocity = Vector3.zero
-        root.AssemblyAngularVelocity = Vector3.zero
+    local ok, serverCFrame = pcall(function()
+        root.CFrame = laidPivot
+        local boxCFrame, boxSize = char:GetBoundingBox()
+        local boxTopY = boxCFrame.Position.Y + boxSize.Y * 0.5
+        local correctionY = (floorY - depth) - boxTopY
+        return CFrame.new(0, correctionY, 0) * laidPivot
     end)
-    return floorY
-end
-
-local function undergroundUpdateCamera()
-    if not undergroundEnabled then return end
-    local camera = Workspace.CurrentCamera
-    if not camera then return end
-    local char = undergroundGetCharacter()
-    local root = undergroundGetRoot(char)
-    if not char or not root or char ~= undergroundSnapshotCharacter then return end
-    local floorY = undergroundFindFloorY(char, root)
-    if floorY == nil then
-        floorY = undergroundSnapshot and undergroundSnapshot.floorY or nil
+    if not ok then
+        pcall(function() root.CFrame = localCFrame end)
+        return nil
     end
-    if floorY == nil or undergroundCameraHeight == nil then return end
-    local cf = camera.CFrame
-    local targetY = floorY + undergroundCameraHeight
-    camera.CFrame = CFrame.new(cf.Position.X, targetY, cf.Position.Z) * cf.Rotation
+    return serverCFrame
 end
 
 startUnderground = function()
-    if undergroundConn or undergroundPreSimulationConn then return end
+    if undergroundConn or undergroundRenderConn then return end
     local char = undergroundGetCharacter()
     local root = undergroundGetRoot(char)
     local humanoid = undergroundGetHumanoid(char)
@@ -232,49 +201,54 @@ startUnderground = function()
     undergroundGetDepth()
     undergroundCapture(char, root, humanoid)
     undergroundEnabled = true
-    undergroundPreSimulationConn = RunService.PreSimulation:Connect(function()
-        if not undergroundEnabled then return end
-        local currentChar = undergroundGetCharacter()
-        local currentRoot = undergroundGetRoot(currentChar)
-        local currentHumanoid = undergroundGetHumanoid(currentChar)
-        if not currentRoot or not currentHumanoid then
-            return
-        end
-        if currentChar ~= undergroundSnapshotCharacter then
-            undergroundSnapshot = nil
-            undergroundSnapshotCharacter = nil
-            undergroundCameraHeight = nil
-            undergroundCapture(currentChar, currentRoot, currentHumanoid)
-        end
-        pcall(function()
-            undergroundApply(currentChar, currentRoot, currentHumanoid)
-        end)
-    end)
     undergroundConn = RunService.Heartbeat:Connect(function()
         if not undergroundEnabled then return end
         local currentChar = undergroundGetCharacter()
         local currentRoot = undergroundGetRoot(currentChar)
         local currentHumanoid = undergroundGetHumanoid(currentChar)
-        if not currentRoot or not currentHumanoid then
-            return
-        end
+        if not currentChar or not currentRoot or not currentHumanoid then return end
         if currentChar ~= undergroundSnapshotCharacter then
             undergroundSnapshot = nil
             undergroundSnapshotCharacter = nil
-            undergroundCameraHeight = nil
             undergroundCapture(currentChar, currentRoot, currentHumanoid)
         end
-        pcall(function()
-            undergroundApply(currentChar, currentRoot, currentHumanoid)
-        end)
+        local ok, serverCFrame = pcall(undergroundBuildServerCFrame, currentChar, currentRoot)
+        if not ok or serverCFrame == nil then
+            undergroundLocalCFrame = currentRoot.CFrame
+            undergroundLocalVelocity = currentRoot.AssemblyLinearVelocity
+            undergroundLocalAngularVelocity = currentRoot.AssemblyAngularVelocity
+            return
+        end
+        undergroundLocalCFrame = currentRoot.CFrame
+        undergroundLocalVelocity = currentRoot.AssemblyLinearVelocity
+        undergroundLocalAngularVelocity = currentRoot.AssemblyAngularVelocity
+        currentRoot.CFrame = serverCFrame
+        currentRoot.AssemblyLinearVelocity = Vector3.zero
+        currentRoot.AssemblyAngularVelocity = Vector3.zero
     end)
-    undergroundCameraConn = RunService:BindToRenderStep('Kicia_UndergroundCamera', Enum.RenderPriority.Last.Value, function()
-        pcall(undergroundUpdateCamera)
+    undergroundRenderConn = RunService:BindToRenderStep('Kicia_UndergroundDesync', Enum.RenderPriority.First.Value, function()
+        if not undergroundEnabled then return end
+        local currentChar = undergroundGetCharacter()
+        local currentRoot = undergroundGetRoot(currentChar)
+        if not currentChar or not currentRoot or currentChar ~= undergroundSnapshotCharacter then return end
+        local localCFrame = undergroundLocalCFrame
+        if localCFrame ~= nil then
+            pcall(function()
+                currentRoot.CFrame = localCFrame
+                currentRoot.AssemblyLinearVelocity = undergroundLocalVelocity or Vector3.zero
+                currentRoot.AssemblyAngularVelocity = undergroundLocalAngularVelocity or Vector3.zero
+            end)
+        end
     end)
-    pcall(function()
-        undergroundApply(char, root, humanoid)
-        undergroundUpdateCamera()
-    end)
+    local ok, serverCFrame = pcall(undergroundBuildServerCFrame, char, root)
+    if ok and serverCFrame ~= nil then
+        undergroundLocalCFrame = undergroundSnapshot.rootCFrame
+        undergroundLocalVelocity = undergroundSnapshot.rootVelocity
+        undergroundLocalAngularVelocity = undergroundSnapshot.rootAngularVelocity
+        root.CFrame = serverCFrame
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end
 end
 
 stopUnderground = function()
@@ -283,14 +257,10 @@ stopUnderground = function()
         undergroundConn:Disconnect()
         undergroundConn = nil
     end
-    if undergroundPreSimulationConn then
-        undergroundPreSimulationConn:Disconnect()
-        undergroundPreSimulationConn = nil
+    if undergroundRenderConn then
+        pcall(function() RunService:UnbindFromRenderStep('Kicia_UndergroundDesync') end)
+        undergroundRenderConn = nil
     end
-    pcall(function()
-        RunService:UnbindFromRenderStep('Kicia_UndergroundCamera')
-    end)
-    undergroundCameraConn = nil
     undergroundRestore()
 end
 
@@ -2531,8 +2501,9 @@ return {
                 end
                 local viewAngles = meleeViewAngles(target, targetRootPart, hitboxHead)
                 local now = os.clock()
-                if self._meleeDwellTarget ~= target then
-                    self._meleeDwellTarget = target
+                local dwellKey = target.player or target.model or target.rootPart or target
+                if self._meleeDwellTarget ~= dwellKey then
+                    self._meleeDwellTarget = dwellKey
                     self._meleeDwellStart = now
                 elseif self._meleeDwellStart == nil then
                     self._meleeDwellStart = now
@@ -2553,9 +2524,6 @@ return {
                     return cframe, viewAngles, nil
                 end
                 local objectId = itemObjectId(item)
-                if objectId == nil then
-                    return cframe, viewAngles, nil
-                end
                 local attempts = Setting.ShootFrames()
                 local function weaponAction()
                     for _ = 1, attempts do
