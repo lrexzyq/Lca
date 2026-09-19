@@ -75,7 +75,7 @@ local function ResolveGlobalEnv()
     return _G
 end
 local undergroundEnabled = false
-local undergroundDepth = 0.5
+local undergroundDepth = 1.0
 local undergroundDesync = nil
 local undergroundConn = nil
 local undergroundSnapshot = nil
@@ -130,8 +130,8 @@ end
 
 local function undergroundGetDepth()
     local value = Options and Options.P8S4S6 and Options.P8S4S6.Value
-    local depth = tonumber(value) or undergroundDepth or 0.5
-    depth = math.clamp(depth, 0.36, 0.67)
+    local depth = tonumber(value) or undergroundDepth or 1.0
+    depth = math.clamp(depth, 0.67, 2.0)
     undergroundDepth = depth
     return depth
 end
@@ -1030,7 +1030,7 @@ return {
             local function fireMeleeRemote(objectId, heavy, hitboxHead, eyeCF, muzzleCF, aimWorldPos, aim1, aim2, extra)
                 local remote = resolveUseItemRemote()
                 local token = enc(heavy and 'StartAiming' or 'StartShooting')
-                local anim = enc(heavy and 'HeavyAttackAnimation1' or 'AttackAnimation1')
+                local anim = enc(heavy and 'HeavyAttack1' or 'Attack1')
                 if not remote or not token or not anim or not objectId then
                     return false
                 end
@@ -1048,7 +1048,7 @@ return {
                 end
                 pcall(function()
                     item._attack_cooldown = 0
-                    item._last_attack = os.clock() - 1
+                    item._last_attack = tick() - 1
                 end)
             end
             local function fireMeleeHybrid(item, objectId, heavy, hitboxHead, eyeCF, muzzleCF, aimWorldPos, aim1, aim2, extra)
@@ -1061,19 +1061,19 @@ return {
                 local method = nil
                 pcall(function() method = item[methodName] end)
                 if type(method) == 'function' then
-                    local ok, result = withThreadIdentity2(function()
+                    local ok = withThreadIdentity2(function()
                         return method(item, eyeCF, eyeCF, hitData)
                     end)
-                    if ok and result ~= false then
+                    if ok then
                         return true
                     end
                 end
                 local lf = resolveLocalFighter()
-                local inputName = heavy and 'StartAiming' or 'StartShooting'
+                local actionName = heavy and 'StartAiming' or 'StartShooting'
                 if lf ~= nil and type(lf.Input) == 'function' then
                     primeMeleeItem(item)
                     local ok = withThreadIdentity2(function()
-                        lf:Input(inputName)
+                        lf:Input(actionName)
                     end)
                     if ok then
                         local cooldown = nil
@@ -1083,7 +1083,10 @@ return {
                         end
                     end
                 end
-                return fireMeleeRemote(objectId, heavy, hitboxHead, eyeCF, muzzleCF, aimWorldPos, aim1, aim2, extra)
+                local ok, result = withThreadIdentity2(function()
+                    return fireMeleeRemote(objectId, heavy, hitboxHead, eyeCF, muzzleCF, aimWorldPos, aim1, aim2, extra)
+                end)
+                return ok == true and result == true
             end
             local cachedFCPrototype = nil
             local function resolveFighterControllerPrototype()
@@ -2341,34 +2344,10 @@ return {
             end
             local BACKSTAB_WINDOW = 0.625
 local BACKSTAB_COOLDOWN = 1.25
-local KNIFE_NAME_TOKENS = { 'knife', 'karambit', 'balisong', 'chancla', 'machete', 'candy cane', 'armature', 'daggers', 'axe' }
-local function isKnifeWeapon(item)
-    local name = itemName(item)
-    if type(name) ~= 'string' then
-        return false
-    end
-    local low = name:lower()
-    for _, token in ipairs(KNIFE_NAME_TOKENS) do
-        if low:find(token, 1, true) then
-            return true
-        end
-    end
-    return false
-end
-local function meleeProfile(item)
-    local profile = nil
-    pcall(function()
-        local info = item and item.Info
-        if info == nil or info.MaxAmmo ~= nil then return end
-        profile = {
-            heavy = info.CriticalDamage ~= nil and type(info.HeavyAttackCooldown) == 'number',
-        }
-    end)
-    return profile
-end
+local MELEE_DWELL_S = 0.07
+local MELEE_KNIFE_TOKENS = { 'knife', 'karambit', 'balisong', 'chancla', 'machete', 'candy cane', 'armature', 'daggers', 'axe' }
 local MeleeStrategy = {}
 MeleeStrategy.__index = MeleeStrategy
-local MELEE_DWELL_S = 0.07
 function MeleeStrategy.new(partGlue)
     return setmetatable({
         _partGlue = partGlue,
@@ -2377,84 +2356,107 @@ function MeleeStrategy.new(partGlue)
         _attackCooldown = -1,
         _meleeDwellStart = nil,
         _meleeDwellTarget = nil,
+        _gluedOurPart = nil,
     }, MeleeStrategy)
 end
-function MeleeStrategy:ClearGlue()
-    return
+local function meleeViewAngles(px, oy)
+    return { kind = 'Normalized', pitch = math.deg(px), yaw = math.deg(oy) }
 end
-local function targetHumanoidViewAngles(target, targetRootPart, hitboxHead)
-    if targetRootPart == nil or targetRootPart.Parent == nil then
+local function meleeProfile(item)
+    local info = itemInfo(item)
+    if type(info) ~= 'table' or info.MaxAmmo ~= nil then
         return nil
     end
-    local _, rootYaw = targetRootPart.CFrame:ToOrientation()
-    local pitch = 0
-    local haveHeadPitch = false
-    if hitboxHead and hitboxHead.Parent then
-        local look = hitboxHead.CFrame.LookVector
-        if isFiniteVector3(look) and look.Magnitude > 1e-4 then
-            pitch = math.asin(math.clamp(look.Y / look.Magnitude, -1, 1))
-            haveHeadPitch = true
+    local name = tostring(itemName(item) or ''):lower()
+    local knife = false
+    for _, token in ipairs(MELEE_KNIFE_TOKENS) do
+        if name:find(token, 1, true) then
+            knife = true
+            break
         end
     end
-    if not haveHeadPitch then
-        local cameraPitch, cameraYaw = getTargetCameraRotation(target)
-        if cameraPitch ~= nil then
-            pitch = cameraPitch
-        end
-        if cameraYaw ~= nil then
-            rootYaw = cameraYaw
+    local heavy = info.CriticalDamage ~= nil and type(info.HeavyAttackCooldown) == 'number'
+    return { heavy = heavy, knife = knife }
+end
+local function meleeObjectId(item)
+    local objectId = itemObjectId(item)
+    if objectId ~= nil then
+        return objectId
+    end
+    pcall(function() objectId = item:Get('ObjectID') end)
+    if objectId == nil then
+        local info = itemInfo(item)
+        if type(info) == 'table' then
+            objectId = info.ObjectID
         end
     end
-    return { kind = 'Normalized', pitch = math.deg(pitch), yaw = math.deg(rootYaw) }
+    return objectId
 end
 function MeleeStrategy:_RecordBackstab()
-    local now = os.clock()
+    local now = tick()
     self._hitboxWindowUntil = now + BACKSTAB_WINDOW
     self._attackCooldown = now + BACKSTAB_COOLDOWN
 end
-function MeleeStrategy:Plan(dt, target, item, ourRootPart, canFire, characterController)
-    local hitboxHead = resolveLiveHead(target)
-    if hitboxHead == nil then
-        return ourRootPart.CFrame, nil, nil
-    end
-    local targetRootPart = target.rootPart
-    if targetRootPart == nil or targetRootPart.Parent == nil or not targetRootPart:IsA('BasePart') then
+function MeleeStrategy:Plan(dt, target, item, ourRootPart, canFire)
+    local hitboxHead, targetRootPart = resolveLiveTarget(target)
+    if hitboxHead == nil or targetRootPart == nil or targetRootPart.Parent == nil then
+        if self._gluedOurPart ~= nil then
+            self._partGlue:Free(self._gluedOurPart)
+            self._gluedOurPart = nil
+        end
         return ourRootPart.CFrame, nil, nil
     end
     local profile = meleeProfile(item)
     if profile == nil then
+        if self._gluedOurPart ~= nil then
+            self._partGlue:Free(self._gluedOurPart)
+            self._gluedOurPart = nil
+        end
         return ourRootPart.CFrame, nil, nil
     end
-    local isKnife = isKnifeWeapon(item)
-    local aimWorldPos = resolveTargetHeadPosition(target, hitboxHead, false) or hitboxHead.Position
+    local targetKey = target.player or target.model or targetRootPart or target
+    local now = tick()
+    if self._meleeDwellTarget ~= targetKey then
+        self._meleeDwellTarget = targetKey
+        self._meleeDwellStart = now
+    end
+    local aimWorldPos = targetRootPart.CFrame:PointToWorldSpace(target.headLocalOffset or targetRootPart.CFrame:PointToObjectSpace(hitboxHead.Position))
+    if not isFiniteVector3(aimWorldPos) then
+        aimWorldPos = hitboxHead.Position
+    end
+    local above = isAbove(target)
     local look = targetRootPart.CFrame.LookVector
-    local flatLook = Vector3.new(look.X, 0, look.Z)
-    if flatLook.Magnitude < 1e-4 then
-        return ourRootPart.CFrame, nil, nil
+    if look.Magnitude < 1e-4 then
+        local px, oy = targetRootPart.CFrame:ToOrientation()
+        return ourRootPart.CFrame, profile.heavy and meleeViewAngles(px, oy) or nil, nil
     end
-    flatLook = flatLook.Unit
-    local desired
-    if isKnife or profile.heavy then
-        desired = targetRootPart.Position - flatLook * 1.2 + Vector3.new(0, 0.6, 0)
+    look = look.Unit
+    local offset
+    if profile.knife or profile.heavy then
+        offset = look * -1.2 + Vector3.new(0, 0.6, 0)
     else
-        desired = aimWorldPos - flatLook * 0.8 + Vector3.new(0, -0.5, 0)
+        offset = look * -0.8 + Vector3.new(0, -0.5, 0)
     end
-    desired = Vector3.new(desired.X, math.max(desired.Y, WorkspaceRB.FallenPartsDestroyHeight + 3), desired.Z)
-    local cframe = safeLookCFrame(desired, aimWorldPos)
-    if cframe == nil then
+    local ok, void = pcall(function()
+        return self._partGlue:Acquire(ourRootPart, hitboxHead)
+    end)
+    if not ok or void == nil then
+        if self._gluedOurPart ~= nil then
+            self._partGlue:Free(self._gluedOurPart)
+            self._gluedOurPart = nil
+        end
         return ourRootPart.CFrame, nil, nil
     end
-    local viewAngles = profile.heavy and targetHumanoidViewAngles(target, targetRootPart, hitboxHead) or nil
-    local now = os.clock()
-    local dwellKey = target.player or target.model or target.rootPart or target
-    if self._meleeDwellTarget ~= dwellKey then
-        self._meleeDwellTarget = dwellKey
-        self._meleeDwellStart = now
+    self._gluedOurPart = ourRootPart
+    local cframe
+    if above and not (profile.knife or profile.heavy) then
+        cframe = CFrame.new(void.Position + offset, aimWorldPos)
+    else
+        cframe = CFrame.new(void.Position + offset, aimWorldPos)
     end
-    if self._meleeDwellStart == nil then
-        self._meleeDwellStart = now
-    end
-    if now - self._meleeDwellStart < MELEE_DWELL_S then
+    local px, oy = targetRootPart.CFrame:ToOrientation()
+    local viewAngles = profile.heavy and meleeViewAngles(px, oy) or nil
+    if now - (self._meleeDwellStart or now) < MELEE_DWELL_S then
         return cframe, viewAngles, nil
     end
     local function weaponAction()
@@ -2468,37 +2470,43 @@ function MeleeStrategy:Plan(dt, target, item, ourRootPart, canFire, characterCon
         if currentProfile == nil then
             return false
         end
-        local currentKnife = isKnifeWeapon(currentItem)
-        local currentAim = resolveTargetHeadPosition(target, currentHead, false) or currentHead.Position
+        local currentAim = currentHead.Position
+        local currentHeadOffset = target.headLocalOffset
+        if currentHeadOffset and isFiniteVector3(currentHeadOffset) then
+            currentAim = currentRoot.CFrame:PointToWorldSpace(currentHeadOffset)
+        end
+        if not isFiniteVector3(currentAim) then
+            return false
+        end
         local currentLook = currentRoot.CFrame.LookVector
-        local currentFlatLook = Vector3.new(currentLook.X, 0, currentLook.Z)
-        if currentFlatLook.Magnitude < 1e-4 then
+        if currentLook.Magnitude < 1e-4 then
             return false
         end
-        currentFlatLook = currentFlatLook.Unit
-        local currentDesired
-        if currentKnife or currentProfile.heavy then
-            currentDesired = currentRoot.Position - currentFlatLook * 1.2 + Vector3.new(0, 0.6, 0)
+        currentLook = currentLook.Unit
+        local currentOffset
+        if currentProfile.knife or currentProfile.heavy then
+            currentOffset = currentLook * -1.2 + Vector3.new(0, 0.6, 0)
         else
-            currentDesired = currentAim - currentFlatLook * 0.8 + Vector3.new(0, -0.5, 0)
+            currentOffset = currentLook * -0.8 + Vector3.new(0, -0.5, 0)
         end
-        currentDesired = Vector3.new(currentDesired.X, math.max(currentDesired.Y, WorkspaceRB.FallenPartsDestroyHeight + 3), currentDesired.Z)
-        local currentCFrame = safeLookCFrame(currentDesired, currentAim)
-        if currentCFrame == nil then
-            return false
-        end
-        local eyePos = currentCFrame.Position + Vector3.new(0, eyeRise(currentCFrame.Position, target.model), 0)
+        local firePark = void.Position + currentOffset
+        local eyePos = firePark + Vector3.new(0, eyeRise(firePark, target.model), 0)
         local eyeCF = safeLookCFrame(eyePos, currentAim)
         if eyeCF == nil then
             return false
         end
         local muzzleCF = eyeCF - Vector3.new(0, EYE_MUZZLE_SEP, 0)
-        local objectId = itemObjectId(currentItem)
-        local fired = fireMeleeHybrid(currentItem, objectId, currentProfile.heavy, currentHead, eyeCF, muzzleCF, currentAim, nil, nil, AIM_EXTRA)
-        if fired and currentKnife then
-            self:_RecordBackstab()
+        local objectId = meleeObjectId(currentItem)
+        if objectId == nil then
+            return false
         end
-        return fired == true
+        local currentAbove = isAbove(target)
+        local _, currentOy, currentOz = currentRoot.CFrame:ToOrientation()
+        local currentPitch = currentAbove and PITCH_ABOVE or PITCH_BELOW
+        local currentAim1 = buildAim(currentAbove and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, currentPitch, currentOy, currentOz)
+        local currentAim2 = buildAim(currentAbove and AIM_ABOVE_END or AIM_BELOW_END, currentPitch, currentOy, currentOz)
+        local currentHeavy = currentProfile.heavy
+        return fireMeleeHybrid(currentItem, objectId, currentHeavy, currentHead, eyeCF, muzzleCF, currentAim, currentAim1, currentAim2, AIM_EXTRA) == true
     end
     return cframe, viewAngles, weaponAction
 end
@@ -2508,6 +2516,11 @@ function MeleeStrategy:ResetState()
     self._meleeDwellStart = nil
     self._meleeDwellTarget = nil
     self._shootLock:Reset()
+    local glued = self._gluedOurPart
+    if glued ~= nil then
+        self._partGlue:Free(glued)
+        self._gluedOurPart = nil
+    end
 end
 local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
             local function applyEnabledFFlags(enabled)
@@ -2765,6 +2778,60 @@ local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
                     controllerInstance = Controller.new()
                 end
                 return controllerInstance
+            end
+            function KiciaRagebot.FireUndergroundDefense(target)
+                if target == nil then
+                    return false
+                end
+                local fighter = resolveLocalFighter()
+                if fighter == nil then
+                    return false
+                end
+                local item = rawget(fighter, 'EquippedItem')
+                if item == nil then
+                    pcall(function() item = fighter.EquippedItem end)
+                end
+                if item == nil or itemType(item) ~= 'Gun' then
+                    return false
+                end
+                if itemAmmo(item) <= 0 or itemIsReloading(item) then
+                    return false
+                end
+                pcall(function()
+                    item._shoot_cooldown = 0
+                    item._shoot_cooldown_no_ammo = 0
+                    item._last_shot = tick() - 1
+                end)
+                local hitboxHead = target.hitboxHead
+                local targetRootPart = target.rootPart
+                if hitboxHead == nil or not hitboxHead.Parent or targetRootPart == nil or not targetRootPart.Parent then
+                    return false
+                end
+                local objectId = itemObjectId(item)
+                if objectId == nil then
+                    return false
+                end
+                local above = isAbove(target)
+                local _, oy, oz = targetRootPart.CFrame:ToOrientation()
+                local pitch = above and PITCH_ABOVE or PITCH_BELOW
+                local aim1 = buildAim(above and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, pitch, oy, oz)
+                local aim2 = buildAim(above and AIM_ABOVE_END or AIM_BELOW_END, pitch, oy, oz)
+                local localRoot = HumanoidRootPart
+                if localRoot == nil or not localRoot.Parent then
+                    return false
+                end
+                local eyeBase = localRoot.Position
+                local eyePos = eyeBase + Vector3.new(0, eyeRise(eyeBase, target.model), 0)
+                local eyeCF = safeLookCFrame(eyePos, hitboxHead.Position)
+                if eyeCF == nil then
+                    return false
+                end
+                local muzzleCF = eyeCF - Vector3.new(0, EYE_MUZZLE_SEP, 0)
+                local fired = false
+                local ok = withThreadIdentity2(function()
+                    fired = fireGun(objectId, itemIsRaycast(item), eyeCF, muzzleCF, hitboxHead, hitboxHead.Position, aim1, aim2, AIM_EXTRA, false, false) == true
+                end)
+                return ok and fired
             end
             function KiciaRagebot.IsEnabled()
                 if not togValue('P8S4T1', false) then
@@ -5049,6 +5116,9 @@ ErrorReporter.set_game(GameName)
             end
             local function IsPlayerInLocalEnvironment(player)
                 if not player or player == LP or player.Parent ~= Players then
+                    return false
+                end
+                if not ShouldShow(player, false) then
                     return false
                 end
                 local localCharacter = LP.Character
@@ -16158,6 +16228,7 @@ ErrorReporter.set_game(GameName)
                 HostileTeleportDeltaStuds  = 50,
                 HostileTeleportMinSpeed    = 150,
                 HostileTeleportWindowSec   = 5,
+                UndergroundDefenseDistance = 10,
                 HostileTeleportMinCount    = 1,
                 HostileTrackerSampleMinDt  = 0.05,
                 HoldCFrameStaleTtlSec      = 0.15,
@@ -16183,6 +16254,9 @@ ErrorReporter.set_game(GameName)
                 LastKillSeatPickAt = 0,
                 LastKnownTargetPos = nil,
                 HostileTeleports = {},
+                UndergroundDefenseActive = false,
+                UndergroundDefenseAutoStarted = false,
+                UndergroundDefenseLastShotAt = 0,
                 LastWeaponName = nil,
                 CachedRanges = nil,
                 LastInsideBarrierAt = 0,
@@ -16628,10 +16702,15 @@ ErrorReporter.set_game(GameName)
                             local dt = now - entry.LastCheckedAt
                             if dt >= minDt then
                                 local dist = (hrp.Position - entry.LastPos).Magnitude
-                                if dist > RivalsRagebot.HostileTeleportDeltaStuds and (dist / dt) > RivalsRagebot.HostileTeleportMinSpeed then
+                                local localChar = LP and LP.Character
+                                local localHrp = localChar and localChar:FindFirstChild('HumanoidRootPart')
+                                local previousLocalDistance = localHrp and (entry.LastPos - localHrp.Position).Magnitude or math.huge
+                                local currentLocalDistance = localHrp and (hrp.Position - localHrp.Position).Magnitude or math.huge
+                                local speed = dist / dt
+                                local instantTeleport = dist > RivalsRagebot.HostileTeleportDeltaStuds and speed > RivalsRagebot.HostileTeleportMinSpeed
+                                local teleportToLocal = previousLocalDistance > RivalsRagebot.UndergroundDefenseDistance and currentLocalDistance <= RivalsRagebot.UndergroundDefenseDistance and speed > RivalsRagebot.HostileTeleportMinSpeed
+                                if instantTeleport or teleportToLocal then
                                     table.insert(entry.Teleports, now)
-                                    local localChar = LP and LP.Character
-                                    local localHrp = localChar and localChar:FindFirstChild('HumanoidRootPart')
                                     if localHrp then
                                         table.insert(entry.Offsets, { Time = now, Offset = hrp.Position - localHrp.Position })
                                     end
@@ -16692,6 +16771,79 @@ ErrorReporter.set_game(GameName)
                 return (entry.Teleports and #entry.Teleports or 0) >= RivalsRagebot.HostileTeleportMinCount
             end
             RivalsRuntimeBridge.IsRageHacker = RivalsRagebot.IsPlayerMarkedCheater
+            function RivalsRagebot.IsUndergroundDefenseActive(now, maxDistance)
+                now = now or tick()
+                maxDistance = maxDistance or RivalsRagebot.UndergroundDefenseDistance
+                local localRoot = HumanoidRootPart
+                if not localRoot or not localRoot.Parent then
+                    return false
+                end
+                for player, entry in pairs(RivalsRagebotState.HostileTeleports) do
+                    local teleports = entry and entry.Teleports
+                    local lastTeleport = type(teleports) == 'table' and teleports[#teleports] or nil
+                    if player and player ~= LP and RivalsRagebot.IsCombatTarget(player) and lastTeleport and (now - lastTeleport) < RivalsRagebot.HostileTeleportWindowSec then
+                        local char = player.Character
+                        local root = char and char:FindFirstChild('HumanoidRootPart')
+                        local humanoid = char and char:FindFirstChildOfClass('Humanoid')
+                        if root and root.Parent and humanoid and humanoid.Health > 0 then
+                            local delta = root.Position - localRoot.Position
+                            if delta.Magnitude <= maxDistance then
+                                return true, player
+                            end
+                        else
+                            entry.Teleports = {}
+                            entry.Offsets = {}
+                        end
+                    end
+                end
+                return false, nil
+            end
+            function RivalsRagebot.ResolveUndergroundDefenseTarget(maxDistance)
+                maxDistance = maxDistance or RivalsRagebot.UndergroundDefenseDistance
+                local localRoot = HumanoidRootPart
+                if not localRoot or not localRoot.Parent then
+                    return nil
+                end
+                local best = nil
+                local bestDistance = maxDistance + 1
+                local filter = RivalsRagebot.LosRaycastParams
+                for _, fighter in ipairs(LocalFighterController and LocalFighterController.Objects or {}) do
+                    local player = fighter and fighter.Player
+                    if player and player ~= LP and player.Parent == Players and RivalsRagebot.IsCombatTarget(player) and ShouldShow(player, false) then
+                        local entity = fighter.Entity
+                        local subject = entity and entity.Model
+                        local humanoid = subject and subject:FindFirstChildOfClass('Humanoid')
+                        local root = subject and subject:FindFirstChild('HumanoidRootPart')
+                        local head = subject and (subject:FindFirstChild('HitboxHead') or subject:FindFirstChild('Head'))
+                        if subject and humanoid and humanoid.Health > 0 and root and root.Parent and head and head.Parent then
+                            local dist = (root.Position - localRoot.Position).Magnitude
+                            if dist <= maxDistance and dist < bestDistance then
+                                local origin = localRoot.Position + Vector3.new(0, 1.5, 0)
+                                local direction = head.Position - origin
+                                if direction.Magnitude > 0 then
+                                    filter.FilterDescendantsInstances = { LP.Character, subject }
+                                    local blocked = Workspace:Raycast(origin, direction, filter)
+                                    if not blocked then
+                                        best = {
+                                            fighter = fighter,
+                                            player = player,
+                                            entity = entity,
+                                            model = subject,
+                                            hitboxHead = head,
+                                            rootPart = root,
+                                            itemObserver = rawget(fighter, 'itemObserver') or rawget(fighter, 'ItemObserver'),
+                                            distance = dist,
+                                            protected = false,
+                                        }
+                                        bestDistance = dist
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+                return best
+            end
             function RivalsRagebot.GetCheaterOffsetPrediction(player)
                 local entry = player and RivalsRagebotState.HostileTeleports and RivalsRagebotState.HostileTeleports[player]
                 if not entry or not entry.Offsets then return nil end
@@ -16893,6 +17045,41 @@ ErrorReporter.set_game(GameName)
                 local enabled = RivalsRagebot.IsEnabled()
                 if enabled and not flightActive then
                     RivalsRagebot.UpdateHostileTeleportTracker(now)
+                end
+                if enabled and not flightActive then
+                    local undergroundDefense, threatPlayer = RivalsRagebot.IsUndergroundDefenseActive(now, RivalsRagebot.UndergroundDefenseDistance)
+                    if undergroundDefense then
+                        RivalsRagebotState.UndergroundDefenseActive = true
+                        if not RivalsRagebotState.UndergroundDefenseAutoStarted and RivalsRuntimeBridge.DestroyKiciaRagebot then
+                            RivalsRuntimeBridge.DestroyKiciaRagebot()
+                        end
+                        local manualUnderground = Toggles.P8S4T10 and Toggles.P8S4T10.Value == true
+                        if not undergroundEnabled then
+                            startUnderground()
+                            if undergroundEnabled and not manualUnderground then
+                                RivalsRagebotState.UndergroundDefenseAutoStarted = true
+                            end
+                        end
+                        local defenseTarget = RivalsRagebot.ResolveUndergroundDefenseTarget(RivalsRagebot.UndergroundDefenseDistance)
+                        RivalsRagebotState.Target = defenseTarget
+                        if defenseTarget and RivalsRuntimeBridge.KiciaRagebot and RivalsRuntimeBridge.KiciaRagebot.FireUndergroundDefense then
+                            local fired = RivalsRuntimeBridge.KiciaRagebot.FireUndergroundDefense(defenseTarget)
+                            if fired then
+                                RivalsRagebotState.UndergroundDefenseLastShotAt = now
+                            end
+                        end
+                        return
+                    end
+                end
+                if RivalsRagebotState.UndergroundDefenseActive then
+                    RivalsRagebotState.UndergroundDefenseActive = false
+                    RivalsRagebotState.Target = nil
+                    RivalsRagebotState.UndergroundDefenseLastShotAt = 0
+                    local manualUnderground = Toggles.P8S4T10 and Toggles.P8S4T10.Value == true
+                    if RivalsRagebotState.UndergroundDefenseAutoStarted and not manualUnderground then
+                        stopUnderground()
+                    end
+                    RivalsRagebotState.UndergroundDefenseAutoStarted = false
                 end
                 if flightActive and RivalsRagebot.IsBaitModeEnabled() then
                     RivalsRagebotState.Target = nil
@@ -25096,9 +25283,9 @@ ErrorReporter.set_game(GameName)
                     local UndergroundBox = Rage:AddDependencyBox()
                     UndergroundBox:AddSlider("P8S4S6", {
                         Text = "Floor Gap",
-                        Default = 0.50,
-                        Min = 0.36,
-                        Max = 0.67,
+                        Default = 1.00,
+                        Min = 0.67,
+                        Max = 2.00,
                         Rounding = 2,
                         Suffix = " studs",
                         Compact = true,
@@ -26707,6 +26894,9 @@ local RivalsRuntime = {}
                 RivalsRagebotState.LastHoldUpdateAt = 0
                 RivalsRagebotState.LastRespawnRequestAt = 0
                 RivalsRagebotState.PhaseClockSec = 0
+                RivalsRagebotState.UndergroundDefenseActive = false
+                RivalsRagebotState.UndergroundDefenseAutoStarted = false
+                RivalsRagebotState.UndergroundDefenseLastShotAt = 0
                 if RivalsRuntimeBridge.KiciaRagebot then
                     RivalsRuntimeBridge.KiciaRagebot.CapsOk = nil
                     RivalsRuntimeBridge.KiciaRagebot.NextCapsCheckAt = 0
