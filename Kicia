@@ -729,10 +729,8 @@ return {
                 end
                 return default
             end
-            -- Runtime state shared by the Ragebot view-angle and melee paths.
-            -- LuaHookViewAngle.Forge/Restore must always have a live local State table.
+            -- Runtime state shared by Ragebot and melee paths.
             local State = {
-                ViewAngleForged = false,
                 RageFireFromPos = nil,
                 RageFireAimPos = nil,
                 RageFireHitPart = nil,
@@ -781,9 +779,7 @@ return {
                 RandomAnchorFromCharacter = function() return togValue('P8S4T8', false) end,
                 RepositionInterval = function() return 0.3 end,
                 RageMode = function() return 'Polar' end,
-                RageKnifeBackstab = function() return togValue('P8S4T11', true) end,
                 RageShieldBackstab = function() return true end,
-                RageKnifeCamForge = function() return true end,
                 RageAttackContinuity = function() return true end,
                 RageGumMode = function() return 'on' end,
                 RageGumVoidFire = function() return true end,
@@ -1535,6 +1531,8 @@ return {
                     _winning = nil,
                     _fullySuppressed = false,
                     _dirty = false,
+                    _silentTargetActive = false,
+                    _silentTargetEncoded = nil,
                 }, ViewAngleDriver)
             end
             function ViewAngleDriver:_Resolve()
@@ -1634,6 +1632,10 @@ return {
                 local driver = self
                 local replacement = {}
                 function replacement.EncodeCameraRotation(_, raw)
+                    if driver._silentTargetActive and driver._silentTargetEncoded ~= nil then
+                        rbRawWrite(instance, '_replication_stopped', false)
+                        return driver._silentTargetEncoded
+                    end
                     if next(driver._slots) == nil and not driver._fullySuppressed then
                         return encodeCameraRotation(raw)
                     end
@@ -1697,24 +1699,59 @@ return {
                 end
                 return pcall(rbFireServerNative, remote, anglesToEncoded(self._winning), nil)
             end
+            function ViewAngleDriver:SendSilentTarget(rootPart)
+                if rootPart == nil or rootPart.Parent == nil then
+                    return false
+                end
+                local myRoot = GetRoot()
+                if myRoot == nil or myRoot.Parent == nil then
+                    self._silentTargetActive = false
+                    self._silentTargetEncoded = nil
+                    return false
+                end
+                local delta = rootPart.Position - myRoot.Position
+                if not isFiniteVector3(delta) or delta.Magnitude > 45 then
+                    self._silentTargetActive = false
+                    self._silentTargetEncoded = nil
+                    return false
+                end
+                local pitch, yaw = rootPart.CFrame:ToOrientation()
+                local encoded = encodeCameraRotation(Vector2.new(pitch, yaw))
+                self._silentTargetActive = true
+                if self._silentTargetEncoded == encoded then
+                    return true
+                end
+                self._silentTargetEncoded = encoded
+                self:_LoadReplicationHook()
+                local remote = resolveCameraRotationRemote()
+                if not remote then
+                    return false
+                end
+                return pcall(rbFireServerNative, remote, encoded, nil)
+            end
+            function ViewAngleDriver:ClearSilentTarget()
+                self._silentTargetActive = false
+                self._silentTargetEncoded = nil
+            end
             function ViewAngleDriver:ClearAll()
                 table.clear(self._slots)
                 self._winning = nil
                 self._dirty = false
+                self:ClearSilentTarget()
             end
             local LuaHookViewAngle = {}
-            function LuaHookViewAngle.Forge(characterController, pitch, yaw)
-                if not Setting.RageKnifeCamForge() or characterController == nil then return false end
-                if type(pitch) ~= 'number' or type(yaw) ~= 'number' then return false end
-                local angles = { kind = 'Normalized', pitch = math.deg(pitch), yaw = math.deg(yaw) }
-                local ok = false
-                pcall(function() ok = characterController:ForceViewAngles(20, angles) == true end)
-                if ok then State.ViewAngleForged = true end
-                return ok
+            function LuaHookViewAngle.MimicTarget(targetRootPart, viewAngleDriver)
+                if type(viewAngleDriver) ~= 'table' then
+                    return false
+                end
+                -- Use the supplied SilentCam mechanism: replicate the target
+                -- HumanoidRootPart orientation without moving CurrentCamera.
+                return viewAngleDriver:SendSilentTarget(targetRootPart) == true
             end
-            function LuaHookViewAngle.Restore(characterController)
-                State.ViewAngleForged = false
-                if characterController then pcall(function() characterController:SendViewAngles(20, nil) end) end
+            function LuaHookViewAngle.ClearTarget(viewAngleDriver)
+                if type(viewAngleDriver) == 'table' then
+                    viewAngleDriver:ClearSilentTarget()
+                end
             end
             function ViewAngleDriver:Destroy()
                 local jointsRestore = self._jointsRestore
@@ -2588,23 +2625,6 @@ return {
                 if not isFiniteVector3(flank) or ragePosIsOOB(flank) or not rageHasLOS(flank, hitboxHead.Position, ignore) then return nil end
                 return flank, shield and 'Anti-riot' or (katana and 'Katana flank' or 'Shield flank')
             end
-            local function localKnifeBackstabPointRuntime(target, hitboxHead)
-                if target == nil or target.model == nil or target.rootPart == nil or not Setting.RageKnifeBackstab() then return nil end
-                if not isFiniteVector3(hitboxHead and hitboxHead.Position) then return nil end
-                if not isLocalKnifeRuntime(runtimeEquippedItem(resolveLocalFighter())) then return nil end
-                local root = target.rootPart
-                local inv = -root.CFrame.LookVector
-                local params = RaycastParams.new()
-                params.FilterType = Enum.RaycastFilterType.Exclude
-                params.FilterDescendantsInstances = { target.model, GetChar() }
-                local point = root.Position + inv * 3.0
-                local ray = WorkspaceRB:Raycast(root.Position, inv * 3.0, params)
-                if ray then point = ray.Position - inv * 0.5 end
-                point = Vector3.new(point.X, math.max(point.Y, rageKillFloor() + 3), point.Z)
-                if not isFiniteVector3(point) or ragePosIsOOB(point) then return nil end
-                if not rageHasLOS(point, hitboxHead.Position, params.FilterDescendantsInstances) then return nil end
-                return point
-            end
             local function orbitVantageRuntime(target, aimPos, knife)
                 if target == nil then return nil end
                 local root = target.rootPart
@@ -3153,6 +3173,7 @@ return {
 
 
             local MELEE_DWELL_S = 0.07
+            local KNIFE_BACKSTAB_INTERVAL = 0.625
             local ATTACK_GAP_HOLD = 0.30
             local MeleeStrategy = {}
             MeleeStrategy.__index = MeleeStrategy
@@ -3168,6 +3189,9 @@ return {
                     _readyTargetKey = nil,
                     _lastPark = nil,
                     _lastParkTargetKey = nil,
+                    _viewAngleDriver = nil,
+                    _gluedOurPart = nil,
+                    _lastKnifeBackstabAt = nil,
                 }, MeleeStrategy)
             end
 
@@ -3186,6 +3210,14 @@ return {
 
             local function meleeTargetKey(target)
                 return target and (target.player or target.model or target.rootPart) or nil
+            end
+
+            function MeleeStrategy:ClearGlue()
+                local glued = self._gluedOurPart
+                if glued ~= nil then
+                    self._partGlue:Free(glued)
+                    self._gluedOurPart = nil
+                end
             end
 
             function MeleeStrategy:_ClearContinuity()
@@ -3236,13 +3268,6 @@ return {
                         status = flankStatus or 'Orbit flank'
                     end
                 end
-                if park == nil and profile.knife then
-                    local backstab = localKnifeBackstabPointRuntime(target, hitboxHead)
-                    if backstab then
-                        park = backstab
-                        status = 'Backstab'
-                    end
-                end
                 if park == nil and Setting.RageMode() == 'Orbit' then
                     park = orbitVantageRuntime(target, aimPos, profile.knife)
                     if park then
@@ -3272,6 +3297,7 @@ return {
                 State.RageGumMode = rageGumMode()
                 State.RageGumVoidFire = false
                 if profile == nil then
+                    self:ClearGlue()
                     self._meleeDwellStart = nil
                     self._meleeDwellTarget = nil
                     return ourRootPart.CFrame, nil, nil
@@ -3285,6 +3311,7 @@ return {
                         State.RageKnifeStatus = 'attack continuity'
                         return held, nil, nil
                     end
+                    self:ClearGlue()
                     self._meleeDwellStart = nil
                     self._meleeDwellTarget = nil
                     return ourRootPart.CFrame, nil, nil
@@ -3295,33 +3322,58 @@ return {
                 if self._meleeDwellTarget ~= targetKey then
                     self._meleeDwellTarget = targetKey
                     self._meleeDwellStart = now
+                    self._lastKnifeBackstabAt = nil
                 elseif self._meleeDwellStart == nil then
                     self._meleeDwellStart = now
                 end
 
+                -- Silent camera replication: copy the target HumanoidRootPart
+                -- rotation while the target is within 45 studs. CurrentCamera is untouched.
+                self._viewAngleDriver = characterController and characterController._viewAngleDriver or self._viewAngleDriver
+                LuaHookViewAngle.MimicTarget(targetRootPart, self._viewAngleDriver)
+
                 local park, aimPos, parkStatus = self:_ResolvePark(target, profile, hitboxHead, targetRootPart)
                 if not isFiniteVector3(park) or ragePosIsOOB(park) then
+                    self:ClearGlue()
                     local held = self:HoldGap(target, ourRootPart)
                     if held then return held, nil, nil end
                     return ourRootPart.CFrame, nil, nil
                 end
 
-                if not self._shootLock:ShouldFire(canFire, (dt or 0) * Setting.ShootFrames()) then
+                -- Use the exact same server-side CFrame/physics glue path as Primary/Secondary.
+                -- Resolve the normal melee/backstab park first; PartGlue then supplies the
+                -- server-side CFrame path without replacing the calculated target-side aim.
+                local glueOk, glueCFrame = pcall(function()
+                    return self._partGlue:Acquire(ourRootPart, hitboxHead, false, 'on')
+                end)
+                if not glueOk or glueCFrame == nil then
+                    self:ClearGlue()
+                    return ourRootPart.CFrame, nil, nil
+                end
+                self._gluedOurPart = ourRootPart
+
+                if profile.knife and profile.heavy then
+                    local lastKnife = self._lastKnifeBackstabAt
+                    if lastKnife ~= nil and now - lastKnife < KNIFE_BACKSTAB_INTERVAL then
+                        local gluedPark = CFrame.new(glueCFrame.Position + GLUE_PARK_OFF)
+                        return gluedPark, nil, nil
+                    end
+                elseif not self._shootLock:ShouldFire(canFire, (dt or 0) * Setting.ShootFrames()) then
                     return CFrame.new(park), nil, nil
                 end
 
-                local eyePos = park + Vector3.new(0, eyeRise(park, liveCharacter), 0)
+                local effectivePark = glueCFrame.Position + GLUE_PARK_OFF
+                local eyePos = effectivePark + Vector3.new(0, eyeRise(effectivePark, liveCharacter), 0)
                 local eyeCF = safeLookCFrame(eyePos, aimPos)
                 if eyeCF == nil then
                     return CFrame.new(park), nil, nil
                 end
 
-                local pitch, yaw = targetRootPart.CFrame:ToOrientation()
                 if self._meleeDwellStart == nil or now - self._meleeDwellStart < MELEE_DWELL_S then
                     return CFrame.new(park), nil, nil
                 end
 
-                local firePark = park
+                local firePark = effectivePark
                 local actionItem = item
                 local weaponAction = function()
                     local liveFighter = resolveLocalFighter()
@@ -3347,7 +3399,17 @@ return {
                     if not isFiniteVector3(livePark) or ragePosIsOOB(livePark) then
                         return false
                     end
-                    local liveEyePos = livePark + Vector3.new(0, eyeRise(livePark, liveChar), 0)
+                    -- Match the Primary/Secondary server-side CFrame path for every melee item.
+                    local liveGlueOk, liveGlueCFrame = pcall(function()
+                        return self._partGlue:Acquire(ourRootPart, liveHead, false, 'on')
+                    end)
+                    if not liveGlueOk or liveGlueCFrame == nil then
+                        self:ClearGlue()
+                        return false
+                    end
+                    self._gluedOurPart = ourRootPart
+                    local liveEffectivePark = liveGlueCFrame.Position + GLUE_PARK_OFF
+                    local liveEyePos = liveEffectivePark + Vector3.new(0, eyeRise(liveEffectivePark, liveChar), 0)
                     local liveEyeCF = safeLookCFrame(liveEyePos, liveAim)
                     if liveEyeCF == nil then return false end
                     local liveMuzzleCF = liveEyeCF - Vector3.new(0, EYE_MUZZLE_SEP, 0)
@@ -3360,12 +3422,6 @@ return {
                     State.RageFireAimPos = liveAim
                     State.RageFireHitPart = liveHead
                     State.RageFireStamp = tick()
-                    if liveProfile.heavy and Setting.RageKnifeCamForge() then
-                        local vp, vy = liveRoot.CFrame:ToOrientation()
-                        LuaHookViewAngle.Forge(characterController, vp, vy)
-                    elseif not liveProfile.heavy then
-                        LuaHookViewAngle.Restore(characterController)
-                    end
                     local ok, result = pcall(function()
                         return fireMeleeHybrid(
                             actionItem,
@@ -3380,18 +3436,16 @@ return {
                             AIM_EXTRA
                         )
                     end)
-                    if not liveProfile.heavy then
-                        LuaHookViewAngle.Restore(characterController)
-                    elseif not Setting.RageKnifeCamForge() then
-                        LuaHookViewAngle.Restore(characterController)
-                    end
                     if not ok then
                         State.RageKnifeStatus = 'melee error: ' .. tostring(result)
                         return false
                     end
                     if result == true then
                         local key = meleeTargetKey(liveTarget)
-                        self:MarkReady(key, livePark)
+                        self:MarkReady(key, liveEffectivePark)
+                        if liveProfile.knife and liveProfile.heavy then
+                            self._lastKnifeBackstabAt = tick()
+                        end
                         State.RageKnifeSwings = (State.RageKnifeSwings or 0) + 1
                         State.Shots = (State.Shots or 0) + 1
                         State.RageKnifeStatus = liveStatus or (liveProfile.knife and 'Knife melee' or 'Melee attack')
@@ -3409,6 +3463,9 @@ return {
                 self._meleeDwellStart = nil
                 self._meleeDwellTarget = nil
                 self._shootLock:Reset()
+                self._lastKnifeBackstabAt = nil
+                self:ClearGlue()
+                LuaHookViewAngle.ClearTarget(self._viewAngleDriver)
                 if not keepContinuity then
                     self:_ClearContinuity()
                 end
@@ -3648,7 +3705,6 @@ local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
                         markAutoEvasionShot(os.clock())
                     end
                 else
-                    LuaHookViewAngle.Restore(characterController)
                 end
                 if not preActionHeartbeat then
                     characterController:HeartbeatUpdate()
@@ -3662,7 +3718,6 @@ local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
                 rageOrbitVantage = nil
                 rageOrbitVantageUntil = 0
                 rageOrbitTargetKey = nil
-                LuaHookViewAngle.Restore(self._characterController)
                 self._lastTargetAt = -math.huge
                 self._lastTargetWorld = nil
                 self._lastDefensiveViewAngles = nil
@@ -3695,6 +3750,80 @@ local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
                 applyEnabledFFlags(false)
             end
             local controllerInstance = nil
+            local alwaysBackstabWasActive = false
+            local ALWAYS_BACKSTAB_TRIGGER_DIST = 36
+
+            local function findNearestAlwaysBackstabTarget()
+                local myChar = LP.Character
+                if myChar == nil then
+                    return nil
+                end
+                local myRoot = myChar:FindFirstChild('HumanoidRootPart')
+                if myRoot == nil then
+                    return nil
+                end
+
+                local myPos = myRoot.Position
+                local myTeam = LP:GetAttribute('TeamID')
+                local myEnv = LP:GetAttribute('EnvironmentID')
+                local best, bestDist = nil, math.huge
+
+                for _, player in ipairs(Players:GetPlayers()) do
+                    if player == LP then
+                        continue
+                    end
+                    if player:GetAttribute('EnvironmentID') ~= myEnv then
+                        continue
+                    end
+                    if myTeam ~= nil and player:GetAttribute('TeamID') == myTeam then
+                        continue
+                    end
+
+                    local character = player.Character
+                    if character == nil then
+                        continue
+                    end
+                    local rootPart = character:FindFirstChild('HumanoidRootPart')
+                    local humanoid = character:FindFirstChildOfClass('Humanoid')
+                    if rootPart == nil or humanoid == nil or humanoid.Health <= 0 then
+                        continue
+                    end
+
+                    local dist = (rootPart.Position - myPos).Magnitude
+                    if dist <= 0 or dist > ALWAYS_BACKSTAB_TRIGGER_DIST then
+                        continue
+                    end
+                    if dist < bestDist then
+                        bestDist = dist
+                        best = rootPart
+                    end
+                end
+
+                return best
+            end
+
+            local function updateAlwaysBackstab(controller, active)
+                local characterController = controller and controller._characterController or nil
+                local viewAngleDriver = characterController and characterController._viewAngleDriver or nil
+                if type(viewAngleDriver) ~= 'table' then
+                    return
+                end
+
+                if not active then
+                    if alwaysBackstabWasActive then
+                        LuaHookViewAngle.ClearTarget(viewAngleDriver)
+                    end
+                    return
+                end
+
+                local targetRootPart = findNearestAlwaysBackstabTarget()
+                if targetRootPart ~= nil then
+                    LuaHookViewAngle.MimicTarget(targetRootPart, viewAngleDriver)
+                else
+                    LuaHookViewAngle.ClearTarget(viewAngleDriver)
+                end
+            end
+
             local function ensureController()
                 if controllerInstance == nil then
                     controllerInstance = Controller.new()
@@ -3782,6 +3911,12 @@ local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
                     controller:SetEnabled(enabled)
                 end
                 controller:Update(dt or 0)
+
+                -- Always Backstab uses the same silent camera replication driver as Ragebot,
+                -- but selects the nearest enemy within 36 studs and copies their HRP rotation.
+                local alwaysBackstabActive = togValue('P4S1T8', false)
+                updateAlwaysBackstab(controller, alwaysBackstabActive)
+                alwaysBackstabWasActive = alwaysBackstabActive
             end
             function KiciaRagebot.Reset()
                 if controllerInstance then
@@ -26354,10 +26489,6 @@ ErrorReporter.set_game(GameName)
                         Text = "Ignore Protected",
                         Default = true,
                     })
-                    Rage:AddToggle("P8S4T11", {
-                        Text = "Force Knife Backstab",
-                        Default = true,
-                    })
                     Rage:AddToggle("P8S4T10", {
                         Text = "Underground",
                         Default = false,
@@ -26507,6 +26638,11 @@ ErrorReporter.set_game(GameName)
                         Callback = RivalsModsState.EnsureHooks,
                     })
                     Fuse:SetupDependencies({ { Toggles.P4S1T6, true } })
+                    Mods:AddToggle("P4S1T8", {
+                        Text = "Always Backstab",
+                        Default = false,
+                        Callback = RivalsModsState.EnsureHooks,
+                    })
                 end
                 do
 local P3 = Tabs.Automation
