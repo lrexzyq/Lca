@@ -717,6 +717,21 @@ return {
                 end
                 return default
             end
+            -- Runtime state shared by the Ragebot view-angle and melee paths.
+            -- LuaHookViewAngle.Forge/Restore must always have a live local State table.
+            local State = {
+                ViewAngleForged = false,
+                RageFireFromPos = nil,
+                RageFireAimPos = nil,
+                RageFireHitPart = nil,
+                RageFireStamp = 0,
+                RageGumMode = 'off',
+                RageGumVoidFire = false,
+                RageGumVoidFires = 0,
+                RageKnifeStatus = 'idle',
+                RageKnifeSwings = 0,
+                Shots = 0,
+            }
             local Setting = {
                 Stability = function() return 0.425 end,
                 ShootFrames = function()
@@ -753,18 +768,18 @@ return {
                 RandomRadiusFactor = function() return optValue('P8S4S5', 0.5) end,
                 RandomAnchorFromCharacter = function() return togValue('P8S4T8', false) end,
                 RepositionInterval = function() return 0.3 end,
-                RageMode = function() return optValue('P8S4D3', 'Polar') end,
-                RageKnifeBackstab = function() return togValue('P8S4T11', true) end,
-                RageShieldBackstab = function() return togValue('P8S4T12', true) end,
-                RageKnifeCamForge = function() return togValue('P8S4T13', true) end,
-                RageAttackContinuity = function() return togValue('P8S4T14', true) end,
-                RageGumMode = function() return optValue('P8S4D4', 'on') end,
-                RageGumVoidFire = function() return togValue('P8S4T15', true) end,
-                RagePartGlue = function() return togValue('P8S4T16', false) end,
-                RageOrbitRadius = function() return tonumber(optValue('P8S4S9', 60)) or 60 end,
-                RageOrbitDwell = function() return tonumber(optValue('P8S4S10', 0.30)) or 0.30 end,
-                RageOrbitHeight = function() return tonumber(optValue('P8S4S11', 8)) or 8 end,
-                RageOrbitJitter = function() return togValue('P8S4T17', true) end,
+                RageMode = function() return 'Polar' end,
+                RageKnifeBackstab = function() return true end,
+                RageShieldBackstab = function() return true end,
+                RageKnifeCamForge = function() return true end,
+                RageAttackContinuity = function() return true end,
+                RageGumMode = function() return 'on' end,
+                RageGumVoidFire = function() return true end,
+                RagePartGlue = function() return false end,
+                RageOrbitRadius = function() return 60 end,
+                RageOrbitDwell = function() return 0.30 end,
+                RageOrbitHeight = function() return 8 end,
+                RageOrbitJitter = function() return true end,
             }
             local AUTO_TRANSLOCATE_DURATION = 0.15
             local AUTO_RANDOM_DURATION = 0.3
@@ -1351,9 +1366,9 @@ return {
                 if remote == nil or actionToken == nil or animationToken == nil or objectId == nil then
                     return false
                 end
-                -- This is the same envelope emitted by Kicia's Item:AttackEncoded
-                -- / Item:HeavyAttackEncoded methods: encoded aim1/aim2, real hitbox
-                -- part, and the fixed extra field, wrapped with the correct animation.
+
+
+
                 local inner = {
                     ['\0'] = aim1,
                     ['\1'] = aim2,
@@ -1793,8 +1808,8 @@ return {
                     end
                 end
                 if not known then
-                    -- LuaHook falls back to the local root when read-back of the
-                    -- previous PhysicsRepRootPart is unavailable.
+
+
                     previous = ourPart
                 end
                 self._previousRepRoot[ourPart] = previous
@@ -1908,7 +1923,7 @@ return {
                     end
                     return VOID_CFRAME, true
                 end
-                -- LuaHook 'lite': bind PhysicsRepRootPart but do not move/anchor the target hitbox.
+
                 return hitboxPart.Position, true
             end
             function PartGlue:Free(ourPart)
@@ -2002,11 +2017,11 @@ return {
                     and math.abs(v.Y) < 4194304
                     and math.abs(v.Z) < 4194304
             end
-            -- Temporal target layer borrowed conceptually from luahook:
-            -- keep a very short memory of the last sane head/root sample so a brief
-            -- head replication gap does not immediately destroy the active target.
-            -- Live HitboxHead remains the authoritative shot target; prediction is
-            -- used only while the live head is temporarily unavailable.
+
+
+
+
+
             local TEMPORAL_HOLD_SEC = 0.18
             local TEMPORAL_LEAD_SEC = 0.08
             local TEMPORAL_MAX_SPEED = 220
@@ -2382,8 +2397,8 @@ return {
                 "devil's trident", 'linked sword', 'keytana', 'cutlass',
                 'swordfish', 'riptide'
             }
-            -- LuaHook stores the orbit state on State. Keep it local to this kernel so
-            -- multiple kernel instances cannot leak orbit targets/angles into one another.
+
+
             local rageOrbitAngle = 0
             local rageOrbitVantage = nil
             local rageOrbitVantageUntil = 0
@@ -2980,9 +2995,9 @@ return {
                 local above = shieldState ~= 'Below'
                 local directHeadAim = shieldState == 'None'
                 local offset = above and OFFSET_ABOVE or OFFSET_BELOW
-                -- Head-only firing: HitboxHead is authoritative for the actual shot point.
-                -- Do not fall back to the visible Head here; that can be offset from the
-                -- server hitbox and makes the shot payload less consistent.
+
+
+
                 local aimHeadPosition = hitboxHead.Position
                 local flightActive = isFlightActive()
                 State.RageGumMode = rageGumMode()
@@ -2998,7 +3013,7 @@ return {
                     local gumMode = rageGumMode()
                     if gumMode == 'off' then
                         self:ClearGlue()
-                        -- LuaHook Gum=off: do not glue, but continue the normal attack/park path.
+
                         local base = aimHeadPosition + offset
                         void = CFrame.new(base)
                         glued = false
@@ -3048,7 +3063,7 @@ return {
                 local pitch = above and PITCH_ABOVE or PITCH_BELOW
                 local aim1 = buildAim(above and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, pitch, oy, oz)
                 local aim2 = buildAim(above and AIM_ABOVE_END or AIM_BELOW_END, pitch, oy, oz)
-                -- FIX Bug4: dt thuần thay vì math.max(dt, 1/240) tránh over-fire khi lag/nhảy.
+
                 if not self._shootLock:ShouldFire(canFire, dt * Setting.ShootFrames()) then
                     return cframe, nil
                 end
@@ -3058,7 +3073,7 @@ return {
                     if hitboxHead.Parent == nil or targetRootPart.Parent == nil then
                         return false
                     end
-                    -- Always encode the live server hitbox center.
+
                     local aimWorldPos = hitboxHead.Position
                     local shotEyeBase = cframe.Position
                     local shotRise = eyeRise(shotEyeBase, target.model)
@@ -3092,8 +3107,8 @@ return {
                     self._gluedOurPart = nil
                 end
             end
-            -- LuaHook melee path: exact melee profile rules, 0.07s dwell, Knife variants,
-            -- heavy camera forge, 0.30s attack continuity, Orbit flank/backstab and Gum exclusion.
+
+
             local MELEE_DWELL_S = 0.07
             local ATTACK_GAP_HOLD = 0.30
             local MeleeStrategy = {}
@@ -3540,8 +3555,8 @@ local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
                     end
                     target = held
                     if target ~= nil then
-                        -- Keep the target latched briefly; do not reset weapon state
-                        -- merely because HitboxHead replication blinked for a frame.
+
+
                         self._lastTargetAt = now
                     else
                         self._lastTarget = nil
@@ -26244,28 +26259,6 @@ ErrorReporter.set_game(GameName)
                         Rounding = 0,
                         Compact = true,
                     })
-                    Rage:AddDropdown("P8S4D3", {
-                        Values = { "Polar", "Orbit" },
-                        Default = "Polar",
-                        Multi = false,
-                        Text = "Rage Mode",
-                    })
-                    local KnifeSupport = Rage:AddDependencyBox()
-                    KnifeSupport:AddToggle("P8S4T11", { Text = "Force knife backstabs", Default = true })
-                    KnifeSupport:AddToggle("P8S4T12", { Text = "Riot shield bypass", Default = true })
-                    KnifeSupport:AddToggle("P8S4T13", { Text = "Heavy camera forge", Default = true })
-                    KnifeSupport:AddToggle("P8S4T14", { Text = "Attack continuity", Default = true })
-                    KnifeSupport:AddDropdown("P8S4D4", {
-                        Values = { "off", "lite", "on" }, Default = "on", Multi = false, Text = "Gum",
-                    })
-                    KnifeSupport:AddToggle("P8S4T15", { Text = "Gum void fire", Default = true })
-                    KnifeSupport:AddToggle("P8S4T16", { Text = "Part Glue override", Default = false })
-                    local OrbitSupport = Rage:AddDependencyBox()
-                    OrbitSupport:AddSlider("P8S4S9", { Text = "Orbit radius", Default = 60, Min = 20, Max = 380, Rounding = 0, Compact = true })
-                    OrbitSupport:AddSlider("P8S4S10", { Text = "Orbit dwell", Default = 0.30, Min = 0.10, Max = 0.60, Rounding = 2, Compact = true })
-                    OrbitSupport:AddSlider("P8S4S11", { Text = "Orbit height", Default = 8, Min = 0, Max = 40, Rounding = 0, Compact = true })
-                    OrbitSupport:AddToggle("P8S4T17", { Text = "Orbit vertical jitter", Default = true })
-                    OrbitSupport:SetupDependencies({ { Options.P8S4D3, "Orbit" } })
                     Rage:AddToggle("P8S4T5", { Text = "Use Primary", Default = true })
                     Rage:AddToggle("P8S4T6", { Text = "Use Secondary", Default = true })
                     Rage:AddToggle("P8S4T7", { Text = "Use Melee", Default = true })
