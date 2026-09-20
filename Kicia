@@ -78,9 +78,12 @@ local undergroundEnabled = false
 local undergroundDepth = 1.0
 local undergroundDesync = nil
 local undergroundConn = nil
+local undergroundDeathConn = nil
+local undergroundRespawnGuardUntil = 0
 local undergroundSnapshot = nil
 local undergroundSnapshotCharacter = nil
 local undergroundLastServerCFrame = nil
+local startUnderground, stopUnderground
 local UndergroundRootDesync = {}
 UndergroundRootDesync.__index = UndergroundRootDesync
 function UndergroundRootDesync.new(rootPart)
@@ -283,10 +286,11 @@ end
 
 startUnderground = function()
     if undergroundConn then return end
+    if os.clock() < undergroundRespawnGuardUntil then return end
     local char = undergroundGetCharacter()
     local root = undergroundGetRoot(char)
     local humanoid = undergroundGetHumanoid(char)
-    if not char or not root or not humanoid then return end
+    if not char or not root or not humanoid or humanoid.Health <= 0 then return end
     undergroundGetDepth()
     undergroundCapture(char, root, humanoid)
     local initialServerCF = undergroundServerCFrame(char, root)
@@ -299,6 +303,11 @@ startUnderground = function()
     undergroundDesync = UndergroundRootDesync.new(root)
     undergroundDesync:SetServerCFrame(initialServerCF)
     undergroundEnabled = true
+    undergroundDeathConn = humanoid.Died:Connect(function()
+        if undergroundEnabled then
+            stopUnderground()
+        end
+    end)
     undergroundConn = RunService.Heartbeat:Connect(function()
         if not undergroundEnabled then return end
         local currentChar = undergroundGetCharacter()
@@ -306,9 +315,8 @@ startUnderground = function()
         local currentHumanoid = undergroundGetHumanoid(currentChar)
         if not currentChar or not currentRoot or not currentHumanoid then return end
         if currentChar ~= undergroundSnapshotCharacter then
-            undergroundRestore()
-            undergroundCapture(currentChar, currentRoot, currentHumanoid)
-            undergroundDesync = UndergroundRootDesync.new(currentRoot)
+            stopUnderground()
+            return
         end
         if not undergroundDesync then
             undergroundDesync = UndergroundRootDesync.new(currentRoot)
@@ -328,6 +336,10 @@ stopUnderground = function()
     if undergroundConn then
         undergroundConn:Disconnect()
         undergroundConn = nil
+    end
+    if undergroundDeathConn then
+        undergroundDeathConn:Disconnect()
+        undergroundDeathConn = nil
     end
     undergroundRestore()
 end
@@ -769,7 +781,7 @@ return {
                 RandomAnchorFromCharacter = function() return togValue('P8S4T8', false) end,
                 RepositionInterval = function() return 0.3 end,
                 RageMode = function() return 'Polar' end,
-                RageKnifeBackstab = function() return true end,
+                RageKnifeBackstab = function() return togValue('P8S4T11', true) end,
                 RageShieldBackstab = function() return true end,
                 RageKnifeCamForge = function() return true end,
                 RageAttackContinuity = function() return true end,
@@ -2174,7 +2186,19 @@ return {
                 entry.health = humanoid and humanoid.Health or math.huge
                 entry.invincible = isTargetInvincible(entry.entity)
                 entry.protected = isTargetProtected(entry)
-                entry.deflecting = entry.deflecting == true
+                entry.deflecting = false
+                local deflectCheck = RivalsRuntimeBridge and RivalsRuntimeBridge.IsRivalsKatanaDeflectActiveItem
+                if type(deflectCheck) == 'function' and entry.fighter ~= nil then
+                    local equippedForDeflect = nil
+                    pcall(function() equippedForDeflect = entry.fighter.EquippedItem end)
+                    if equippedForDeflect == nil then
+                        pcall(function() equippedForDeflect = rawget(entry.fighter, 'EquippedItem') end)
+                    end
+                    if equippedForDeflect ~= nil then
+                        local okDeflect, activeDeflect = pcall(deflectCheck, equippedForDeflect)
+                        entry.deflecting = okDeflect and activeDeflect == true
+                    end
+                end
                 entry.hacker = false
                 local rageHackerCheck = RivalsRuntimeBridge and RivalsRuntimeBridge.IsRageHacker
                 if type(rageHackerCheck) == 'function' and entry.player ~= nil then
@@ -2337,11 +2361,30 @@ return {
                 if humanoid and humanoid.Health <= 0 then
                     return nil
                 end
+                local entry = previousTarget
+                entry.alive = humanoid == nil or humanoid.Health > 0
+                entry.invincible = isTargetInvincible(entry.entity)
+                entry.protected = isTargetProtected(entry)
+                entry.deflecting = false
+                local deflectCheck = RivalsRuntimeBridge and RivalsRuntimeBridge.IsRivalsKatanaDeflectActiveItem
+                if type(deflectCheck) == 'function' and entry.fighter ~= nil then
+                    local equippedForDeflect = nil
+                    pcall(function() equippedForDeflect = entry.fighter.EquippedItem end)
+                    if equippedForDeflect == nil then
+                        pcall(function() equippedForDeflect = rawget(entry.fighter, 'EquippedItem') end)
+                    end
+                    if equippedForDeflect ~= nil then
+                        local okDeflect, activeDeflect = pcall(deflectCheck, equippedForDeflect)
+                        entry.deflecting = okDeflect and activeDeflect == true
+                    end
+                end
+                if not isValidTarget(entry) then
+                    return nil
+                end
                 local fallback = temporalFallback(previousTarget)
                 if fallback == nil then
                     return nil
                 end
-                local entry = previousTarget
                 entry.temporalHeadPart = previousTarget.hitboxHead or previousTarget.temporalHeadPart
                 entry.hitboxHead = nil
                 entry.rootPart = fallback.rootPart
@@ -3191,18 +3234,19 @@ return {
                     if flank then
                         park = flank
                         status = flankStatus or 'Orbit flank'
-                    elseif profile.knife then
-                        local backstab = localKnifeBackstabPointRuntime(target, hitboxHead)
-                        if backstab then
-                            park = backstab
-                            status = 'Backstab'
-                        end
                     end
-                    if park == nil then
-                        park = orbitVantageRuntime(target, aimPos, profile.knife)
-                        if park then
-                            status = profile.knife and 'Orbit (kept dist)' or 'Orbit'
-                        end
+                end
+                if park == nil and profile.knife then
+                    local backstab = localKnifeBackstabPointRuntime(target, hitboxHead)
+                    if backstab then
+                        park = backstab
+                        status = 'Backstab'
+                    end
+                end
+                if park == nil and Setting.RageMode() == 'Orbit' then
+                    park = orbitVantageRuntime(target, aimPos, profile.knife)
+                    if park then
+                        status = profile.knife and 'Orbit (kept dist)' or 'Orbit'
                     end
                 end
                 if park == nil then
@@ -26310,6 +26354,10 @@ ErrorReporter.set_game(GameName)
                         Text = "Ignore Protected",
                         Default = true,
                     })
+                    Rage:AddToggle("P8S4T11", {
+                        Text = "Force Knife Backstab",
+                        Default = true,
+                    })
                     Rage:AddToggle("P8S4T10", {
                         Text = "Underground",
                         Default = false,
@@ -28113,8 +28161,21 @@ local RivalsRuntime = {}
                         'CharAdded',
                         'LP.CharacterAdded fired (new: ' .. tostring(newChar and newChar.Name or '<nil>') .. ')'
                     )
+                    stopUnderground()
+                    undergroundRespawnGuardUntil = os.clock() + 1.25
                     RivalsRuntimeBridge.ResetLocalShieldLatch()
                     RivalsRuntimeBridge.RunPickupSpawnSetup()
+                    task.delay(1.25, function()
+                        if not newChar or newChar ~= LP.Character then
+                            return
+                        end
+                        if os.clock() < undergroundRespawnGuardUntil then
+                            return
+                        end
+                        if Toggles.P8S4T10 and Toggles.P8S4T10.Value == true then
+                            startUnderground()
+                        end
+                    end)
                 end)))
             end
             function RivalsRuntime.Initialize(Window)
