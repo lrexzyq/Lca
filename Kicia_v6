@@ -276,7 +276,7 @@ local function undergroundServerCFrame(char, root)
     local previous = undergroundLastServerCFrame
     if previous ~= nil then
         local shift = (result.Position - previous.Position).Magnitude
-        if shift > 25 then
+        if shift > 12 then
             return previous
         end
     end
@@ -742,7 +742,7 @@ return {
                 Shots = 0,
             }
             local Setting = {
-                Stability = function() return 0.425 end,
+                Stability = function() return 0.15 end,
                 ShootFrames = function()
                     local value = tonumber(optValue('P8S4S2', 1)) or 1
                     return math.clamp(math.floor(value + 0.5), 1, 5)
@@ -788,8 +788,8 @@ return {
                 RageOrbitHeight = function() return 8 end,
                 RageOrbitJitter = function() return true end,
             }
-            local AUTO_TRANSLOCATE_DURATION = 0.15
-            local AUTO_RANDOM_DURATION = 0.3
+            local AUTO_TRANSLOCATE_DURATION = 0.35
+            local AUTO_RANDOM_DURATION = math.huge
             local AutoEvasion = {
                 active = false,
                 mode = 'Random',
@@ -1326,10 +1326,14 @@ return {
                 return didCall
             end
             local function reloadItem(item)
-                if itemIsReloading(item) or itemAmmoReserve(item) <= 0 or itemIsMagFull(item) then
-                    return
+                local cooldown = rawget(item, '_reload_cooldown')
+                if type(cooldown) == 'number' and tick() < cooldown then
+                    return false
                 end
-                fireReload(itemObjectId(item))
+                if itemAmmoReserve(item) <= 0 or itemIsMagFull(item) then
+                    return false
+                end
+                return fireReload(itemObjectId(item)) == true
             end
             local NEG_HUGE = -9e37
             local function buildAim(base, pitch, oy, oz)
@@ -2102,8 +2106,8 @@ return {
 
 
 
-            local TEMPORAL_HOLD_SEC = 0.18
-            local TEMPORAL_LEAD_SEC = 0.08
+            local TEMPORAL_HOLD_SEC = 0.45
+            local TEMPORAL_LEAD_SEC = 0.16
             local TEMPORAL_MAX_SPEED = 220
             local TemporalTargetState = setmetatable({}, { __mode = 'k' })
 
@@ -2937,8 +2941,25 @@ return {
                 end
                 return ring - ringPos + Vector3.new(x, y, z)
             end
+            local DefenseThreatPosition = nil
             local function randomEvade(clientCF)
-                return scatterFar(clientCF.Position, Setting.RandomAnchorFromCharacter(), Setting.RandomBaseRadius(), Setting.RandomRadiusFactor())
+                local best = nil
+                local bestScore = -math.huge
+                local anchorFromCharacter = Setting.RandomAnchorFromCharacter()
+                local baseRadius = Setting.RandomBaseRadius()
+                local radiusFactor = Setting.RandomRadiusFactor()
+                for _ = 1, 8 do
+                    local candidate = scatterFar(clientCF.Position, anchorFromCharacter, baseRadius, radiusFactor)
+                    local score = rbRandom:NextNumber(0, 1000)
+                    if DefenseThreatPosition and candidate and candidate.Position then
+                        score = score + (candidate.Position - DefenseThreatPosition).Magnitude * 0.00001
+                    end
+                    if candidate and candidate.Position and isFiniteVector3(candidate.Position) and score > bestScore then
+                        best = candidate
+                        bestScore = score
+                    end
+                end
+                return best or scatterFar(clientCF.Position, anchorFromCharacter, baseRadius, radiusFactor)
             end
             local function isFlightActive()
                 local movement = RivalsRuntimeBridge.Movement
@@ -3520,6 +3541,7 @@ local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
                     pcall(rbSetFFlag, 'DFIntAssemblyHistorySkipSize', enabled and '0' or '8')
                 end
             end
+            local disconnectUndergroundDefenseHealth = function() end
             local Controller = {}
             Controller.__index = Controller
             function Controller.new()
@@ -3597,20 +3619,37 @@ local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
                 if action.type == 'SwapWait' then
                     self._hitscanStrategy:ResetState()
                     self._meleeStrategy:ResetState()
-                    return { cframe = VOID_CFRAME, shouldSkipDefense = true, preActionHeartbeat = true }
+                    local plan = self:_EvadePlan(clientCF, mode)
+                    plan.shouldSkipDefense = true
+                    plan.preActionHeartbeat = true
+                    return plan
                 end
                 if action.type == 'Swap' then
                     self._hitscanStrategy:ResetState()
                     self._meleeStrategy:ResetState()
                     local item = action.item
                     local index = action.index
-                    return { cframe = VOID_CFRAME, weaponAction = function() setRageSwapPending(index); equipItem(item, index, fighter); return true end, shouldSkipDefense = true, preActionHeartbeat = true }
+                    local plan = self:_EvadePlan(clientCF, mode)
+                    plan.weaponAction = function()
+                        setRageSwapPending(index)
+                        equipItem(item, index, fighter)
+                        return true
+                    end
+                    plan.shouldSkipDefense = true
+                    plan.preActionHeartbeat = true
+                    return plan
                 end
                 if action.type == 'Reload' then
                     self._hitscanStrategy:ResetState()
                     self._meleeStrategy:ResetState()
                     local item = action.item
-                    return { cframe = VOID_CFRAME, weaponAction = function() reloadItem(item) end, shouldSkipDefense = true, preActionHeartbeat = true }
+                    local plan = self:_EvadePlan(clientCF, mode)
+                    plan.weaponAction = function()
+                        return reloadItem(item) == true
+                    end
+                    plan.shouldSkipDefense = true
+                    plan.preActionHeartbeat = true
+                    return plan
                 end
                 if target == nil then
                     self._hitscanStrategy:ResetState()
@@ -3720,6 +3759,7 @@ local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
                     AutoEvasion.randomHoldUntil = 0
                     AutoEvasion.reloading = false
                     AutoEvasion.shotPending = false
+                    DefenseThreatPosition = nil
                 end
                 if mode == 'Translocate' then
                     self:_ApplyForcedCrouch(false)
@@ -3744,7 +3784,6 @@ local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
                     if fired then
                         markAutoEvasionShot(os.clock())
                     end
-                else
                 end
                 if not preActionHeartbeat then
                     characterController:HeartbeatUpdate()
@@ -3772,10 +3811,8 @@ local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
                 AutoEvasion.randomHoldUntil = 0
                 AutoEvasion.reloading = false
                 AutoEvasion.shotPending = false
-                if RivalsRagebotState.UndergroundDefenseHealthConn then
-                    pcall(function() RivalsRagebotState.UndergroundDefenseHealthConn:Disconnect() end)
-                    RivalsRagebotState.UndergroundDefenseHealthConn = nil
-                end
+                DefenseThreatPosition = nil
+                pcall(disconnectUndergroundDefenseHealth)
                 if self._characterController then
                     self._characterController:SetServerCFrame(nil)
                     self._characterController:SendViewAngles(20, nil)
@@ -3920,9 +3957,37 @@ local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
                 local muzzleCF = eyeCF - Vector3.new(0, EYE_MUZZLE_SEP, 0)
                 local fired = false
                 local ok = withThreadIdentity2(function()
-                    fired = fireGun(objectId, itemIsRaycast(item), eyeCF, muzzleCF, hitboxHead, hitboxHead.Position, aim1, aim2, AIM_EXTRA, false, false) == true
+                    fired = fireGun(objectId, itemIsRaycast(item), eyeCF, muzzleCF, hitboxHead, hitboxHead.Position, aim1, aim2, AIM_EXTRA, false, true) == true
                 end)
                 return ok and fired
+            end
+            function KiciaRagebot.UpdateDefenseSupport()
+                local fighter = resolveLocalFighter()
+                if fighter == nil then
+                    return false
+                end
+                local equipped = runtimeEquippedItem(fighter)
+                if equipped and itemType(equipped) == 'Gun' and itemAmmo(equipped) <= 0 and itemAmmoReserve(equipped) > 0 then
+                    if reloadItem(equipped) then
+                        return true
+                    end
+                end
+                local action = getAction(fighter)
+                if action ~= nil then
+                    if action.type == 'Reload' then
+                        return reloadItem(action.item)
+                    end
+                    if action.type == 'Swap' then
+                        return equipItem(action.item, action.index, fighter)
+                    end
+                end
+                if equipped and itemType(equipped) == 'Gun' and itemAmmo(equipped) <= 0 and itemAmmoReserve(equipped) > 0 then
+                    local reserve = itemAmmoReserve(equipped)
+                    if reserve > 0 then
+                        return reloadItem(equipped)
+                    end
+                end
+                return false
             end
             function KiciaRagebot.IsEnabled()
                 if not togValue('P8S4T1', false) then
@@ -17423,12 +17488,24 @@ ErrorReporter.set_game(GameName)
                 UndergroundDefenseTranslocateUntil = 0,
                 UndergroundDefenseHealth = nil,
                 UndergroundDefenseHealthCharacter = nil,
+                UndergroundDefenseHealthConn = nil,
                 LastWeaponName = nil,
                 CachedRanges = nil,
                 LastInsideBarrierAt = 0,
                 LastBaitTrapPos = nil,
                 LastBaitTrapPickAt = 0,
             }
+            disconnectUndergroundDefenseHealth = function()
+                local state = RivalsRagebotState
+                if type(state) ~= 'table' then
+                    return
+                end
+                local connection = state.UndergroundDefenseHealthConn
+                state.UndergroundDefenseHealthConn = nil
+                if connection ~= nil then
+                    pcall(function() connection:Disconnect() end)
+                end
+            end
             local RivalsAutoLoadoutState = {
                 HasRunThisOpen = false,
                 OpenNonce = 0,
@@ -18053,13 +18130,13 @@ ErrorReporter.set_game(GameName)
                 end
             end
             function RivalsRagebot.ResolveUndergroundDefenseTarget(maxDistance)
-                maxDistance = maxDistance or RivalsRagebot.UndergroundDefenseDistance
+                maxDistance = math.min(maxDistance or RivalsRagebot.UndergroundDefenseDistance, 30)
                 local localRoot = HumanoidRootPart
                 if not localRoot or not localRoot.Parent then
                     return nil
                 end
                 local best = nil
-                local bestDistance = maxDistance + 1
+                local bestScore = -math.huge
                 local filter = RivalsRagebot.LosRaycastParams
                 for _, fighter in ipairs(LocalFighterController and LocalFighterController.Objects or {}) do
                     local player = fighter and fighter.Player
@@ -18070,14 +18147,38 @@ ErrorReporter.set_game(GameName)
                         local root = subject and subject:FindFirstChild('HumanoidRootPart')
                         local head = subject and (subject:FindFirstChild('HitboxHead') or subject:FindFirstChild('Head'))
                         if subject and humanoid and humanoid.Health > 0 and root and root.Parent and head and head.Parent then
-                            local dist = (root.Position - localRoot.Position).Magnitude
-                            if dist <= maxDistance and dist < bestDistance then
+                            local distance = (root.Position - localRoot.Position).Magnitude
+                            if distance <= maxDistance then
                                 local origin = localRoot.Position + Vector3.new(0, 1.5, 0)
                                 local direction = head.Position - origin
+                                local clearLine = false
                                 if direction.Magnitude > 0 then
                                     filter.FilterDescendantsInstances = { LP.Character, subject }
-                                    local blocked = Workspace:Raycast(origin, direction, filter)
-                                    if not blocked then
+                                    clearLine = Workspace:Raycast(origin, direction, filter) == nil
+                                end
+                                if clearLine then
+                                    local score = (30 - distance)
+                                    local hostile = RivalsRagebotState.HostileTeleports[player]
+                                    local teleportCount = hostile and hostile.Teleports and #hostile.Teleports or 0
+                                    score = score + teleportCount * 150
+                                    local pitch, yaw = getTargetCameraRotation({ fighter = fighter, rootPart = root })
+                                    if pitch ~= nil and yaw ~= nil then
+                                        local look = CFrame.fromOrientation(pitch, yaw, 0).LookVector
+                                        local toLocal = localRoot.Position - root.Position
+                                        if toLocal.Magnitude > 0 then
+                                            local angle = math.deg(math.acos(math.clamp(look:Dot(toLocal.Unit), -1, 1)))
+                                            if angle <= 30 then
+                                                score = score + 200
+                                            elseif angle <= 60 then
+                                                score = score + 70
+                                            end
+                                        end
+                                    end
+                                    if player == RivalsRagebotState.UndergroundDefenseTargetPlayer then
+                                        score = score + 80
+                                    end
+                                    if score > bestScore then
+                                        bestScore = score
                                         best = {
                                             fighter = fighter,
                                             player = player,
@@ -18086,10 +18187,9 @@ ErrorReporter.set_game(GameName)
                                             hitboxHead = head,
                                             rootPart = root,
                                             itemObserver = rawget(fighter, 'itemObserver') or rawget(fighter, 'ItemObserver'),
-                                            distance = dist,
+                                            distance = distance,
                                             protected = false,
                                         }
-                                        bestDistance = dist
                                     end
                                 end
                             end
@@ -18302,6 +18402,9 @@ ErrorReporter.set_game(GameName)
                 end
                 local evasionOption = Options and Options.P8S4D2 and Options.P8S4D2.Value or 'Random'
                 local defenseModeEnabled = evasionOption == 'Auto'
+                if not defenseModeEnabled then
+                    DefenseThreatPosition = nil
+                end
                 if enabled and not flightActive and defenseModeEnabled then
                     local undergroundDefense, threatPlayer = RivalsRagebot.IsUndergroundDefenseActive(now, RivalsRagebot.UndergroundDefenseDistance)
                     if undergroundDefense then
@@ -18330,11 +18433,16 @@ ErrorReporter.set_game(GameName)
                         end
                         local defenseTarget = RivalsRagebot.ResolveUndergroundDefenseTarget(RivalsRagebot.UndergroundDefenseDistance)
                         RivalsRagebotState.Target = defenseTarget
+                        DefenseThreatPosition = defenseTarget and defenseTarget.rootPart and defenseTarget.rootPart.Position or nil
+                        local fired = false
                         if defenseTarget and RivalsRuntimeBridge.KiciaRagebot and RivalsRuntimeBridge.KiciaRagebot.FireUndergroundDefense then
-                            local fired = RivalsRuntimeBridge.KiciaRagebot.FireUndergroundDefense(defenseTarget)
+                            fired = RivalsRuntimeBridge.KiciaRagebot.FireUndergroundDefense(defenseTarget) == true
                             if fired then
                                 RivalsRagebotState.UndergroundDefenseLastShotAt = now
                             end
+                        end
+                        if not fired and RivalsRuntimeBridge.KiciaRagebot and RivalsRuntimeBridge.KiciaRagebot.UpdateDefenseSupport then
+                            RivalsRuntimeBridge.KiciaRagebot.UpdateDefenseSupport()
                         end
                         return
                     end
@@ -26515,8 +26623,8 @@ ErrorReporter.set_game(GameName)
                     Rage:AddToggle("P8S4T6", { Text = "Use Secondary", Default = true })
                     Rage:AddToggle("P8S4T7", { Text = "Use Melee", Default = true })
                     Rage:AddDropdown("P8S4D1", {
-                        Values = { "Reload", "Swap" },
-                        Default = "Swap",
+                        Values = { "Swap", "Reload", "SwapOrReload" },
+                        Default = "SwapOrReload",
                         Multi = false,
                         Text = "On Empty",
                     })
