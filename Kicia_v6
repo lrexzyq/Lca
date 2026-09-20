@@ -130,9 +130,6 @@ function UndergroundRootDesync:HeartbeatUpdate()
     local current = rootPart.CFrame
     local delta = (cf.Position - current.Position).Magnitude
     if delta > 8 then
-        if self._oldCFrame ~= nil then
-            return
-        end
         return
     end
     self._oldCFrame = current
@@ -170,16 +167,20 @@ end
 local function undergroundGetClientCFrame(root)
     if undergroundDesync and root ~= nil then
         local ok, cf = pcall(function() return undergroundDesync:GetClientCFrame() end)
-        if ok and typeof(cf) == 'CFrame' then
+        if ok and typeof(cf) == 'CFrame' and typeof(cf.Position) == 'Vector3' then
             return cf
         end
     end
-    return root and root.CFrame or nil
+    local fallback = root and root.CFrame or nil
+    if typeof(fallback) == 'CFrame' and typeof(fallback.Position) == 'Vector3' then
+        return fallback
+    end
+    return nil
 end
 
 local function undergroundGetDepth()
     local value = Options and Options.P8S4S6 and Options.P8S4S6.Value
-    local depth = tonumber(value) or undergroundDepth or 1.0
+    local depth = tonumber(value) or undergroundDepth or 4.0
     depth = math.clamp(depth, 2.00, 4.50)
     undergroundDepth = depth
     return depth
@@ -3196,27 +3197,46 @@ return {
             end
 
 
-            local BACKSTAB_WINDOW = 0.625
-            local BACKSTAB_COOLDOWN = 1.25
+            local MELEE_DWELL_S = 0.07
+            local KNIFE_BACKSTAB_INTERVAL = 0.625
+            local ATTACK_GAP_HOLD = 0.30
             local MeleeStrategy = {}
             MeleeStrategy.__index = MeleeStrategy
+
             function MeleeStrategy.new(partGlue)
                 return setmetatable({
                     _partGlue = partGlue,
                     _shootLock = ShootLock.new(),
-                    _hitboxWindowUntil = -1,
-                    _attackCooldown = -1,
+                    _meleeDwellStart = nil,
+                    _meleeDwellTarget = nil,
+                    _gapTargetKey = nil,
+                    _gapUntil = 0,
+                    _readyTargetKey = nil,
+                    _lastPark = nil,
+                    _lastParkTargetKey = nil,
+                    _viewAngleDriver = nil,
                     _gluedOurPart = nil,
+                    _lastKnifeBackstabAt = nil,
                 }, MeleeStrategy)
             end
-            local function meleeViewAngles(px, oy)
-                return { kind = 'Normalized', pitch = math.deg(px), yaw = math.deg(oy) }
+
+            local function meleeProfile(item)
+                local info = itemInfo(item)
+                if type(info) ~= 'table' or rawget(info, 'MaxAmmo') ~= nil then
+                    return nil
+                end
+                local heavy = rawget(info, 'CriticalDamage') ~= nil and type(rawget(info, 'HeavyAttackCooldown')) == 'number'
+                local name = normalizedItemName(item)
+                return {
+                    heavy = heavy,
+                    knife = nameContainsAny(name, KNIFE_NAMES),
+                }
             end
-            function MeleeStrategy:_RecordBackstab()
-                local now = os.clock()
-                self._hitboxWindowUntil = now + BACKSTAB_WINDOW
-                self._attackCooldown = now + BACKSTAB_COOLDOWN
+
+            local function meleeTargetKey(target)
+                return target and (target.player or target.model or target.rootPart) or nil
             end
+
             function MeleeStrategy:ClearGlue()
                 local glued = self._gluedOurPart
                 if glued ~= nil then
@@ -3224,91 +3244,253 @@ return {
                     self._gluedOurPart = nil
                 end
             end
+
+            function MeleeStrategy:_ClearContinuity()
+                self._gapTargetKey = nil
+                self._gapUntil = 0
+                self._readyTargetKey = nil
+                self._lastPark = nil
+                self._lastParkTargetKey = nil
+            end
+
+            function MeleeStrategy:MarkReady(targetKey, park)
+                self._readyTargetKey = targetKey
+                self._lastParkTargetKey = targetKey
+                self._lastPark = park
+                self._gapTargetKey = nil
+                self._gapUntil = 0
+            end
+
+            function MeleeStrategy:HoldGap(target, ourRootPart)
+                if not Setting.RageAttackContinuity() then return nil end
+                local key = meleeTargetKey(target) or self._readyTargetKey
+                local now = os.clock()
+                if key == nil or self._readyTargetKey ~= key or self._lastPark == nil or self._lastParkTargetKey ~= key then
+                    return nil
+                end
+                if self._gapTargetKey == nil then
+                    self._gapTargetKey = key
+                    self._gapUntil = now + ATTACK_GAP_HOLD
+                elseif self._gapTargetKey ~= key or now > self._gapUntil then
+                    self:_ClearContinuity()
+                    return nil
+                end
+                if now > self._gapUntil then
+                    self:_ClearContinuity()
+                    return nil
+                end
+                return CFrame.new(self._lastPark), true
+            end
+
+            function MeleeStrategy:_ResolvePark(target, profile, hitboxHead, targetRootPart)
+                local aimPos = hitboxHead.Position
+                local park
+                local status = profile.knife and 'Knife melee' or 'Melee'
+                if Setting.RageMode() == 'Orbit' then
+                    local flank, flankStatus = flankPointRuntime(target, hitboxHead)
+                    if flank then
+                        park = flank
+                        status = flankStatus or 'Orbit flank'
+                    end
+                end
+                if park == nil and Setting.RageMode() == 'Orbit' then
+                    park = orbitVantageRuntime(target, aimPos, profile.knife)
+                    if park then
+                        status = profile.knife and 'Orbit (kept dist)' or 'Orbit'
+                    end
+                end
+                if park == nil then
+                    if profile.knife or profile.heavy then
+                        park = targetRootPart.Position
+                            - (targetRootPart.CFrame.LookVector * 1.2)
+                            + Vector3.new(0, 0.6, 0)
+                    else
+                        park = hitboxHead.Position
+                            + (targetRootPart.CFrame.LookVector * -0.8)
+                            + Vector3.new(0, -0.5, 0)
+                    end
+                end
+                return park, aimPos, status
+            end
+
             function MeleeStrategy:Plan(dt, target, item, ourRootPart, canFire, characterController)
                 if target == nil or item == nil or ourRootPart == nil or not ourRootPart.Parent then
                     return ourRootPart and ourRootPart.CFrame or VOID_CFRAME, nil, nil
                 end
-                local hitboxHead = target.hitboxHead
-                local targetRootPart = target.rootPart
-                if hitboxHead == nil or hitboxHead.Parent == nil or targetRootPart == nil or targetRootPart.Parent == nil then
-                    self:ClearGlue()
-                    return ourRootPart.CFrame, nil, nil
-                end
-                local profile = meleeProfile(item)
+
+                local profile = meleeProfile(runtimeEquippedItem(resolveLocalFighter()) or item)
+                State.RageGumMode = rageGumMode()
+                State.RageGumVoidFire = false
                 if profile == nil then
                     self:ClearGlue()
+                    self._meleeDwellStart = nil
+                    self._meleeDwellTarget = nil
                     return ourRootPart.CFrame, nil, nil
                 end
-                local above = isAbove(target)
-                local offset = above and OFFSET_ABOVE or OFFSET_BELOW
-                local glueOk, void = pcall(function()
+
+                local liveCharacter = target.model or (target.player and target.player.Character)
+                local hitboxHead, targetRootPart = resolveLiveTarget(target)
+                if hitboxHead == nil or targetRootPart == nil then
+                    local held = self:HoldGap(target, ourRootPart)
+                    if held then
+                        State.RageKnifeStatus = 'attack continuity'
+                        return held, nil, nil
+                    end
+                    self:ClearGlue()
+                    self._meleeDwellStart = nil
+                    self._meleeDwellTarget = nil
+                    return ourRootPart.CFrame, nil, nil
+                end
+
+                local targetKey = meleeTargetKey(target)
+                local now = tick()
+                if self._meleeDwellTarget ~= targetKey then
+                    self._meleeDwellTarget = targetKey
+                    self._meleeDwellStart = now
+                    self._lastKnifeBackstabAt = nil
+                elseif self._meleeDwellStart == nil then
+                    self._meleeDwellStart = now
+                end
+
+                self._viewAngleDriver = characterController and characterController._viewAngleDriver or self._viewAngleDriver
+                if self._viewAngleDriver then
+                    pcall(LuaHookViewAngle.MimicTarget, targetRootPart, self._viewAngleDriver)
+                end
+
+                local park, aimPos, parkStatus = self:_ResolvePark(target, profile, hitboxHead, targetRootPart)
+                if not isFiniteVector3(park) or ragePosIsOOB(park) then
+                    self:ClearGlue()
+                    local held = self:HoldGap(target, ourRootPart)
+                    if held then return held, nil, nil end
+                    return ourRootPart.CFrame, nil, nil
+                end
+
+                local glueOk, glueCFrame = pcall(function()
                     return self._partGlue:Acquire(ourRootPart, hitboxHead, false, 'on')
                 end)
-                if not glueOk or void == nil then
+                if not glueOk or glueCFrame == nil then
                     self:ClearGlue()
                     return ourRootPart.CFrame, nil, nil
                 end
                 self._gluedOurPart = ourRootPart
-                local cframe
-                if above then
-                    cframe = void + offset
-                else
-                    cframe = CFrame.new(void.Position + offset, hitboxHead.Position)
-                end
-                local px, oy, oz = targetRootPart.CFrame:ToOrientation()
-                local pitch = above and PITCH_ABOVE or PITCH_BELOW
-                local aim1 = buildAim(above and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, pitch, oy, oz)
-                local aim2 = buildAim(above and AIM_ABOVE_END or AIM_BELOW_END, pitch, oy, oz)
-                local objectId = itemObjectId(item)
-                if objectId == nil then
-                    return cframe, nil, nil
-                end
-                local now = os.clock()
-                if now < self._hitboxWindowUntil then
-                    return cframe, meleeViewAngles(px, oy), function()
-                        local ok = fireMeleeHeavy(objectId, aim1, aim2, hitboxHead, AIM_EXTRA)
-                        if ok then
-                            State.RageKnifeSwings = (State.RageKnifeSwings or 0) + 1
-                            State.Shots = (State.Shots or 0) + 1
-                        end
-                        return ok
+
+                if profile.knife and profile.heavy then
+                    local lastKnife = self._lastKnifeBackstabAt
+                    if lastKnife ~= nil and now - lastKnife < KNIFE_BACKSTAB_INTERVAL then
+                        local gluedPark = CFrame.new(glueCFrame.Position + GLUE_PARK_OFF)
+                        return gluedPark, nil, nil
                     end
+                elseif not self._shootLock:ShouldFire(canFire, (dt or 0) * Setting.ShootFrames()) then
+                    return CFrame.new(park), nil, nil
                 end
-                if not self._shootLock:ShouldFire(canFire, (dt or 0) * Setting.ShootFrames()) then
-                    return cframe, nil, nil
+
+                local effectivePark = glueCFrame.Position + GLUE_PARK_OFF
+                local eyePos = effectivePark + Vector3.new(0, eyeRise(effectivePark, liveCharacter), 0)
+                local eyeCF = safeLookCFrame(eyePos, aimPos)
+                if eyeCF == nil then
+                    return CFrame.new(park), nil, nil
                 end
-                if now < self._attackCooldown then
-                    return cframe, nil, nil
+
+                if self._meleeDwellStart == nil or now - self._meleeDwellStart < MELEE_DWELL_S then
+                    return CFrame.new(park), nil, nil
                 end
-                if not profile.knife then
-                    return cframe, nil, function()
-                        local ok = fireMeleeAttack(objectId, aim1, aim2, hitboxHead, AIM_EXTRA)
-                        if ok then
-                            State.RageKnifeSwings = (State.RageKnifeSwings or 0) + 1
-                            State.Shots = (State.Shots or 0) + 1
-                            State.RageKnifeStatus = 'Melee attack'
-                        end
-                        return ok
+
+                local firePark = effectivePark
+                local actionItem = item
+                if profile.knife and profile.heavy and self._viewAngleDriver then
+                    pcall(LuaHookViewAngle.MimicTarget, targetRootPart, self._viewAngleDriver)
+                end
+                local weaponAction = function()
+                    local liveFighter = resolveLocalFighter()
+                    actionItem = runtimeEquippedItem(liveFighter) or actionItem
+                    local liveProfile = meleeProfile(actionItem)
+                    if liveProfile == nil then
+                        State.RageKnifeStatus = 'not a melee item'
+                        return false
                     end
-                end
-                self:_RecordBackstab()
-                return cframe, meleeViewAngles(px, oy), function()
-                    local ok = fireMeleeHeavy(objectId, aim1, aim2, hitboxHead, AIM_EXTRA)
-                    if ok then
+                    local liveTarget = target
+                    local liveChar = liveTarget.model or (liveTarget.player and liveTarget.player.Character)
+                    local liveHead, liveRoot = resolveLiveTarget(liveTarget)
+                    if liveHead == nil or liveRoot == nil then
+                        local held = self:HoldGap(target, ourRootPart)
+                        if held then
+                            State.RageKnifeStatus = 'target gap hold'
+                        else
+                            State.RageKnifeStatus = 'target has no root/head'
+                        end
+                        return false
+                    end
+                    local livePark, liveAim, liveStatus = self:_ResolvePark(liveTarget, liveProfile, liveHead, liveRoot)
+                    if not isFiniteVector3(livePark) or ragePosIsOOB(livePark) then
+                        return false
+                    end
+                    local liveGlueOk, liveGlueCFrame = pcall(function()
+                        return self._partGlue:Acquire(ourRootPart, liveHead, false, 'on')
+                    end)
+                    if not liveGlueOk or liveGlueCFrame == nil then
+                        self:ClearGlue()
+                        return false
+                    end
+                    self._gluedOurPart = ourRootPart
+                    local liveEffectivePark = liveGlueCFrame.Position + GLUE_PARK_OFF
+                    local liveEyePos = liveEffectivePark + Vector3.new(0, eyeRise(liveEffectivePark, liveChar), 0)
+                    local liveEyeCF = safeLookCFrame(liveEyePos, liveAim)
+                    if liveEyeCF == nil then return false end
+                    local liveMuzzleCF = liveEyeCF - Vector3.new(0, EYE_MUZZLE_SEP, 0)
+                    local objectId = meleeObjectId(actionItem)
+                    if objectId == nil then
+                        State.RageKnifeStatus = 'no ObjectID'
+                        return false
+                    end
+                    local liveAbove = isAbove(liveTarget)
+                    local _, liveOy, liveOz = liveRoot.CFrame:ToOrientation()
+                    local livePitch = liveAbove and PITCH_ABOVE or PITCH_BELOW
+                    local liveAim1 = buildAim(liveAbove and AIM_ABOVE_ORIGIN or AIM_BELOW_ORIGIN, livePitch, liveOy, liveOz)
+                    local liveAim2 = buildAim(liveAbove and AIM_ABOVE_END or AIM_BELOW_END, livePitch, liveOy, liveOz)
+                    State.RageFireFromPos = liveEyePos
+                    State.RageFireAimPos = liveAim
+                    State.RageFireHitPart = liveHead
+                    State.RageFireStamp = tick()
+                    local ok, result = pcall(function()
+                        if liveProfile.heavy then
+                            return fireMeleeHeavy(objectId, liveAim1, liveAim2, liveHead, AIM_EXTRA)
+                        end
+                        return fireMeleeAttack(objectId, liveAim1, liveAim2, liveHead, AIM_EXTRA)
+                    end)
+                    if not ok then
+                        State.RageKnifeStatus = 'melee error: ' .. tostring(result)
+                        return false
+                    end
+                    if result == true then
+                        local key = meleeTargetKey(liveTarget)
+                        self:MarkReady(key, liveEffectivePark)
+                        if liveProfile.knife and liveProfile.heavy then
+                            self._lastKnifeBackstabAt = tick()
+                        end
                         State.RageKnifeSwings = (State.RageKnifeSwings or 0) + 1
                         State.Shots = (State.Shots or 0) + 1
-                        State.RageKnifeStatus = 'Knife melee'
+                        State.RageKnifeStatus = liveStatus or (liveProfile.knife and 'Knife melee' or 'Melee attack')
+                        return true
                     end
-                    return ok
+                    State.RageKnifeStatus = 'melee send failed'
+                    return false
                 end
-            end
-            function MeleeStrategy:ResetState()
-                self._hitboxWindowUntil = -1
-                self._attackCooldown = -1
-                self._shootLock:Reset()
-                self:ClearGlue()
+
+                State.RageKnifeStatus = parkStatus
+                return CFrame.new(firePark), nil, weaponAction
             end
 
+            function MeleeStrategy:ResetState(keepContinuity)
+                self._meleeDwellStart = nil
+                self._meleeDwellTarget = nil
+                self._shootLock:Reset()
+                self._lastKnifeBackstabAt = nil
+                self:ClearGlue()
+                LuaHookViewAngle.ClearTarget(self._viewAngleDriver)
+                if not keepContinuity then
+                    self:_ClearContinuity()
+                end
+            end
 local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
             local function applyEnabledFFlags(enabled)
                 if enabled and ORIGINAL_FALLEN_PARTS_HEIGHT == nil then
@@ -3384,6 +3566,10 @@ local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
                 end
                 if isFlightActive() then
                     return { cframe = clientCF }
+                end
+                local evasionOption = Options and Options.P8S4D2 and Options.P8S4D2.Value or mode
+                if undergroundEnabled and evasionOption ~= 'Auto' and mode == 'Random' then
+                    return { cframe = clientCF, shouldSkipDefense = true }
                 end
                 return { cframe = randomEvade(clientCF) }
             end
@@ -3524,6 +3710,12 @@ local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
                 end
                 if mode == 'Translocate' then
                     self:_ApplyForcedCrouch(false)
+                    local evasionOption = Options and Options.P8S4D2 and Options.P8S4D2.Value or mode
+                    if undergroundEnabled and evasionOption ~= 'Auto' then
+                        characterController:SetServerCFrame(clientCF)
+                        characterController:HeartbeatUpdate()
+                        return
+                    end
                     local translocateCFrame = isFlightActive() and clientCF or translocateEvade(clientCF, hasTargets())
                     characterController:SetServerCFrame(translocateCFrame)
                     characterController:HeartbeatUpdate()
@@ -3703,7 +3895,13 @@ local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
                 if localRoot == nil or not localRoot.Parent then
                     return false
                 end
-                local localCombatCF = undergroundGetClientCFrame(localRoot) or localRoot.CFrame
+                local localCombatCF = undergroundGetClientCFrame(localRoot)
+                if localCombatCF == nil then
+                    localCombatCF = localRoot.CFrame
+                end
+                if typeof(localCombatCF) ~= 'CFrame' or typeof(localCombatCF.Position) ~= 'Vector3' or not isFiniteVector3(localCombatCF.Position) then
+                    return false
+                end
                 local eyeBase = localCombatCF.Position
                 local eyePos = eyeBase + Vector3.new(0, eyeRise(eyeBase, target.model), 0)
                 local eyeCF = safeLookCFrame(eyePos, hitboxHead.Position)
@@ -17220,6 +17418,7 @@ ErrorReporter.set_game(GameName)
                 UndergroundDefenseTranslocateUntil = 0,
                 UndergroundDefenseHealth = nil,
                 UndergroundDefenseHealthCharacter = nil,
+                UndergroundDefenseHealthConn = nil,
                 UndergroundDefenseReloadingItem = nil,
                 UndergroundDefenseReloadRequestAt = 0,
                 UndergroundDefenseReloadUntil = 0,
@@ -17797,13 +17996,48 @@ ErrorReporter.set_game(GameName)
             end
             local UNDERGROUND_RELOAD_RETRY = 0.20
             local UNDERGROUND_RELOAD_GRACE = 1.25
+            local function UndergroundDefenseShotInterval(item)
+                local info = itemInfo(item)
+                local interval = 0.05
+                if type(info and rawget(info, 'ShootCooldown')) == 'number' then
+                    interval = math.max(interval, info.ShootCooldown)
+                end
+                if type(info and rawget(info, 'ShootBurstCooldown')) == 'number' then
+                    interval = math.max(interval, info.ShootBurstCooldown)
+                end
+                if type(info and rawget(info, 'QuickShotCooldown')) == 'number' then
+                    interval = math.max(interval, info.QuickShotCooldown)
+                end
+                if type(info and rawget(info, 'ChargeReleaseCooldown')) == 'number' then
+                    interval = math.max(interval, info.ChargeReleaseCooldown)
+                end
+                local speedScale = 1
+                if type(ResolveRivalsWeaponSpeedScale) == 'function' then
+                    local ok, value = pcall(ResolveRivalsWeaponSpeedScale)
+                    if ok and type(value) == 'number' and value > 0 then
+                        speedScale = value
+                    end
+                end
+                return math.max(0.05, interval * speedScale)
+            end
             local function UndergroundDefenseHandleWeapon(fighter, now)
                 if fighter == nil then
                     return false
                 end
                 local item = runtimeEquippedItem(fighter)
                 if item == nil or itemType(item) ~= 'Gun' then
-                    return false
+                    local action = getAction(fighter)
+                    if action and action.type == 'Swap' and action.item and action.index then
+                        local swapped = false
+                        pcall(function()
+                            setRageSwapPending(action.index)
+                            swapped = equipItem(action.item, action.index, fighter) == true
+                        end)
+                        if swapped then
+                            RivalsRagebotState.UndergroundDefenseReloadUntil = now + 0.15
+                        end
+                    end
+                    return true
                 end
                 local ammo = itemAmmo(item)
                 local reserve = itemAmmoReserve(item)
@@ -17855,80 +18089,115 @@ ErrorReporter.set_game(GameName)
             end
             function RivalsRagebot.UpdateUndergroundDefenseHitState(now, active, threatPlayer)
                 now = now or tick()
+                local state = RivalsRagebotState
+                local function disconnectHealthMonitor()
+                    if state.UndergroundDefenseHealthConn then
+                        pcall(function() state.UndergroundDefenseHealthConn:Disconnect() end)
+                        state.UndergroundDefenseHealthConn = nil
+                    end
+                end
                 if not active then
-                    RivalsRagebotState.UndergroundDefenseEvasionMode = 'Random'
-                    RivalsRagebotState.UndergroundDefenseTranslocateUntil = 0
-                    RivalsRagebotState.UndergroundDefenseHealth = nil
-                    RivalsRagebotState.UndergroundDefenseHealthCharacter = nil
-                    RivalsRagebotState.UndergroundDefenseReloadingItem = nil
-                    RivalsRagebotState.UndergroundDefenseReloadUntil = 0
+                    disconnectHealthMonitor()
+                    state.UndergroundDefenseEvasionMode = 'Random'
+                    state.UndergroundDefenseTranslocateUntil = 0
+                    state.UndergroundDefenseHealth = nil
+                    state.UndergroundDefenseHealthCharacter = nil
+                    state.UndergroundDefenseReloadingItem = nil
+                    state.UndergroundDefenseReloadUntil = 0
                     return
                 end
                 local char = LP and LP.Character
                 local humanoid = char and char:FindFirstChildOfClass('Humanoid')
                 if not humanoid or humanoid.Health <= 0 then
-                    RivalsRagebotState.UndergroundDefenseHealth = nil
-                    RivalsRagebotState.UndergroundDefenseHealthCharacter = nil
-                    RivalsRagebotState.UndergroundDefenseReloadingItem = nil
-                    RivalsRagebotState.UndergroundDefenseReloadUntil = 0
+                    disconnectHealthMonitor()
+                    state.UndergroundDefenseHealth = nil
+                    state.UndergroundDefenseHealthCharacter = nil
+                    state.UndergroundDefenseReloadingItem = nil
+                    state.UndergroundDefenseReloadUntil = 0
                     return
                 end
-                if RivalsRagebotState.UndergroundDefenseHealthCharacter ~= char then
-                    RivalsRagebotState.UndergroundDefenseHealthCharacter = char
-                    RivalsRagebotState.UndergroundDefenseHealth = humanoid.Health
+                if state.UndergroundDefenseHealthCharacter ~= char then
+                    disconnectHealthMonitor()
+                    state.UndergroundDefenseHealthCharacter = char
+                    state.UndergroundDefenseHealth = humanoid.Health
+                    local function markDamage(newHealth)
+                        if type(newHealth) ~= 'number' then return end
+                        local previous = state.UndergroundDefenseHealth
+                        if type(previous) == 'number' and newHealth < previous - 0.01 then
+                            local attacker = threatPlayer or state.UndergroundDefenseTargetPlayer
+                            if attacker and attacker.Parent == Players and RivalsRagebot.IsCombatTarget(attacker) then
+                                local t = tick()
+                                state.UndergroundDefenseEvasionMode = 'Translocate'
+                                state.UndergroundDefenseTranslocateUntil = t + 10
+                            end
+                        end
+                        state.UndergroundDefenseHealth = newHealth
+                    end
+                    state.UndergroundDefenseHealthConn = humanoid.HealthChanged:Connect(markDamage)
                 else
-                    local previousHealth = RivalsRagebotState.UndergroundDefenseHealth
+                    local previousHealth = state.UndergroundDefenseHealth
                     local currentHealth = humanoid.Health
                     if type(previousHealth) == 'number' and currentHealth < previousHealth - 0.01 then
-                        if threatPlayer == nil then
-                            threatPlayer = RivalsRagebotState.UndergroundDefenseTargetPlayer
-                        end
-                        if threatPlayer ~= nil and threatPlayer.Parent == Players and RivalsRagebot.IsCombatTarget(threatPlayer) then
-                            RivalsRagebotState.UndergroundDefenseEvasionMode = 'Translocate'
-                            RivalsRagebotState.UndergroundDefenseTranslocateUntil = now + 10
+                        local attacker = threatPlayer or state.UndergroundDefenseTargetPlayer
+                        if attacker and attacker.Parent == Players and RivalsRagebot.IsCombatTarget(attacker) then
+                            state.UndergroundDefenseEvasionMode = 'Translocate'
+                            state.UndergroundDefenseTranslocateUntil = now + 10
                         end
                     end
-                    RivalsRagebotState.UndergroundDefenseHealth = currentHealth
+                    state.UndergroundDefenseHealth = currentHealth
                 end
-                if RivalsRagebotState.UndergroundDefenseEvasionMode == 'Translocate' and now >= (RivalsRagebotState.UndergroundDefenseTranslocateUntil or 0) then
-                    RivalsRagebotState.UndergroundDefenseEvasionMode = 'Random'
-                    RivalsRagebotState.UndergroundDefenseTranslocateUntil = 0
+                if state.UndergroundDefenseEvasionMode == 'Translocate' and now >= (state.UndergroundDefenseTranslocateUntil or 0) then
+                    state.UndergroundDefenseEvasionMode = 'Random'
+                    state.UndergroundDefenseTranslocateUntil = 0
                 end
             end
             function RivalsRagebot.ResolveUndergroundDefenseTarget(maxDistance)
-                maxDistance = maxDistance or RivalsRagebot.UndergroundDefenseDistance
+                maxDistance = tonumber(maxDistance) or RivalsRagebot.UndergroundDefenseDistance
+                maxDistance = math.max(maxDistance, 0)
                 local localRoot = HumanoidRootPart
                 if not localRoot or not localRoot.Parent then
+                    return nil
+                end
+                local localCombatPosition = localRoot.Position
+                local clientCF = undergroundGetClientCFrame(localRoot)
+                if clientCF and typeof(clientCF) == 'CFrame' and typeof(clientCF.Position) == 'Vector3' and isFiniteVector3(clientCF.Position) then
+                    localCombatPosition = clientCF.Position
+                end
+                if typeof(localCombatPosition) ~= 'Vector3' or not isFiniteVector3(localCombatPosition) then
                     return nil
                 end
                 local best = nil
                 local bestDistance = maxDistance + 1
                 local filter = RivalsRagebot.LosRaycastParams
-                for _, fighter in ipairs(LocalFighterController and LocalFighterController.Objects or {}) do
-                    local player = fighter and fighter.Player
-                    if player and player ~= LP and player.Parent == Players and RivalsRagebot.IsCombatTarget(player) and ShouldShow(player, false) then
-                        local entity = fighter.Entity
-                        local subject = entity and entity.Model
+                for _, player in ipairs(Players:GetPlayers()) do
+                    if player ~= LP and player.Parent == Players and RivalsRagebot.IsCombatTarget(player) then
+                        local subject = player.Character
                         local humanoid = subject and subject:FindFirstChildOfClass('Humanoid')
                         local root = subject and subject:FindFirstChild('HumanoidRootPart')
                         local head = subject and (subject:FindFirstChild('HitboxHead') or subject:FindFirstChild('Head'))
-                        if subject and humanoid and humanoid.Health > 0 and root and root.Parent and head and head.Parent then
-                            local dist = (root.Position - localCombatPosition).Magnitude
-                            if dist <= maxDistance and dist < bestDistance then
-                                local origin = localCombatPosition + Vector3.new(0, 1.5, 0)
-                                local direction = head.Position - origin
-                                if direction.Magnitude > 0 then
-                                    filter.FilterDescendantsInstances = { LP.Character, subject }
-                                    local blocked = Workspace:Raycast(origin, direction, filter)
-                                    if not blocked then
+                        if subject and humanoid and humanoid.Health > 0 and root and root.Parent and root:IsA('BasePart') and head and head.Parent and head:IsA('BasePart') then
+                            local rootPos = root.Position
+                            local headPos = head.Position
+                            if typeof(rootPos) == 'Vector3' and typeof(headPos) == 'Vector3' and isFiniteVector3(rootPos) and isFiniteVector3(headPos) then
+                                local delta = rootPos - localCombatPosition
+                                local dist = delta.Magnitude
+                                if dist <= maxDistance and dist < bestDistance then
+                                    local origin = localCombatPosition + Vector3.new(0, 1.5, 0)
+                                    local direction = headPos - origin
+                                    local clear = direction.Magnitude > 0
+                                    if clear then
+                                        filter.FilterDescendantsInstances = { LP.Character, subject }
+                                        clear = Workspace:Raycast(origin, direction, filter) == nil
+                                    end
+                                    if clear then
                                         best = {
-                                            fighter = fighter,
+                                            fighter = nil,
                                             player = player,
-                                            entity = entity,
+                                            entity = nil,
                                             model = subject,
                                             hitboxHead = head,
                                             rootPart = root,
-                                            itemObserver = rawget(fighter, 'itemObserver') or rawget(fighter, 'ItemObserver'),
+                                            itemObserver = nil,
                                             distance = dist,
                                             protected = false,
                                         }
@@ -18146,7 +18415,21 @@ ErrorReporter.set_game(GameName)
                 local evasionOption = Options and Options.P8S4D2 and Options.P8S4D2.Value or 'Random'
                 local defenseModeEnabled = evasionOption == 'Auto'
                 if enabled and not flightActive and defenseModeEnabled then
-                    local undergroundDefense, threatPlayer = RivalsRagebot.IsUndergroundDefenseActive(now, RivalsRagebot.UndergroundDefenseDistance)
+                    local undergroundDefense, threatPlayer
+                    local latchedMode = RivalsRagebotState.UndergroundDefenseEvasionMode or 'Random'
+                    local latchedUntil = RivalsRagebotState.UndergroundDefenseTranslocateUntil or 0
+                    local latchedPlayer = RivalsRagebotState.UndergroundDefenseTargetPlayer
+                    if RivalsRagebotState.UndergroundDefenseActive == true and latchedMode == 'Translocate' and now < latchedUntil then
+                        local char = latchedPlayer and latchedPlayer.Character
+                        local root = char and char:FindFirstChild('HumanoidRootPart')
+                        local humanoid = char and char:FindFirstChildOfClass('Humanoid')
+                        if latchedPlayer and latchedPlayer.Parent == Players and RivalsRagebot.IsCombatTarget(latchedPlayer) and root and root.Parent and humanoid and humanoid.Health > 0 then
+                            undergroundDefense, threatPlayer = true, latchedPlayer
+                        end
+                    end
+                    if not undergroundDefense then
+                        undergroundDefense, threatPlayer = RivalsRagebot.IsUndergroundDefenseActive(now, RivalsRagebot.UndergroundDefenseDistance)
+                    end
                     if undergroundDefense then
                         RivalsRagebotState.UndergroundDefenseActive = true
                         RivalsRagebot.UpdateUndergroundDefenseHitState(now, true, threatPlayer)
@@ -18178,14 +18461,19 @@ ErrorReporter.set_game(GameName)
                         local item = fighter and runtimeEquippedItem(fighter) or nil
                         local shootReady = true
                         if item ~= nil then
-                            local shootCooldown = rawget(item, '_shoot_cooldown')
-                            if type(shootCooldown) == 'number' and shootCooldown > now then
+                            local lastShotAt = RivalsRagebotState.UndergroundDefenseLastShotAt or 0
+                            if now - lastShotAt < UndergroundDefenseShotInterval(item) then
+                                shootReady = false
+                            end
+                            local cooldown = rawget(item, '_shoot_cooldown')
+                            if type(cooldown) == 'number' and cooldown > now then
                                 shootReady = false
                             end
                         end
                         local rage = RivalsRuntimeBridge and RivalsRuntimeBridge.KiciaRagebot
                         local fireDefense = rage and rage.FireUndergroundDefense
-                        if defenseTarget and shootReady and type(fireDefense) == 'function' then
+                        local ammoReady = item ~= nil and itemType(item) == 'Gun' and itemAmmo(item) > 0 and not itemIsReloading(item)
+                        if defenseTarget and shootReady and ammoReady and type(fireDefense) == 'function' then
                             local fired = false
                             local ok = pcall(function() fired = fireDefense(defenseTarget) == true end)
                             if ok and fired then
@@ -18207,6 +18495,10 @@ ErrorReporter.set_game(GameName)
                     RivalsRagebotState.UndergroundDefenseTranslocateUntil = 0
                     RivalsRagebotState.UndergroundDefenseHealth = nil
                     RivalsRagebotState.UndergroundDefenseHealthCharacter = nil
+                    if RivalsRagebotState.UndergroundDefenseHealthConn then
+                        pcall(function() RivalsRagebotState.UndergroundDefenseHealthConn:Disconnect() end)
+                        RivalsRagebotState.UndergroundDefenseHealthConn = nil
+                    end
                     RivalsRagebotState.UndergroundDefenseReloadingItem = nil
                     RivalsRagebotState.UndergroundDefenseReloadRequestAt = 0
                     RivalsRagebotState.UndergroundDefenseReloadUntil = 0
@@ -26395,6 +26687,10 @@ ErrorReporter.set_game(GameName)
                                     RivalsRagebotState.UndergroundDefenseTranslocateUntil = 0
                                     RivalsRagebotState.UndergroundDefenseHealth = nil
                                     RivalsRagebotState.UndergroundDefenseHealthCharacter = nil
+                                    if RivalsRagebotState.UndergroundDefenseHealthConn then
+                                        pcall(function() RivalsRagebotState.UndergroundDefenseHealthConn:Disconnect() end)
+                                        RivalsRagebotState.UndergroundDefenseHealthConn = nil
+                                    end
                                     RivalsRagebotState.UndergroundDefenseReloadingItem = nil
                                     RivalsRagebotState.UndergroundDefenseReloadRequestAt = 0
                                     RivalsRagebotState.UndergroundDefenseReloadUntil = 0
@@ -28080,6 +28376,10 @@ local RivalsRuntime = {}
                 RivalsRagebotState.UndergroundDefenseTranslocateUntil = 0
                 RivalsRagebotState.UndergroundDefenseHealth = nil
                 RivalsRagebotState.UndergroundDefenseHealthCharacter = nil
+                if RivalsRagebotState.UndergroundDefenseHealthConn then
+                    pcall(function() RivalsRagebotState.UndergroundDefenseHealthConn:Disconnect() end)
+                    RivalsRagebotState.UndergroundDefenseHealthConn = nil
+                end
                 RivalsRagebotState.UndergroundDefenseReloadingItem = nil
                 RivalsRagebotState.UndergroundDefenseReloadRequestAt = 0
                 RivalsRagebotState.UndergroundDefenseReloadUntil = 0
