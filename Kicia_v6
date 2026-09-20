@@ -92,6 +92,7 @@ function UndergroundRootDesync.new(rootPart)
         _boundId = tostring({}),
         _oldCFrame = rootPart.CFrame,
         _cframe = nil,
+        _lastGoodCFrame = rootPart.CFrame,
     }, UndergroundRootDesync)
     RunService:BindToRenderStep(self._boundId, Enum.RenderPriority.First.Value, function()
         local root = self._rootPart
@@ -116,6 +117,7 @@ function UndergroundRootDesync:SetServerCFrame(cf)
         return
     end
     self._cframe = cf
+    self._lastGoodCFrame = cf
 end
 function UndergroundRootDesync:GetClientCFrame()
     local root = self._rootPart
@@ -123,15 +125,11 @@ function UndergroundRootDesync:GetClientCFrame()
 end
 function UndergroundRootDesync:HeartbeatUpdate()
     local rootPart = self._rootPart
-    local cf = self._cframe
+    local cf = self._cframe or self._lastGoodCFrame
     if not rootPart or not rootPart.Parent or cf == nil then
         return
     end
     local current = rootPart.CFrame
-    local delta = (cf.Position - current.Position).Magnitude
-    if delta > 15 then
-        return
-    end
     self._oldCFrame = current
     rootPart.CFrame = cf
     pcall(function()
@@ -150,6 +148,7 @@ function UndergroundRootDesync:Destroy()
     self._rootPart = nil
     self._oldCFrame = nil
     self._cframe = nil
+    self._lastGoodCFrame = nil
 end
 
 local function undergroundGetCharacter()
@@ -167,7 +166,7 @@ end
 local function undergroundGetDepth()
     local value = Options and Options.P8S4S6 and Options.P8S4S6.Value
     local depth = tonumber(value) or undergroundDepth or 1.0
-    depth = math.clamp(depth, 0.67, 2.0)
+    depth = math.clamp(depth, 2.0, 4.5)
     undergroundDepth = depth
     return depth
 end
@@ -180,8 +179,8 @@ local function undergroundFindFloorY(char, root)
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = { char }
-    local origin = Vector3.new(pos.X, pos.Y + 12, pos.Z)
-    local result = Workspace:Raycast(origin, Vector3.new(0, -96, 0), params)
+    local origin = Vector3.new(pos.X, pos.Y + 64, pos.Z)
+    local result = Workspace:Raycast(origin, Vector3.new(0, -256, 0), params)
     return result and result.Position.Y or nil
 end
 
@@ -277,8 +276,8 @@ local function undergroundServerCFrame(char, root)
     local previous = undergroundLastServerCFrame
     if previous ~= nil then
         local shift = (result.Position - previous.Position).Magnitude
-        if shift > 15 then
-            return nil
+        if shift > 25 then
+            return previous
         end
     end
     return result
@@ -3704,12 +3703,16 @@ local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
                 local action = getAction(fighter)
                 local mode = Setting.EvasionMode()
                 if mode == 'Auto' then
-                    local isReloading = action ~= nil and action.type == 'Reload'
-                    if not isReloading and action ~= nil and action.item ~= nil then
-                        isReloading = itemIsReloading(action.item)
+                    local activeDefense, defenseMode = false, 'Random'
+                    local bridge = RivalsRuntimeBridge
+                    if bridge and type(bridge.GetUndergroundDefenseEvasionMode) == 'function' then
+                        local ok, active, resolvedMode = pcall(bridge.GetUndergroundDefenseEvasionMode)
+                        if ok then
+                            activeDefense = active == true
+                            defenseMode = resolvedMode or 'Random'
+                        end
                     end
-                    local forceRandom = isReloading or (action ~= nil and (action.type == 'Swap' or action.type == 'SwapWait'))
-                    mode = resolveAutoEvasionMode(os.clock(), isReloading, forceRandom)
+                    mode = activeDefense and defenseMode or 'Random'
                 elseif AutoEvasion.active then
                     AutoEvasion.active = false
                     AutoEvasion.mode = 'Random'
@@ -3769,6 +3772,10 @@ local ORIGINAL_FALLEN_PARTS_HEIGHT = nil
                 AutoEvasion.randomHoldUntil = 0
                 AutoEvasion.reloading = false
                 AutoEvasion.shotPending = false
+                if RivalsRagebotState.UndergroundDefenseHealthConn then
+                    pcall(function() RivalsRagebotState.UndergroundDefenseHealthConn:Disconnect() end)
+                    RivalsRagebotState.UndergroundDefenseHealthConn = nil
+                end
                 if self._characterController then
                     self._characterController:SetServerCFrame(nil)
                     self._characterController:SendViewAngles(20, nil)
@@ -17382,7 +17389,7 @@ ErrorReporter.set_game(GameName)
                 HostileTeleportDeltaStuds  = 50,
                 HostileTeleportMinSpeed    = 150,
                 HostileTeleportWindowSec   = 5,
-                UndergroundDefenseDistance = 10,
+                UndergroundDefenseDistance = 30,
                 HostileTeleportMinCount    = 1,
                 HostileTrackerSampleMinDt  = 0.05,
                 HoldCFrameStaleTtlSec      = 0.15,
@@ -17948,7 +17955,10 @@ ErrorReporter.set_game(GameName)
                     local root = char and char:FindFirstChild('HumanoidRootPart')
                     local humanoid = char and char:FindFirstChildOfClass('Humanoid')
                     if latched.Parent == Players and RivalsRagebot.IsCombatTarget(latched) and root and root.Parent and humanoid and humanoid.Health > 0 then
-                        return true, latched
+                        local distance = (root.Position - localRoot.Position).Magnitude
+                        if distance <= maxDistance then
+                            return true, latched
+                        end
                     end
                     RivalsRagebotState.UndergroundDefenseTargetPlayer = nil
                     RivalsRagebotState.UndergroundDefenseEvasionMode = 'Random'
@@ -17956,30 +17966,55 @@ ErrorReporter.set_game(GameName)
                     RivalsRagebotState.UndergroundDefenseHealth = nil
                     RivalsRagebotState.UndergroundDefenseHealthCharacter = nil
                 end
-                for player, entry in pairs(RivalsRagebotState.HostileTeleports) do
-                    local teleports = entry and entry.Teleports
-                    local lastTeleport = type(teleports) == 'table' and teleports[#teleports] or nil
-                    if player and player ~= LP and player.Parent == Players and RivalsRagebot.IsCombatTarget(player) and lastTeleport and (now - lastTeleport) < RivalsRagebot.HostileTeleportWindowSec then
+                for _, fighter in ipairs(LocalFighterController and LocalFighterController.Objects or {}) do
+                    local player = fighter and fighter.Player
+                    if player
+                        and player ~= LP
+                        and player.Parent == Players
+                        and RivalsRagebot.IsCombatTarget(player)
+                    then
                         local char = player.Character
                         local root = char and char:FindFirstChild('HumanoidRootPart')
                         local humanoid = char and char:FindFirstChildOfClass('Humanoid')
                         if root and root.Parent and humanoid and humanoid.Health > 0 then
-                            local delta = root.Position - localRoot.Position
-                            if delta.Magnitude <= maxDistance then
+                            local distance = (root.Position - localRoot.Position).Magnitude
+                            if distance <= maxDistance then
                                 RivalsRagebotState.UndergroundDefenseTargetPlayer = player
-                                RivalsRagebotState.UndergroundDefenseEvasionMode = 'Random'
-                                RivalsRagebotState.UndergroundDefenseTranslocateUntil = 0
-                                RivalsRagebotState.UndergroundDefenseHealth = nil
-                                RivalsRagebotState.UndergroundDefenseHealthCharacter = nil
                                 return true, player
                             end
-                        else
-                            entry.Teleports = {}
-                            entry.Offsets = {}
                         end
                     end
                 end
                 return false, nil
+            end
+            local function bindUndergroundDefenseHealth(humanoid)
+                local state = RivalsRagebotState
+                if state.UndergroundDefenseHealthConn then
+                    pcall(function() state.UndergroundDefenseHealthConn:Disconnect() end)
+                    state.UndergroundDefenseHealthConn = nil
+                end
+                if not humanoid then
+                    state.UndergroundDefenseHealth = nil
+                    state.UndergroundDefenseHealthCharacter = nil
+                    return
+                end
+                state.UndergroundDefenseHealthCharacter = humanoid.Parent
+                state.UndergroundDefenseHealth = humanoid.Health
+                state.UndergroundDefenseHealthConn = humanoid.HealthChanged:Connect(function(newHealth)
+                    if not state.UndergroundDefenseActive then
+                        return
+                    end
+                    local previousHealth = state.UndergroundDefenseHealth
+                    state.UndergroundDefenseHealth = newHealth
+                    if type(previousHealth) == 'number' and newHealth < previousHealth - 0.01 then
+                        local player = state.UndergroundDefenseTargetPlayer
+                        if player ~= nil and player.Parent == Players and RivalsRagebot.IsCombatTarget(player) then
+                            local now = tick()
+                            state.UndergroundDefenseEvasionMode = 'Translocate'
+                            state.UndergroundDefenseTranslocateUntil = now + 0.35
+                        end
+                    end
+                end)
             end
             function RivalsRagebot.UpdateUndergroundDefenseHitState(now, active, threatPlayer)
                 now = now or tick()
@@ -17988,31 +18023,29 @@ ErrorReporter.set_game(GameName)
                     RivalsRagebotState.UndergroundDefenseTranslocateUntil = 0
                     RivalsRagebotState.UndergroundDefenseHealth = nil
                     RivalsRagebotState.UndergroundDefenseHealthCharacter = nil
+                    if RivalsRagebotState.UndergroundDefenseHealthConn then
+                        pcall(function() RivalsRagebotState.UndergroundDefenseHealthConn:Disconnect() end)
+                        RivalsRagebotState.UndergroundDefenseHealthConn = nil
+                    end
                     return
                 end
                 local char = LP and LP.Character
                 local humanoid = char and char:FindFirstChildOfClass('Humanoid')
                 if not humanoid or humanoid.Health <= 0 then
+                    if RivalsRagebotState.UndergroundDefenseHealthConn then
+                        pcall(function() RivalsRagebotState.UndergroundDefenseHealthConn:Disconnect() end)
+                        RivalsRagebotState.UndergroundDefenseHealthConn = nil
+                    end
                     RivalsRagebotState.UndergroundDefenseHealth = nil
                     RivalsRagebotState.UndergroundDefenseHealthCharacter = nil
                     return
                 end
-                if RivalsRagebotState.UndergroundDefenseHealthCharacter ~= char then
-                    RivalsRagebotState.UndergroundDefenseHealthCharacter = char
-                    RivalsRagebotState.UndergroundDefenseHealth = humanoid.Health
+                if RivalsRagebotState.UndergroundDefenseHealthCharacter ~= char
+                    or RivalsRagebotState.UndergroundDefenseHealthConn == nil
+                then
+                    bindUndergroundDefenseHealth(humanoid)
                 else
-                    local previousHealth = RivalsRagebotState.UndergroundDefenseHealth
-                    local currentHealth = humanoid.Health
-                    if type(previousHealth) == 'number' and currentHealth < previousHealth - 0.01 then
-                        if threatPlayer == nil then
-                            threatPlayer = RivalsRagebotState.UndergroundDefenseTargetPlayer
-                        end
-                        if threatPlayer ~= nil and threatPlayer.Parent == Players and RivalsRagebot.IsCombatTarget(threatPlayer) then
-                            RivalsRagebotState.UndergroundDefenseEvasionMode = 'Translocate'
-                            RivalsRagebotState.UndergroundDefenseTranslocateUntil = now + 10
-                        end
-                    end
-                    RivalsRagebotState.UndergroundDefenseHealth = currentHealth
+                    RivalsRagebotState.UndergroundDefenseHealth = humanoid.Health
                 end
                 if RivalsRagebotState.UndergroundDefenseEvasionMode == 'Translocate' and now >= (RivalsRagebotState.UndergroundDefenseTranslocateUntil or 0) then
                     RivalsRagebotState.UndergroundDefenseEvasionMode = 'Random'
@@ -18318,6 +18351,10 @@ ErrorReporter.set_game(GameName)
                     RivalsRagebotState.UndergroundDefenseTranslocateUntil = 0
                     RivalsRagebotState.UndergroundDefenseHealth = nil
                     RivalsRagebotState.UndergroundDefenseHealthCharacter = nil
+                    if RivalsRagebotState.UndergroundDefenseHealthConn then
+                        pcall(function() RivalsRagebotState.UndergroundDefenseHealthConn:Disconnect() end)
+                        RivalsRagebotState.UndergroundDefenseHealthConn = nil
+                    end
                     if RivalsRuntimeBridge.DestroyKiciaRagebot then
                         RivalsRuntimeBridge.DestroyKiciaRagebot()
                     end
@@ -26540,9 +26577,9 @@ ErrorReporter.set_game(GameName)
                     local UndergroundBox = Rage:AddDependencyBox()
                     UndergroundBox:AddSlider("P8S4S6", {
                         Text = "Floor Gap",
-                        Default = 1.00,
-                        Min = 0.67,
-                        Max = 2.00,
+                        Default = 4.00,
+                        Min = 2.00,
+                        Max = 4.50,
                         Rounding = 2,
                         Suffix = " studs",
                         Compact = true,
