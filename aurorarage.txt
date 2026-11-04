@@ -1,0 +1,3155 @@
+-- Reconstructed Aurora Ragebot. Game access is provided through a named API.
+-- This module defines behavior; it does not inject hooks or start itself.
+-- api provides Body, Fighter, Match, Targets, Sight, Elevated and AsGame.
+-- gameModules provides the game's Utility, ItemLibrary and FighterController.
+-- These are game/framework services, not hidden capture-slot arrays.
+
+local Ragebot = {}
+Ragebot.DefaultOptions = {
+    ["combat.ragebot.enabled"] = false,
+    ["combat.ragebot.underground"] = false,
+    ["combat.ragebot.health_save"] = false,
+    ["combat.ragebot.priority"] = "--",
+    ["combat.ragebot.strategy"] = { Hide = true },
+}
+
+local function writeSequence(target, first, ...)
+    for index = 1, select("#", ...) do
+        target[first + index] = select(index, ...)
+    end
+end
+
+local function safeGet(object, key)
+    local ok, value = pcall(function() return object[key] end)
+    if ok then return value end
+end
+
+function Ragebot.new(dependencies)
+    assert(type(dependencies) == "table", "Ragebot.new expects a dependency table")
+    local gameApi = assert(dependencies.api, "Missing game API")
+    local api = table.clone(gameApi)
+    local options = table.clone(Ragebot.DefaultOptions)
+    for key, value in pairs(dependencies.options or {}) do options[key] = value end
+    api.Option = {
+        On = function(key) return options[key] == true end,
+        Value = function(key) return options[key] end,
+    }
+    local gameModules = assert(dependencies.gameModules, "Missing game modules")
+    local services = dependencies.services or {
+        Workspace = game:GetService("Workspace"),
+        Players = game:GetService("Players"),
+        CollectionService = game:GetService("CollectionService"),
+    }
+    local localPlayer = dependencies.localPlayer or services.Players.LocalPlayer
+    local controls = dependencies.controls or {}
+    controls["combat.ragebot.priority"] = controls["combat.ragebot.priority"] or {
+        Values = { "--" },
+        SetValues = function(self, values) self.Values = values end,
+    }
+    controls["combat.ragebot.hitscan"] = controls["combat.ragebot.hitscan"] or {
+        Order = { 1, 2, 3 }, Manual = false, Labels = {},
+        SetLabel = function(self, index, label) self.Labels[index] = label end,
+    }
+    local helpers = {}
+    local cache = {}
+    local utility = dependencies.utility or {
+        Clock = os.clock, Tick = tick, Random = math.random, Abs = math.abs,
+        Max = math.max, Min = math.min, Clamp = math.clamp, Huge = math.huge,
+        Pi = math.pi, Deg = math.deg, Rad = math.rad, CF = CFrame.new,
+        Vec3 = Vector3.new, Vec2 = Vector2.new, Char = string.char,
+        Clear = table.clear, Sort = table.sort, Pack = table.pack, Unpack = table.unpack,
+        Zero = Vector3.zero, Get = safeGet,
+        Touch = firetouchinterest, GetIdentity = getthreadidentity, SetIdentity = setthreadidentity,
+    }
+    local setHiddenProperty = dependencies.setHiddenProperty or sethiddenproperty
+    local setScriptable = dependencies.setScriptable or setscriptable
+    local randomGenerator = dependencies.randomGenerator or Random.new()
+    local function resolveInstance(path)
+        local object = game
+        for segment in path:gmatch("[^/]+") do
+            if segment == "$LocalPlayer" then object = localPlayer
+            elseif object == game then
+                local ok, service = pcall(game.GetService, game, segment)
+                object = ok and service or game:FindFirstChild(segment)
+            else object = object and object:FindFirstChild(segment) end
+        end
+        return object
+    end
+    local function fireServer(remote, ...)
+        return remote:FireServer(...)
+    end
+    local encodeGameTransform = dependencies.encodeGameTransform or gameModules.Utility.EncodeCFrame
+    local function makeRaycastParams(filterType, ignoreWater)
+        local params = RaycastParams.new()
+        params.FilterType = filterType
+        params.IgnoreWater = ignoreWater
+        params.RespectCanCollide = false
+        params.CollisionGroup = "Default"
+        return params
+    end
+    local placementRaycastParams = dependencies.placementRaycastParams
+    or makeRaycastParams(Enum.RaycastFilterType.Exclude, false)
+    local targetRaycastParams = dependencies.targetRaycastParams
+    or makeRaycastParams(Enum.RaycastFilterType.Exclude, false)
+    local worldRaycastParams = dependencies.worldRaycastParams
+    or makeRaycastParams(Enum.RaycastFilterType.Include, true)
+    local placement = {
+        InsideOffset = CFrame.new(0, -0.05, 0),
+        KnifeOffset = CFrame.new(0, 0, 2.5),
+        HideDepth = 7.99,
+        HideRay = Vector3.new(0, -500, 0),
+        Clearance = 1.5,
+        Tilt = CFrame.Angles(math.pi / 2, 0, 0),
+    }
+    local weaponRules = {}
+    local network = {}
+    local state = {}
+    local attack = {}
+    local acknowledgedWeapons = {}
+    local defaultHitScanOrder = {}
+    local meleeWeapons = {}
+    local holdReloadWeapons = {}
+    local deflectionBypassWeapons = {}
+    local utilityWeapons = {}
+    local shotOffset = {}
+    local trackedMines = {}
+    local attachmentBindings = {}
+    local immunityTimes = {}
+    local attachmentGlue = {}
+    local raycastExclusions = {}
+    local loadedMaps = {}
+    local nearbyMines = {}
+    local weaponCooldownFields = {}
+    local instantWeapons = {}
+    local encodedBelowOrigin = {}
+    local encodedAboveOrigin = {}
+    local encodedFarOrigin = {}
+    local sniperRetry = {}
+    local zeroShotOffset = {}
+    local actionTokens = {}
+    local physics = {}
+    local shieldAngleCache = {}
+    local voidPauseMaps = {}
+    local encodedRaisedMelee = {}
+    local encodedLoweredMelee = {}
+    local encodedLoweredGun = {}
+    local encodedRaisedGun = {}
+    local mapNames = {}
+    local replication = {}
+    local replicationProfiles = {}
+    local releasedJointStates = {}
+    local shotDirections = {}
+    local weaponCooldownDurationFields = {}
+    local actionLocks = {}
+    local voidTimings = {}
+    local lethalBarrierNames = {}
+    local savedReplicationFlags = {}
+    local replicationFlagNames = {}
+    local baseReplicationProfile = {}
+    local insideReplicationProfile = {}
+    local replicationFlagPrefixes = {}
+    local jointCache = {}
+    local objectReferenceFactory = {}
+    cache.selectedPriority = "--"
+    cache.voidPauseRemaining = 2
+    cache.voidPauseActive = false
+    cache.voidDistanceMax = 2147483647
+    cache.voidDistanceMin = 1073741823
+    cache.trackSniperAmmo = false
+    cache.lastReloadAt = 0
+    cache.objectReferenceFactory = dependencies.objectReferenceFactory
+    cache.lowestBarrier = nil
+    cache.lastBarrierScan = 0
+    cache.shieldCosmetics = nil
+    cache.lastMapRaycastRefresh = -10
+
+    -- Runtime state, weapon categories and packet constants.
+    weaponRules.DeflectBypass = deflectionBypassWeapons
+    weaponRules.HoldReload = holdReloadWeapons
+    weaponRules.Instant = instantWeapons
+    weaponRules.LIFT = Vector3.new(0, 0.05000000074505806, 0)
+    weaponRules.Melee = meleeWeapons
+    weaponRules.Utility = utilityWeapons
+    network.B0 = "\000"
+    network.B1 = "\001"
+    network.B2 = "\002"
+    network.B3 = "\003"
+    network.CameraRotation = resolveInstance("ReplicatedStorage/Remotes/Replication/Fighter/UpdateCameraRotation")
+    network.Fire = fireServer
+    network.ShotOffset = shotOffset
+    network.Tokens = actionTokens
+    network.UseItem = resolveInstance("ReplicatedStorage/Remotes/Replication/Fighter/UseItem")
+    state.AmmoReady = false
+    state.Applied = false
+    state.Attached = false
+    state.Bind = attachmentBindings
+    state.Empty = false
+    state.Filter = raycastExclusions
+    state.FilterStamp = 0
+    state.Glue = attachmentGlue
+    state.Immunity = immunityTimes
+    state.KickActive = false
+    state.KickTimer = 2
+    state.MapStamp = 0
+    state.Maps = loadedMaps
+    state.MineList = trackedMines
+    state.Mines = false
+    state.Mines_ = nearbyMines
+    state.ReloadTimer = 0
+    state.Reloading = false
+    state.Settle = 0
+    state.Shielded = false
+    state.TeleportAt = 0
+    state.Void = false
+    state.Weapon = ""
+    attack.Active = false
+    attack.Below = false
+    attack.Fan = false
+    attack.Heavy = false
+    attack.Melee = false
+    attack.Raycast = false
+    attack.Strafe = "Hide"
+    attack.Under = false
+    acknowledgedWeapons.Knife = true
+    acknowledgedWeapons.Sniper = true
+    defaultHitScanOrder[1] = 1
+    defaultHitScanOrder[2] = 2
+    defaultHitScanOrder[3] = 3
+    meleeWeapons["Battle Axe"] = true
+    meleeWeapons.Chainsaw = true
+    meleeWeapons.Fists = true
+    meleeWeapons.Katana = true
+    meleeWeapons.Knife = true
+    meleeWeapons.Maul = true
+    meleeWeapons["Riot Shield"] = true
+    meleeWeapons.Scythe = true
+    meleeWeapons.Spear = true
+    meleeWeapons.Trowel = true
+    holdReloadWeapons.Bow = true
+    holdReloadWeapons.Crossbow = true
+    holdReloadWeapons.Daggers = true
+    holdReloadWeapons.Shotgun = true
+    deflectionBypassWeapons["Battle Axe"] = true
+    deflectionBypassWeapons.Bow = true
+    deflectionBypassWeapons.Chainsaw = true
+    deflectionBypassWeapons.Crossbow = true
+    deflectionBypassWeapons.Daggers = true
+    deflectionBypassWeapons.Exogun = true
+    deflectionBypassWeapons.Fists = true
+    deflectionBypassWeapons.Flamethrower = true
+    deflectionBypassWeapons["Grenade Launcher"] = true
+    deflectionBypassWeapons.Katana = true
+    deflectionBypassWeapons.Knife = true
+    deflectionBypassWeapons.Maul = true
+    deflectionBypassWeapons.RPG = true
+    deflectionBypassWeapons["Riot Shield"] = true
+    deflectionBypassWeapons.Scythe = true
+    deflectionBypassWeapons.Slingshot = true
+    deflectionBypassWeapons.Spear = true
+    deflectionBypassWeapons.Spray = true
+    deflectionBypassWeapons.Trowel = true
+    utilityWeapons.Flashbang = true
+    utilityWeapons["Freeze Ray"] = true
+    utilityWeapons.Grappler = true
+    utilityWeapons.Grenade = true
+    utilityWeapons["Jump Pad"] = true
+    utilityWeapons.Medkit = true
+    utilityWeapons.Molotov = true
+    utilityWeapons.Satchel = true
+    utilityWeapons["Smoke Grenade"] = true
+    utilityWeapons["Subspace Tripmine"] = true
+    utilityWeapons["War Horn"] = true
+    utilityWeapons.Warper = true
+    utilityWeapons.Warpstone = true
+    shotOffset["\000"] = 0.4300000071525574
+    shotOffset["\001"] = 0.25
+    shotOffset["\002"] = 0.41999998688697815
+    shotOffset["\003"] = 0
+    shotOffset["\004"] = 0
+    shotOffset["\005"] = 0
+    weaponCooldownFields.Knife = "_attack_cooldown"
+    instantWeapons["Battle Axe"] = true
+    instantWeapons.Chainsaw = true
+    instantWeapons["Energy Pistols"] = true
+    instantWeapons["Energy Rifle"] = true
+    instantWeapons.Fists = true
+    instantWeapons.Katana = true
+    instantWeapons.Knife = true
+    instantWeapons.Maul = true
+    instantWeapons["Riot Shield"] = true
+    instantWeapons.Scythe = true
+    instantWeapons.Spear = true
+    instantWeapons.Trowel = true
+    encodedBelowOrigin["\000"] = 0
+    encodedBelowOrigin["\001"] = -90000000
+    encodedBelowOrigin["\002"] = 0
+    encodedAboveOrigin["\000"] = 0
+    encodedAboveOrigin["\001"] = 90000000
+    encodedAboveOrigin["\002"] = 0
+    encodedFarOrigin["\000"] = -9e+37
+    encodedFarOrigin["\001"] = 0
+    encodedFarOrigin["\002"] = 0
+    sniperRetry.At = 0
+    sniperRetry.Retry = 0
+    zeroShotOffset["\000"] = 0
+    zeroShotOffset["\001"] = 1
+    zeroShotOffset["\002"] = 0
+    zeroShotOffset["\003"] = 0
+    zeroShotOffset["\004"] = 0
+    zeroShotOffset["\005"] = 0
+    actionTokens.Reload = "\206“"
+    actionTokens.StartAiming = "\028"
+    actionTokens.StartReloading = "\027"
+    actionTokens.StartShooting = "\026"
+    physics.Gate = voidTimings
+    physics.Locks = actionLocks
+    physics.Pin = CFrame.new(-38176, 100000, -48201)
+    voidPauseMaps.Bridge = true
+    voidPauseMaps.Museum = true
+    voidPauseMaps.Studio = true
+    encodedRaisedMelee["\000"] = 0
+    encodedRaisedMelee["\001"] = 90000000
+    encodedRaisedMelee["\002"] = 0
+    encodedRaisedMelee["\003"] = 1.5707963267948966
+    encodedRaisedMelee["\004"] = 3.141592653589793
+    encodedRaisedMelee["\005"] = 3.141592653589793
+    encodedLoweredMelee["\000"] = -9e+37
+    encodedLoweredMelee["\001"] = 0
+    encodedLoweredMelee["\002"] = 0
+    encodedLoweredMelee["\003"] = -1.5707963267948966
+    encodedLoweredMelee["\004"] = 3.141592653589793
+    encodedLoweredMelee["\005"] = 3.141592653589793
+    encodedLoweredGun["\000"] = -9e+37
+    encodedLoweredGun["\001"] = 0
+    encodedLoweredGun["\002"] = 0
+    encodedLoweredGun["\003"] = 1.5707963267948966
+    encodedLoweredGun["\004"] = 3.141592653589793
+    encodedLoweredGun["\005"] = 3.141592653589793
+    encodedRaisedGun["\000"] = 0
+    encodedRaisedGun["\001"] = -90000000
+    encodedRaisedGun["\002"] = 0
+    encodedRaisedGun["\003"] = -1.5707963267948966
+    encodedRaisedGun["\004"] = 3.141592653589793
+    encodedRaisedGun["\005"] = 3.141592653589793
+    mapNames[1] = "Arena"
+    mapNames[10] = "Bridge"
+    mapNames[11] = "Chess"
+    mapNames[12] = "Construction"
+    mapNames[13] = "Crossroads"
+    mapNames[14] = "Big Crossroads"
+    mapNames[15] = "Legacy Crossroads"
+    mapNames[16] = "Dimension"
+    mapNames[17] = "Docks"
+    mapNames[18] = "Legacy Docks"
+    mapNames[19] = "Factory"
+    mapNames[2] = "Big Arena"
+    mapNames[20] = "Graveyard"
+    mapNames[21] = "Big Graveyard"
+    mapNames[22] = "Iceberg"
+    mapNames[23] = "Museum"
+    mapNames[24] = "Obby"
+    mapNames[25] = "Onyx"
+    mapNames[26] = "Big Onyx"
+    mapNames[27] = "Legacy Onyx"
+    mapNames[28] = "Playground"
+    mapNames[29] = "Sandbox"
+    mapNames[3] = "Backrooms"
+    mapNames[30] = "Legacy Sandbox"
+    mapNames[31] = "Shooting Range"
+    mapNames[32] = "Splash"
+    mapNames[33] = "Big Splash"
+    mapNames[34] = "Legacy Splash"
+    mapNames[35] = "Legacy Big Splash"
+    mapNames[36] = "Spleef"
+    mapNames[37] = "Station"
+    mapNames[38] = "Big Station"
+    mapNames[39] = "Studio"
+    mapNames[4] = "Big Backrooms"
+    mapNames[40] = "Village"
+    mapNames[41] = "Westown"
+    mapNames[5] = "Legacy Backrooms"
+    mapNames[6] = "Baseplate"
+    mapNames[7] = "Battleground"
+    mapNames[8] = "Legacy Battleground"
+    mapNames[9] = "Boss Arena"
+    replication.Active = "Base"
+    replication.Names = replicationFlagNames
+    replication.Saved = savedReplicationFlags
+    replicationProfiles.Base = baseReplicationProfile
+    replicationProfiles.Inside = insideReplicationProfile
+    shotDirections[1] = Vector3.new(0, 1, 0)
+    shotDirections[10] = Vector3.new(0, -1, 0)
+    shotDirections[2] = Vector3.new(1, 0, 0)
+    shotDirections[3] = Vector3.new(-1, 0, 0)
+    shotDirections[4] = Vector3.new(0, 0, 1)
+    shotDirections[5] = Vector3.new(0, 0, -1)
+    shotDirections[6] = Vector3.new(0.707099974155426, 0, 0.707099974155426)
+    shotDirections[7] = Vector3.new(-0.707099974155426, 0, 0.707099974155426)
+    shotDirections[8] = Vector3.new(0.707099974155426, 0, -0.707099974155426)
+    shotDirections[9] = Vector3.new(-0.707099974155426, 0, -0.707099974155426)
+    weaponCooldownDurationFields.Knife = "HeavyAttackCooldown"
+    lethalBarrierNames.InstakillOOB = true
+    lethalBarrierNames.InstantKillOOB = true
+    baseReplicationProfile.S2PhysicsSenderRate = "240"
+    insideReplicationProfile.AssemblyHistoryBufferSize = "2147483648"
+    insideReplicationProfile.AssemblyHistorySkipSize = "0"
+    insideReplicationProfile.S2PhysicsSenderRate = "120"
+    replicationFlagPrefixes[1] = ""
+    replicationFlagPrefixes[2] = "DFInt"
+    replicationFlagPrefixes[3] = "FInt"
+    replicationFlagPrefixes[4] = "DFFlag"
+    replicationFlagPrefixes[5] = "FFlag"
+
+    state.AwaitBound = false
+    state.MineBound = false
+    state.RealCF = nil
+    state.Settle = 0
+    state.KickTimer = 2
+    state.KickActive = false
+    state.MapStamp = -math.huge
+    replication.Active = false
+
+    -- Targets and weapon state.
+
+    function helpers.advanceWeaponCooldown(weaponName)
+        local cooldownField = weaponCooldownFields[weaponName]
+
+        if not cooldownField then
+            return
+        end
+
+        local item = api.Fighter.Item()
+        local info
+
+        if type(item) == "table" then
+            info = item.Info
+        else
+            info = false
+        end
+
+        local duration
+
+        if type(info) == "table" then
+            duration = tonumber(info[weaponCooldownDurationFields[weaponName]])
+        else
+            duration = false
+        end
+
+        if not duration then
+            return
+        end
+
+        local deadline = tick() + duration + helpers.networkTimingMargin()
+        pcall(function()
+            item[cooldownField] = deadline
+        end)
+    end
+
+    function helpers.bindHitAcknowledgements()
+        if state.AwaitBound or not api.HitFeed or not api.HitFeed.Subscribe then
+            return
+        end
+
+        state.AwaitBound = true
+        api.HitFeed.Subscribe("RageAwait", function(instance)
+            local await = state.Await
+
+            if await and await.Character and instance:IsDescendantOf(await.Character) then
+                await.Hit = true
+            end
+        end)
+    end
+
+    function helpers.canBypassTargetDeflection(weaponName)
+        return not weaponCooldownFields[weaponName] and (weaponRules.Melee[weaponName] == true or (weaponRules.Instant[weaponName] == true or not helpers.weaponUsesAmmo()))
+    end
+
+    function helpers.clearWeaponCooldown(weaponName)
+        local cooldownField = weaponCooldownFields[weaponName]
+        local item = api.Fighter.Item()
+
+        if cooldownField and type(item) == "table" then
+            pcall(function()
+                item[cooldownField] = 0
+            end)
+        end
+    end
+
+    function helpers.collectEnemies()
+        local enemies = api.Targets.Enemies()
+        local bypassDeflection = weaponRules.DeflectBypass[state.Weapon] == true
+        local clock = utility.Clock()
+        local shielded = false
+
+        for index = 1, #enemies do
+            local enemy = enemies[index]
+            local userId = tostring(enemy.Player.UserId)
+
+            if helpers.targetIsInvulnerable(enemy) then
+                state.Immunity[userId] = clock
+            end
+
+            local immuneSince = state.Immunity[userId]
+            enemy.ID = userId
+            enemy.Blocked = immuneSince ~= nil and clock - immuneSince < 0.5
+            local deflect
+
+            if bypassDeflection then
+                deflect = not bypassDeflection
+            else
+                deflect = weaponRules.IsDeflecting(enemy.Player)
+            end
+
+            enemy.Deflect = deflect
+
+            if enemy.Blocked then
+                shielded = true
+            end
+        end
+
+        state.Shielded = shielded
+        return enemies
+    end
+
+    function helpers.equippedEnemyWeapon(target)
+        local fighter = helpers.findFighter(target.Player)
+        local equippedItem = fighter and utility.Get(fighter, "EquippedItem")
+        return type(equippedItem) == "table" and utility.Get(equippedItem, "Name") or nil
+    end
+
+    function helpers.findFighter(player)
+        local controller = api.Fighter.Controller()
+        local playerFighters = controller and utility.Get(controller, "_player_to_fighter")
+
+        if type(playerFighters) == "table" and type(playerFighters[player]) == "table" then
+            return playerFighters[player]
+        end
+
+        local fighters = controller and (utility.Get(controller, "Fighters") or utility.Get(controller, "_fighters"))
+
+        if type(fighters) ~= "table" then
+            return nil
+        end
+
+        for _, entry in pairs(fighters) do
+            if type(entry) == "table" and utility.Get(entry, "Player") == player then
+                return entry
+            end
+        end
+
+        return nil
+    end
+
+    function helpers.hitAcknowledgementTimeout()
+        local networkPing = 0.08
+
+        local function callback()
+            networkPing = localPlayer:GetNetworkPing()
+        end
+
+        pcall(callback)
+        return utility.Clamp(networkPing * 2 + 0.2, 0.25, 0.9)
+    end
+
+    function helpers.isWaitingForHit(weaponName)
+        local await = state.Await
+
+        if not await then
+            return false
+        end
+
+        if await.Weapon ~= weaponName then
+            state.Await = nil
+            return false
+        end
+
+        if await.Hit then
+            state.Await = nil
+            return false
+        end
+
+        if await.Ammo then
+            local ammo = tonumber(api.Fighter.Ammo())
+
+            if ammo and ammo < await.Ammo then
+                state.Await = nil
+                return false
+            end
+        end
+
+        if utility.Clock() - await.At > helpers.hitAcknowledgementTimeout() then
+            state.Await = nil
+            helpers.clearWeaponCooldown(weaponName)
+            return false
+        else
+            return true
+        end
+    end
+
+    function helpers.localShieldState()
+        for _, entry in next, api.Fighter.Items() or {} do
+            if type(entry) == "table" and utility.Get(entry, "Name") == "Riot Shield" then
+                return utility.Get(entry, "IsEquipped") and "Equipped" or "Unequipped"
+            end
+        end
+
+        return "None"
+    end
+
+    function helpers.networkTimingMargin()
+        local networkPing = 0.08
+
+        local function callback()
+            networkPing = localPlayer:GetNetworkPing()
+        end
+
+        pcall(callback)
+        return 0.05 + utility.Clamp(networkPing, 0, 0.3) * 0.25
+    end
+
+    function helpers.readItemAmmo(item)
+        local itemData = utility.Get(item, "Data")
+
+        if type(itemData) == "table" then
+            return tonumber(utility.Get(itemData, "Ammo")) or 0, tonumber(utility.Get(itemData, "AmmoReserve")) or 0
+        end
+
+        return 0, 0
+    end
+
+    function helpers.refreshWeaponState(deltaTime)
+        local weaponName = api.Fighter.WeaponName()
+        local ammo = api.Fighter.Ammo()
+
+        if weaponName ~= state.Weapon and state.Weapon ~= "" then
+            local networkPing = 0.08
+
+            local function callback()
+                networkPing = localPlayer:GetNetworkPing()
+            end
+
+            pcall(callback)
+            state.Settle = utility.Clock() + utility.Clamp(networkPing * 2 + 0.1, 0.15, 0.5)
+            state.NextShot = 0
+            state.ReloadTimer = 0
+            state.Empty = false
+            state.Reloading = false
+            state.Ammo = ammo
+            state.AmmoReady = ammo ~= nil
+        end
+
+        state.Weapon = weaponName
+
+        if state.ReloadTimer > 0 then
+            state.ReloadTimer = utility.Max(0, state.ReloadTimer - deltaTime)
+        end
+
+        if api.Fighter.ReloadEnds() > utility.Tick() then
+            state.Reloading = true
+            state.ReloadTimer = 0
+        else
+            state.Reloading = state.ReloadTimer > 0
+        end
+
+        if ammo == nil then
+            return
+        end
+
+        state.AmmoReady = true
+        state.Empty = ammo <= 0 and helpers.weaponUsesAmmo()
+        state.Ammo = ammo
+    end
+
+    function helpers.selectDirectTarget(targets, allowBlocked)
+        local priorityName = api.Option.Value("combat.ragebot.priority")
+        local fallbackTarget = nil
+
+        for index = 1, #targets do
+            local target = targets[index]
+            local eligible
+
+            if target.Humanoid.Health > 0 then
+                eligible = target.Root and target.Root.Parent and helpers.targetHeadHitbox(target) and (allowBlocked or not target.Blocked)
+            else
+                eligible = false
+            end
+
+            if not eligible or weaponRules.IsDeflecting(target.Player) then
+                continue
+            end
+
+            if priorityName and priorityName ~= "--" and target.Player.Name == priorityName then
+                return target
+            else
+                fallbackTarget = fallbackTarget or target
+            end
+        end
+
+        return fallbackTarget
+    end
+
+    function helpers.selectPriorityTarget(targets)
+        local priorityName = api.Option.Value("combat.ragebot.priority")
+        local bypassDeflection = helpers.canBypassTargetDeflection(state.Weapon)
+
+        if priorityName and priorityName ~= "" and priorityName ~= "--" then
+            for index = 1, #targets do
+                local selectedTarget = targets[index]
+
+                if selectedTarget.Player.Name ~= priorityName then
+                    continue
+                end
+
+                if bypassDeflection then
+                    if selectedTarget.Deflect then
+                        break
+                    else
+                        return selectedTarget
+                    end
+                elseif selectedTarget.Blocked or selectedTarget.Deflect then
+                    break
+                else
+                    return selectedTarget
+                end
+            end
+        end
+
+        local huge = utility.Huge
+        local selectedTarget2 = nil
+
+        for index2 = 1, #targets do
+            local candidate = targets[index2]
+
+            if not (bypassDeflection or not candidate.Blocked) or candidate.Deflect or not (candidate.Humanoid.Health < huge) then
+                continue
+            end
+
+            huge = candidate.Humanoid.Health
+            selectedTarget2 = candidate
+        end
+
+        return selectedTarget2
+    end
+
+    function helpers.selectUndergroundTarget(targets)
+        local weapon = state.Weapon
+        local isMelee = weaponRules.Melee[weapon] == true
+        local bypassDeflection = helpers.canBypassTargetDeflection(weapon)
+        local position = state.ServerCF and state.ServerCF.Position or state.RealCF and state.RealCF.Position
+        local huge = utility.Huge
+        local origin = position or nil
+        local selectedTarget = nil
+
+        for index = 1, #targets do
+            local target = targets[index]
+            local eligible = (bypassDeflection or not target.Blocked) and not target.Deflect and target.Humanoid.Health > 0
+            local hitboxHead = target.HitboxHead
+            local position2
+
+            if hitboxHead and hitboxHead.Parent then
+                position2 = hitboxHead.Position
+            end
+
+            if eligible and not bypassDeflection then
+                if position2 and origin then
+                    if (isMelee and 8 or 100) < (position2 - origin).Magnitude then
+                        eligible = false
+                    elseif not (isMelee or api.Sight.Visible(origin, hitboxHead, target.Character, targetRaycastParams)) then
+                        eligible = false
+                    end
+                else
+                    eligible = false
+                end
+            end
+
+            if not eligible then
+                continue
+            end
+
+            local magnitude
+
+            if bypassDeflection then
+                if origin then
+                    if position2 then
+                        magnitude = (position2 - origin).Magnitude
+                    else
+                        magnitude = target.Humanoid.Health
+                    end
+                else
+                    magnitude = target.Humanoid.Health
+                end
+            else
+                magnitude = target.Humanoid.Health
+            end
+
+            if not (magnitude < huge) then
+                continue
+            end
+
+            selectedTarget = target
+            huge = magnitude
+        end
+
+        return selectedTarget, bypassDeflection
+    end
+
+    function helpers.shieldCosmeticNames()
+        if cache.shieldCosmetics then
+            return cache.shieldCosmetics
+        end
+
+        cache.shieldCosmetics = { ["Riot Shield"] = true }
+        local cosmetics = gameModules.CosmeticLibrary and gameModules.CosmeticLibrary.Cosmetics
+
+        if type(cosmetics) == "table" then
+            for index, entry in pairs(cosmetics) do
+                if type(entry) == "table" and entry.ItemName == "Riot Shield" and entry.Type == "Skin" then
+                    cache.shieldCosmetics[index] = true
+                end
+            end
+        end
+
+        return cache.shieldCosmetics
+    end
+
+    function helpers.shouldAttackFromBelow(target)
+        local player2 = target.Player
+        local clock = utility.Clock()
+
+        if not player2 then
+            return false
+        end
+
+        local cachedAngle = shieldAngleCache[player2]
+
+        if cachedAngle and clock - cachedAngle.At < 0.1 then
+            return cachedAngle.Value
+        end
+
+        local attackBelow = false
+
+        local function callback()
+            local fighter = helpers.findFighter(player2)
+            local pitch = nil
+            local cameraRotation = fighter and (utility.Get(fighter, "CameraRotation") or utility.Get(fighter, "_camera_rotation"))
+
+            if typeof(cameraRotation) == "Vector2" then
+                pitch = utility.Deg(cameraRotation.X) % 360
+            else
+                local head = target.Head or target.Character and target.Character:FindFirstChild("Head")
+
+                if head then
+                    pitch = utility.Deg(math.asin(utility.Clamp(head.CFrame.LookVector.Y, -1, 1))) % 360
+                end
+            end
+
+            if not pitch then
+                return
+            end
+
+            local shieldNames = helpers.shieldCosmeticNames()
+            local equippedItem = fighter and utility.Get(fighter, "EquippedItem")
+            local hasShield
+
+            if type(equippedItem) == "table" then
+                hasShield = utility.Get(equippedItem, "Name") == "Riot Shield"
+            else
+                hasShield = false
+            end
+
+            if hasShield then
+                attackBelow = pitch > 22 and pitch < 91
+            else
+                if target.Character then
+                    for _, entry in ipairs(target.Character:GetChildren()) do
+                        if not (entry:IsA("Model") and shieldNames[entry.Name]) then
+                            continue
+                        end
+
+                        hasShield = true
+                        break
+                    end
+
+                    if hasShield then
+                        attackBelow = pitch > 22 and pitch < 91
+                        return
+                    end
+                end
+
+                local items = fighter and utility.Get(fighter, "Items")
+
+                if type(items) == "table" then
+                    for _, entry2 in pairs(items) do
+                        if not (type(entry2) == "table" and utility.Get(entry2, "Name") == "Riot Shield") then
+                            continue
+                        end
+
+                        local shieldFacesUp
+
+                        if pitch > 315 and pitch < 360 then
+                            shieldFacesUp = true
+                        elseif pitch > 0 then
+                            shieldFacesUp = pitch < 91
+                        else
+                            shieldFacesUp = false
+                        end
+
+                        attackBelow = not shieldFacesUp
+                        return
+                    end
+                end
+            end
+        end
+
+        pcall(callback)
+        shieldAngleCache[player2] = { At = clock, Value = attackBelow }
+        return attackBelow
+    end
+
+    function helpers.targetHeadHitbox(target)
+        local hitboxHead = target.Character and target.Character:FindFirstChild("HitboxHead") or target.HitboxHead
+
+        if not (hitboxHead and hitboxHead.Parent and hitboxHead) then
+            hitboxHead = nil
+        end
+
+        return hitboxHead
+    end
+
+    function helpers.targetIsDeflecting(player)
+        if not player then
+            return false
+        end
+
+        local equippedItem = nil
+        local fighterController = gameModules.FighterController
+
+        if fighterController and type(fighterController.GetFighter) == "function" then
+            local getFighter = fighterController.GetFighter
+            local success, result = pcall(getFighter, fighterController, player)
+
+            if success and type(result) == "table" then
+                equippedItem = utility.Get(result, "EquippedItem")
+            end
+        end
+
+        local deflectItem = weaponRules.DeflectItems[player]
+
+        if deflectItem then
+            if equippedItem == nil then
+                if deflectItem then
+                    return true
+                end
+            elseif deflectItem == equippedItem then
+                if deflectItem then
+                    return true
+                end
+            else
+                weaponRules.DeflectItems[player] = nil
+            end
+        elseif deflectItem then
+            return true
+        end
+
+        if
+        type(equippedItem) ~= "table"
+        or utility.Get(equippedItem, "Name") ~= "Katana"
+        or type(equippedItem.Get) ~= "function"
+        then
+            return false
+        end
+
+        local get = equippedItem.Get
+        local success, result = pcall(get, equippedItem, "FOVOffset")
+
+        if success and type(result) == "number" and result > 0 then
+            return true
+        end
+
+        return false
+    end
+
+    function helpers.targetIsInvulnerable(target)
+        local root = target.Root
+
+        if root and root:FindFirstChild("Attachment") then
+            return true
+        end
+
+        local character = target.Character
+
+        if character and character:FindFirstChildOfClass("ForceField") then
+            return true
+        end
+
+        local fighter = helpers.findFighter(target.Player)
+        local entity = fighter and utility.Get(fighter, "Entity")
+
+        if type(entity) ~= "table" or type(entity.Get) ~= "function" then
+            return false
+        end
+
+        local get = entity.Get
+        local success, result = pcall(get, entity, "IsInvincible")
+
+        if success and result then
+            return true
+        end
+
+        return false
+    end
+
+    function helpers.weaponCooldownElapsed(weaponName, leadTime)
+        local cooldownField = weaponCooldownFields[weaponName]
+
+        if not cooldownField then
+            return true
+        end
+
+        local item = api.Fighter.Item()
+
+        if type(item) ~= "table" then
+            return true
+        end
+
+        local success, result = pcall(function()
+            return item[cooldownField]
+        end)
+        local unavailable
+
+        if success then
+            unavailable = type(result) ~= "number"
+        else
+            unavailable = not success
+        end
+
+        if not unavailable then
+            local now = tick()
+            return result - (leadTime or 0) <= now
+        end
+
+        return unavailable
+    end
+
+    function helpers.weaponShotInterval()
+        local item = api.Fighter.Item()
+        local info
+
+        if type(item) == "table" then
+            info = item.Info
+        else
+            info = false
+        end
+
+        if type(info) ~= "table" then
+            return 0
+        end
+
+        local max = utility.Max(tonumber(info.ShootBurst) or 1, 1)
+        local shootBurstCooldown = tonumber(info.ShootBurstCooldown) or 0
+        local shootCooldown = tonumber(info.ShootCooldown) or 0
+
+        if state.Weapon == "Revolver" and tonumber(info.QuickShotCooldown) then
+            shootCooldown = tonumber(info.QuickShotCooldown)
+        end
+
+        return (max - 1) * shootBurstCooldown + utility.Max(shootCooldown, shootBurstCooldown)
+    end
+
+    function helpers.weaponUsesAmmo()
+        local item = api.Fighter.Item()
+        local info
+
+        if type(item) == "table" then
+            info = item.Info
+        else
+            info = false
+        end
+
+        local maxAmmo = type(info) == "table" and tonumber(info.MaxAmmo) or nil
+        return maxAmmo ~= nil and maxAmmo > 0 and maxAmmo < utility.Huge
+    end
+
+    function helpers.weaponUsesRaycast(weaponName)
+        local items = gameModules.ItemLibrary and gameModules.ItemLibrary.Items
+        local weaponInfo = items and items[weaponName]
+        return type(weaponInfo) == "table" and utility.Get(weaponInfo, "IsRaycast") == true
+    end
+
+    -- Shooting and reloads.
+
+    function helpers.acquireActionLock(actionName, requested, duration)
+        local clock = utility.Clock()
+        local lock = physics.Locks[actionName]
+        local lockedUntil
+
+        if lock == nil then
+            lockedUntil = false
+        else
+            lockedUntil = clock < lock
+        end
+
+        if requested then
+            physics.Locks[actionName] = clock + duration
+        end
+
+        return lockedUntil or requested
+    end
+
+    function helpers.encodeCFrame(transform)
+        if not encodeGameTransform then
+            return nil
+        end
+
+        return encodeGameTransform(gameModules.Utility, transform)
+    end
+
+    function helpers.encodeMeleePosition(position)
+        return network.Encode(utility.CF(position) * CFrame.new(0, 0, 0, 1, 0, 0, 0, -4.371138828673793e-08, 1, 0, -1, -4.371138828673793e-08))
+    end
+
+    function helpers.findOpenShotPosition(hitbox, preferBelow)
+        local mapParams = weaponRules.MapParams()
+        local position = hitbox.Position
+        local Workspace = services.Workspace
+
+        if preferBelow then
+            local candidate = position + shotDirections[#shotDirections] * 9
+
+            if not Workspace:Raycast(candidate, position - candidate, mapParams) then
+                return candidate
+            end
+        end
+
+        for index = 1, #shotDirections do
+            local candidate2 = position + shotDirections[index] * 9
+
+            if not Workspace:Raycast(candidate2, position - candidate2, mapParams) then
+                return candidate2
+            end
+        end
+
+        return nil
+    end
+
+    function helpers.findShotOrigin(targetPosition)
+        local fallbackOrigin = targetPosition + weaponRules.LIFT
+        local position = state.ServerCF and state.ServerCF.Position
+
+        if not position then
+            return fallbackOrigin
+        end
+
+        local origin = position + Vector3.new(0, 1.75, 0)
+        local delta = targetPosition - origin
+        local magnitude = delta.Magnitude
+
+        if magnitude <= 9 or magnitude < 0.001 then
+            return fallbackOrigin
+        end
+
+        local vector = delta / magnitude
+        local distances = {}
+        writeSequence(distances, 0, 9, 9 * 0.66, 9 * 0.33)
+
+        for _, entry in ipairs(distances) do
+            local candidate = origin + vector * entry
+
+            if helpers.segmentIsClear(origin, candidate) and helpers.segmentIsClear(candidate, targetPosition) then
+                return candidate
+            end
+        end
+
+        local unit = vector:Cross(utility.Abs(vector.Y) > 0.99 and Vector3.xAxis or Vector3.yAxis).Unit
+        local unit2 = unit:Cross(vector).Unit
+
+        for index = 0, 11 do
+            local angle = utility.Pi * 2 * index / 12
+            local candidate2 = origin + (unit * math.cos(angle) + unit2 * math.sin(angle)) * 9
+
+            if helpers.segmentIsClear(origin, candidate2) and helpers.segmentIsClear(candidate2, targetPosition) then
+                return candidate2
+            end
+        end
+
+        return fallbackOrigin
+    end
+
+    function helpers.orientAgainstShield(transform, shieldMode, target)
+        local position = transform.Position
+        local position2 = target.Root.Position
+
+        if shieldMode == "Equipped" then
+            return utility.CF(position, position2)
+        elseif shieldMode == "Unequipped" then
+            return utility.CF(position, position + position - position2)
+        end
+
+        if helpers.equippedEnemyWeapon(target) == "Knife" then
+            return utility.CF(position) * CFrame.fromOrientation(
+            randomGenerator:NextNumber(0, utility.Pi * 2),
+            randomGenerator:NextNumber(0, utility.Pi * 2),
+            randomGenerator:NextNumber(0, utility.Pi * 2)
+            )
+        end
+
+        return transform
+    end
+
+    function helpers.performPreparedAttack()
+        if not attack.Active then
+            return
+        end
+
+        attack.Active = false
+        local action = attack.Action
+
+        if action then
+            attack.Action = nil
+            action()
+        else
+            if not helpers.positionHasReplicated() then
+                if not (attack.Under and attack.Free) then
+                    return
+                end
+            end
+
+            if not helpers.weaponCooldownElapsed(state.Weapon) then
+                return
+            end
+
+            local entry = attack.Entry
+
+            if not (entry and attack.ID and network.Fire and entry.Humanoid) then
+                return
+            end
+
+            if entry.Humanoid.Parent == nil or entry.Humanoid.Health <= 0 then
+                return
+            end
+
+            local character = entry.Character
+
+            if not (character and character.Parent) then
+                return
+            end
+
+            local pinned = attack.Pinned
+            local invalidHitbox
+
+            if pinned then
+                invalidHitbox = not pinned.Parent
+            else
+                invalidHitbox = not pinned
+            end
+
+            if invalidHitbox then
+                pinned = character:FindFirstChild("HitboxHead") or entry.HitboxHead
+            end
+
+            if not (pinned and pinned.Parent) then
+                return
+            end
+
+            if attack.Under and attack.Free and state.ServerCF and network.Tokens.StartShooting then
+                local head = character:FindFirstChild("Head") or pinned
+                local position = state.ServerCF.Position
+                local encoded = network.Encode(utility.CF(position, head.Position))
+
+                if encoded then
+                    pcall(network.Fire, network.UseItem, attack.ID, network.Tokens.StartShooting, {
+                        [network.B1] = {
+                            [network.B0] = encoded,
+                            [network.B1] = encoded,
+                            [network.B2] = head,
+                            [network.B3] = network.ShotOffset
+                        }
+                    }, nil)
+                end
+            else
+                local root = entry.Root
+                local targetYaw, targetRoll
+
+                if root and root.Parent then
+                    local payload
+                    payload, targetYaw, targetRoll = root.CFrame:ToOrientation()
+                else
+                    targetYaw = 0
+                    targetRoll = 0
+                end
+
+                helpers.advanceWeaponCooldown(state.Weapon)
+
+                if weaponCooldownFields[state.Weapon] then
+
+                    local await = { At = 0, Ammo = 0, Character = 0, Weapon = state.Weapon }
+                    await.At = utility.Clock()
+                    local ammo
+
+                    if state.Weapon == "Sniper" then
+                        ammo = tonumber(api.Fighter.Ammo()) or nil
+                    end
+
+                    await.Ammo = ammo
+                    await.Character = character
+                    state.Await = await
+                end
+
+                if attack.Melee then
+                    local startAiming = attack.Heavy and network.Tokens.StartAiming or network.Tokens.StartShooting
+                    local heavyAttackAnimation1 = attack.Heavy and network.Tokens.HeavyAttackAnimation1
+                    or network.Tokens.AttackAnimation1
+                    local encoded
+
+                    if root and root.Parent then
+                        local cframe = root.CFrame
+
+                        if state.Weapon == "Knife" and attack.Heavy then
+                            encoded = network.Encode(cframe * CFrame.new(0, 0, 2.5))
+
+                            if api.PushRotation then
+                                local orientation, payload3 = cframe:ToOrientation()
+                                api.PushRotation(utility.Vec2(orientation, payload3))
+                            end
+                        else
+                            encoded = network.MeleeSpot(cframe.Position)
+                        end
+                    end
+
+                    if not (startAiming and encoded) then
+                        return
+                    end
+
+                    local fire = network.Fire
+                    local useItem = network.UseItem
+                    local id = attack.ID
+                    local payload4 = {
+                        [network.B1] = {
+                            [network.B0] = encoded,
+                            [network.B1] = encoded,
+                            [network.B2] = pinned,
+                            [network.B3] = zeroShotOffset
+                        },
+                        [network.B2] = heavyAttackAnimation1
+                    }
+                    pcall(fire, useItem, id, startAiming, payload4, nil)
+                    local alternateOrigin = attack.Under
+                    and attack.Free
+                    and root
+                    and root.Parent
+                    and network.MeleeSpot(helpers.toServerSpace(root.CFrame).Position)
+
+                    if alternateOrigin then
+                        local fire2 = network.Fire
+                        local useItem2 = network.UseItem
+                        local id2 = attack.ID
+                        local alternatePayload = {
+                            [network.B1] = {
+                                [network.B0] = alternateOrigin,
+                                [network.B1] = alternateOrigin,
+                                [network.B2] = pinned,
+                                [network.B3] = zeroShotOffset
+                            },
+                            [network.B2] = heavyAttackAnimation1
+                        }
+                        pcall(fire2, useItem2, id2, startAiming, alternatePayload, nil)
+                    end
+                else
+                    if not network.Tokens.StartShooting then
+                        return
+                    end
+
+                    if state.Weapon == "Sniper" then
+                        if cache.trackSniperAmmo then
+                            local clock = utility.Clock()
+                            local ammo = state.Ammo
+
+                            if sniperRetry.Ammo and ammo and ammo < sniperRetry.Ammo then
+                                state.NextShot = sniperRetry.At + helpers.weaponShotInterval()
+                            end
+
+                            sniperRetry.Ammo = ammo
+
+                            if clock < (state.NextShot or 0) or clock < sniperRetry.Retry then
+                                return
+                            end
+
+                            sniperRetry.Retry = clock + 0.15
+                            sniperRetry.At = clock
+                        end
+                    else
+                        state.NextShot = utility.Clock() + helpers.weaponShotInterval()
+                    end
+
+                    if attack.Under or attack.Strafe == "Hide" then
+                        helpers.shootWithReleasedHitbox(pinned, character, attack.Fan)
+
+                        if attack.Under and attack.Free then
+                            helpers.shootFromUnderground(pinned)
+                        end
+                    else
+                        local below = attack.Below == true
+                        local payload5 = helpers.findOpenShotPosition(pinned, below)
+
+                        if payload5 then
+                            local encoded = network.Encode(utility.CF(payload5, pinned.Position))
+                            local encoded2 = network.Encode(utility.CF(pinned.CFrame:PointToObjectSpace(pinned.Position + (payload5 - pinned.Position).Unit * 0.25)))
+
+                            if encoded then
+                                local fire = network.Fire
+                                local useItem = network.UseItem
+                                local id = attack.ID
+                                local startShooting = network.Tokens.StartShooting
+                                local alternateOrigin2 = {
+                                    [network.B1] = {
+                                        [network.B0] = encoded,
+                                        [network.B1] = encoded,
+                                        [network.B2] = pinned,
+                                        [network.B3] = encoded2 or zeroShotOffset,
+                                        ["\004"] = attack.Fan or nil
+                                    },
+                                    [network.B2] = true
+                                }
+                                pcall(fire, useItem, id, startShooting, alternateOrigin2, nil)
+                                return
+                            end
+                        end
+
+                        local alternateOrigin3 = below and 1.5707963267948966 or -1.5707963267948966
+                        local fire = network.Fire
+                        local useItem = network.UseItem
+                        local id = attack.ID
+                        local startShooting = network.Tokens.StartShooting
+                        local alternatePayload2 = {
+                            [network.B1] = {
+                                [network.B0] = helpers.replaceEncodedAngles(encodedFarOrigin, alternateOrigin3, targetYaw, targetRoll),
+                                [network.B1] = helpers.replaceEncodedAngles(below and encodedAboveOrigin or encodedBelowOrigin, alternateOrigin3, targetYaw, targetRoll),
+                                [network.B2] = pinned,
+                                [network.B3] = zeroShotOffset,
+                                ["\004"] = attack.Fan or nil
+                            },
+                            [network.B2] = true
+                        }
+                        pcall(fire, useItem, id, startShooting, alternatePayload2, nil)
+                    end
+                end
+            end
+        end
+    end
+
+    function helpers.positionHasReplicated()
+        return (state.Frames or 0) >= 2
+    end
+
+    function helpers.prepareDirectAttack(targets, weaponName, weaponId, deltaTime, root)
+        attack.Action = nil
+        local bypassDeflection = helpers.canBypassTargetDeflection(weaponName)
+        local entry = helpers.selectDirectTarget(targets, bypassDeflection)
+        local attackReady
+
+        if entry then
+            local empty = state.Empty
+            local hitbox
+
+            if empty then
+                hitbox = not empty
+            else
+                hitbox = not state.Reloading
+            end
+
+            attackReady = not helpers.checkVoidTiming(entry, hitbox, 0.34)
+        else
+            attackReady = entry
+        end
+
+        local blocked
+
+        if entry then
+            blocked = state.Mines
+        else
+            blocked = not entry
+        end
+
+        if blocked or weaponRules.Utility[weaponName] or state.Shielded and not bypassDeflection or state.Empty or state.Reloading then
+            if state.Empty and not state.Reloading then
+                helpers.requestReload()
+            end
+
+            helpers.clearAttachmentCaches()
+            state.Attached = false
+
+            if not entry then
+                state.TargetID = nil
+            end
+
+            helpers.enterVoid()
+        else
+            local hitbox2 = helpers.targetHeadHitbox(entry)
+            local isMelee = weaponRules.Melee[weaponName] == true
+            local attackBelow = helpers.shouldAttackFromBelow(entry)
+            local targetTransform = helpers.pinTargetHitbox(root, hitbox2)
+            local serverCF = attackBelow and helpers.horizontalLookAt(targetTransform.Position + Vector3.new(0, -3.8499999046325684, 0.05000000074505806), hitbox2.Position) or targetTransform + Vector3.new(0, 0.25, 0.05000000074505806)
+            local useRaycast = helpers.weaponUsesRaycast(weaponName)
+            local fanShot = weaponName == "Revolver" or nil
+            local callback
+            local defense = nil
+
+            local id2 = entry.ID
+            state.Void = false
+            state.Attached = true
+            state.TargetID = id2
+
+            if isMelee then
+                local _, shieldMode, payload = entry.Root.CFrame:ToOrientation()
+                local pitch = attackBelow and utility.Pi / 2 or -utility.Pi / 2
+                local loweredOrigin = {
+                    [network.B0] = -9e37,
+                    [network.B1] = 0,
+                    [network.B2] = 0,
+                    [network.B3] = pitch,
+                    ["\004"] = shieldMode,
+                    ["\005"] = payload
+                }
+                local raisedOrigin = {
+                    [network.B0] = 0,
+                    [network.B1] = attackBelow and 90000000 or -90000000,
+                    [network.B2] = 0,
+                    [network.B3] = pitch,
+                    ["\004"] = shieldMode,
+                    ["\005"] = payload
+                }
+
+                if helpers.acquireActionLock("Melee", attackReady, deltaTime * 5) then
+                    callback = function()
+                        local fire = network.Fire
+                        local useItem = network.UseItem
+                        local startShooting = network.Tokens.StartShooting
+                        local payload2 = {
+                            [network.B1] = {
+                                [network.B0] = loweredOrigin,
+                                [network.B1] = raisedOrigin,
+                                [network.B2] = hitbox2,
+                                [network.B3] = zeroShotOffset
+                            },
+                            [network.B2] = network.Tokens.AttackAnimation1
+                        }
+                        pcall(fire, useItem, weaponId, startShooting, payload2, nil)
+                    end
+                else
+                    serverCF = helpers.randomVoidPosition()
+                end
+            else
+                if helpers.acquireActionLock("Gun", attackReady and utility.Clock() >= (state.NextShot or 0), deltaTime * 5) then
+                    callback = function()
+                        local clock = utility.Clock()
+
+                        if (state.NextShot or 0) <= clock then
+                            state.NextShot = clock + helpers.weaponShotInterval()
+                        end
+
+                        local fire = network.Fire
+                        local useItem = network.UseItem
+                        local startShooting = network.Tokens.StartShooting
+                        local payload3 = {
+                            [network.B1] = {
+                                [network.B0] = attackBelow and encodedLoweredGun or encodedLoweredMelee,
+                                [network.B1] = attackBelow and encodedRaisedMelee or encodedRaisedGun,
+                                [network.B2] = hitbox2,
+                                [network.B3] = zeroShotOffset,
+                                ["\004"] = fanShot
+                            },
+                            [network.B2] = useRaycast or nil
+                        }
+                        pcall(fire, useItem, weaponId, startShooting, payload3, nil)
+                    end
+                else
+                    serverCF = helpers.randomVoidPosition()
+                end
+
+                local shieldMode2 = helpers.localShieldState()
+                serverCF = helpers.orientAgainstShield(serverCF, shieldMode2, entry)
+
+                if callback then
+
+                    local defense2
+
+                    if shieldMode2 ~= "None" then
+                        defense2 = utility.Vec2(utility.Rad(90), utility.Rad(randomGenerator:NextNumber(0, 360))) or nil
+                    end
+
+                    physics.Defense = defense2
+                end
+
+                defense = physics.Defense
+            end
+
+            helpers.clearAttachmentCaches()
+            state.StickTo = nil
+            state.ServerCF = serverCF
+
+            if defense and api.PushRotation then
+                api.PushRotation(defense)
+            end
+
+            attack.Action = callback
+            attack.Active = callback ~= nil
+            attack.ID = weaponId
+            attack.Entry = entry
+        end
+    end
+
+    function helpers.replaceEncodedAngles(encoded, pitch, yaw, roll)
+        return {
+            [network.B0] = encoded[network.B0],
+            [network.B1] = encoded[network.B1],
+            [network.B2] = encoded[network.B2],
+            [network.B3] = pitch,
+            ["\004"] = yaw,
+            ["\005"] = roll
+        }
+    end
+
+    function helpers.requestReload()
+        if state.Reloading or api.Fighter.Reserve() <= 0 then
+            return
+        end
+
+        local clock = utility.Clock()
+
+        if clock - cache.lastReloadAt < 0.4 then
+            return
+        end
+
+        cache.lastReloadAt = clock
+        local item = api.Fighter.Item()
+
+        if type(item) == "table" and type(item.SimulateInputFromGameplayMechanic) == "function" then
+            state.Reloading = true
+            state.ReloadTimer = 0.35
+            api.AsGame(item.SimulateInputFromGameplayMechanic, item, "StartReloading")
+        else
+            local objectID = api.Fighter.ObjectID()
+
+            if not (objectID and network.Fire and network.Tokens.StartReloading and network.Tokens.Reload) then
+                return
+            end
+
+            state.Reloading = true
+            state.ReloadTimer = 2.5
+            local fire = network.Fire
+            local useItem = network.UseItem
+            local startReloading = network.Tokens.StartReloading
+            local reloads = { [network.B1] = network.Tokens.Reload, [network.B2] = network.Tokens.Reload }
+            pcall(fire, useItem, objectID, startReloading, reloads, nil)
+        end
+    end
+
+    function helpers.segmentIsClear(origin, target)
+        return services.Workspace:Raycast(origin, target - origin, weaponRules.MapParams()) == nil
+    end
+
+    function helpers.sendWeaponShot(weaponId, hitbox, origin, isMelee, fanShot, heavy, useRaycast, meleeRoot)
+        if not (weaponId and network.Fire and network.Tokens.StartShooting and hitbox) then
+            return
+        end
+
+        if not hitbox.Parent then
+            return
+        end
+
+        local encodedOrigin = isMelee and meleeRoot and meleeRoot.Parent and network.MeleeSpot(meleeRoot.Position)
+        or network.Encode(utility.CF(origin, hitbox.Position))
+
+        if not encodedOrigin then
+            return
+        end
+
+        local b1 = network.B1
+        local shotFields = { [network.B0] = encodedOrigin, [network.B1] = encodedOrigin, [network.B2] = hitbox, [network.B3] = network.ShotOffset }
+        local char = utility.Char(4)
+        local fanFlag
+
+        if fanShot then
+            fanFlag = not isMelee or nil
+        end
+
+        shotFields[char] = fanFlag
+        local payload = { [b1] = shotFields }
+        local startShooting = network.Tokens.StartShooting
+
+        if isMelee then
+            if heavy and network.Tokens.StartAiming then
+                local b2 = network.B2
+                startShooting = network.Tokens.StartAiming
+                payload[b2] = network.Tokens.HeavyAttackAnimation1
+            else
+                payload[network.B2] = network.Tokens.AttackAnimation1
+            end
+        elseif useRaycast ~= false then
+            payload[network.B2] = true
+        end
+
+        if api.RecordShot then
+            api.RecordShot(origin, hitbox)
+        end
+
+        local fire = network.Fire
+        local useItem = network.UseItem
+        pcall(fire, useItem, weaponId, startShooting, payload, nil)
+    end
+
+    function helpers.shootFromUnderground(hitbox)
+        local serverTransform = helpers.toServerSpace(hitbox.CFrame)
+        local origin = serverTransform.Position + weaponRules.LIFT
+        local encoded = network.Encode(utility.CF(origin, serverTransform.Position))
+
+        if not (encoded and attack.ID and network.Tokens.StartShooting) then
+            return
+        end
+
+        if api.RecordShot then
+            api.RecordShot(origin, hitbox)
+        end
+
+        local fire = network.Fire
+        local useItem = network.UseItem
+        local id = attack.ID
+        local startShooting = network.Tokens.StartShooting
+        local shotPacket = {
+            [network.B1] = {
+                [network.B0] = encoded,
+                [network.B1] = encoded,
+                [network.B2] = hitbox,
+                [network.B3] = network.ShotOffset,
+                ["\004"] = attack.Fan or nil
+            },
+            [network.B2] = attack.Raycast ~= false or nil
+        }
+        pcall(fire, useItem, id, startShooting, shotPacket, nil)
+    end
+
+    function helpers.shootWithReleasedHitbox(hitbox, character, fanShot)
+        local loosen, value = weaponRules.Loosen(hitbox, character)
+        weaponRules.Shoot(attack.ID, hitbox, helpers.findShotOrigin(value.Position), false, fanShot, false, nil)
+        loosen()
+    end
+
+    function helpers.toServerSpace(transform)
+        local serverCF = state.ServerCF
+        local realCF = state.RealCF
+
+        if not (serverCF and realCF) then
+            return transform
+        end
+
+        local position = transform.Position
+
+        if (position - serverCF.Position).Magnitude <= (position - realCF.Position).Magnitude then
+            return transform
+        end
+
+        return serverCF * realCF:ToObjectSpace(transform)
+    end
+
+    -- Positioning and replication.
+
+    function helpers.applyServerPosition()
+        if api.Option.On("combat.ragebot.enabled") or api.Option.On("combat.ragebot.underground") then
+            local root = api.Body.Root()
+
+            if root then
+                if state.ServerCF then
+                    if not state.Applied then
+                        helpers.captureLocalPosition(root)
+                    end
+
+                    local stickTo = state.StickTo
+                    local position
+
+                    if stickTo and stickTo.Parent and state.StickOffset and helpers.setPhysicsRoot(root, stickTo) then
+                        root.CFrame = state.StickOffset
+                        position = (stickTo.CFrame * state.StickOffset).Position
+                    else
+                        if state.StickRoot == root then
+                            helpers.setPhysicsRoot(root, nil)
+                        end
+
+                        root.CFrame = state.ServerCF
+                        position = state.ServerCF.Position
+                    end
+
+                    state.Applied = true
+                    state.LastPut = root.CFrame.Position
+                    local void = state.Void
+                    local trackPlacement
+
+                    if void then
+                        trackPlacement = not void
+                    else
+                        trackPlacement = state.Placed
+                    end
+
+                    if trackPlacement and (state.Placed - position).Magnitude <= 6 then
+                        state.Frames = (state.Frames or 0) + 1
+                    else
+
+                        local clock = utility.Clock()
+                        state.Frames = 1
+                        state.SettleAt = clock
+                    end
+
+                    state.Placed = position
+
+                    if api.Option.On("combat.ragebot.health_save") then
+                        local teamHealth, frameState3 = api.Targets.TeamHealth()
+
+                        if frameState3 < teamHealth then
+                            attack.Active = false
+                            attack.Action = nil
+                        end
+                    end
+
+                    if api.Option.On("combat.ragebot.enabled") then
+                        helpers.performPreparedAttack()
+                    end
+
+                    if state.Void then
+                        state.ServerCF = helpers.randomVoidPosition()
+                    end
+
+                    return
+                else
+                    attack.Active = false
+
+                    if state.Applied then
+                        state.Applied = false
+
+                        if state.RealCF then
+                            root.CFrame = state.RealCF
+                            return
+                        end
+                    else
+                        helpers.captureLocalPosition(root)
+                    end
+
+                    return
+                end
+            end
+        end
+
+        attack.Active = false
+        state.Applied = false
+    end
+
+    function helpers.bindTripmineTracking()
+        if state.MineBound then
+            return
+        end
+
+        state.MineBound = true
+        local collectionService = services.CollectionService
+
+        local function onMineAdded(mine)
+            state.MineList[mine] = utility.Clock()
+        end
+
+        collectionService:GetInstanceAddedSignal("SubspaceTripmine"):Connect(onMineAdded)
+
+        local function onMineRemoved(mine2)
+            state.MineList[mine2] = nil
+        end
+
+        collectionService:GetInstanceRemovedSignal("SubspaceTripmine"):Connect(onMineRemoved)
+
+        for _, entry in ipairs(collectionService:GetTagged("SubspaceTripmine")) do
+            if state.MineList[entry] == nil then
+                onMineAdded(entry)
+            end
+        end
+    end
+
+    function helpers.captureLocalPosition(root)
+        local cframe = root.CFrame
+        local position = cframe.Position
+
+        if state.RealCF then
+            local atReplicatedPosition = state.LastPut and (position - state.LastPut).Magnitude < 0.05
+            local invalidPosition = position ~= position
+            or utility.Abs(position.X) > 1000000
+            or utility.Abs(position.Y) > 100000
+            or utility.Abs(position.Z) > 1000000
+
+            if atReplicatedPosition or invalidPosition then
+                root.CFrame = state.RealCF
+                state.LastPut = nil
+                return
+            end
+        end
+
+        state.RealCF = cframe
+    end
+
+    function helpers.checkVoidTiming(target, attackReady, leadTime)
+        local character = target.Character or target.Player
+        local timing = physics.Gate[character]
+
+        if not timing then
+            timing = { Expected = 0 }
+            physics.Gate[character] = timing
+        end
+
+        local clock = utility.Clock()
+        local position = target.Root.Position
+
+        if utility.Abs(position.X) < 4194304 and utility.Abs(position.Y) < 4194304 and utility.Abs(position.Z) < 4194304 then
+            if timing.Entry then
+                if attackReady then
+                    timing.Expected = clock - timing.Entry
+                end
+
+                timing.Entry = nil
+            end
+
+            return false
+        else
+            if not timing.Entry then
+                timing.Entry = clock
+            end
+
+            return not (attackReady and timing.Expected - leadTime <= clock - timing.Entry)
+        end
+    end
+
+    function helpers.clearAttachmentCaches()
+        if next(state.Bind) or next(state.Glue) then
+            utility.Clear(state.Bind)
+            utility.Clear(state.Glue)
+        end
+    end
+
+    function helpers.enterVoid()
+        attack.Active = false
+        state.Void = true
+        state.ServerCF = helpers.randomVoidPosition()
+    end
+
+    function helpers.horizontalLookAt(origin, target)
+        local direction = target - origin
+        local vec3 = utility.Vec3(direction.X, 0, direction.Z)
+
+        if vec3.Magnitude < 0.001 then
+            vec3 = Vector3.new(0, 0, -1)
+        end
+
+        return CFrame.lookAt(origin, origin + vec3, Vector3.new(0, -1, 0))
+    end
+
+    function helpers.lowestBarrier(now)
+        if cache.lowestBarrier and cache.lowestBarrier.Parent and now - cache.lastBarrierScan < 5 then
+            return cache.lowestBarrier
+        end
+
+        local huge = utility.Huge
+        local selectedBarrier = nil
+
+        for index = 1, #state.Maps do
+            local barriers = state.Maps[index]:FindFirstChild("Barriers")
+
+            if not barriers then
+                continue
+            end
+
+            for _, entry in ipairs(barriers:GetChildren()) do
+                if not (lethalBarrierNames[entry.Name] and entry:IsA("BasePart")) then
+                    continue
+                end
+
+                local top = entry.Position.Y + entry.Size.Y * 0.5
+
+                if not (top < huge) then
+                    continue
+                end
+
+                selectedBarrier = entry
+                huge = top
+            end
+        end
+
+        cache.lowestBarrier = selectedBarrier
+        cache.lastBarrierScan = now
+        return selectedBarrier
+    end
+
+    function helpers.mapRaycastParameters()
+        local clock = utility.Clock()
+
+        if not (clock - cache.lastMapRaycastRefresh > 2) then
+            return worldRaycastParams
+        end
+
+        cache.lastMapRaycastRefresh = clock
+        local localFighter = api.Fighter.Local()
+        local environmentId = nil
+
+        if type(localFighter) == "table" and type(localFighter.Get) == "function" then
+            local get = localFighter.Get
+            local success, result = pcall(get, localFighter, "EnvironmentID")
+
+            if success then
+                environmentId = result
+            end
+        end
+
+        worldRaycastParams.FilterDescendantsInstances = services.CollectionService:GetTagged("RaycastWhitelist" .. (environmentId == nil and "" or tostring(environmentId) or ""))
+        return worldRaycastParams
+    end
+
+    function helpers.pinTargetHitbox(root, hitbox)
+        if not helpers.setReplicationRoot(root, hitbox) then
+            helpers.restorePinnedHitbox()
+            return hitbox.CFrame
+        end
+
+        if physics.Head ~= hitbox then
+            helpers.restorePinnedHitbox()
+            local info = {}
+            pcall(function()
+                local weldConstraint = hitbox:FindFirstChildOfClass("WeldConstraint")
+
+                if not weldConstraint then
+                    return
+                end
+
+                local cframe = hitbox.CFrame
+                local anchored = hitbox.Anchored
+                local part1 = weldConstraint.Part1
+                local part0
+
+                if weldConstraint.Part0 == hitbox then
+                    part0 = part1
+                else
+                    part0 = weldConstraint.Part0 or part1
+                end
+
+                if part0 and part0 ~= hitbox then
+                    info.Offset = part0.CFrame:ToObjectSpace(cframe)
+                    info.Anchor = part0
+                end
+
+                if part1 then
+                    weldConstraint.Part1 = nil
+                end
+
+                hitbox.Anchored = true
+                info.Weld = weldConstraint
+                info.CFrame = cframe
+                info.Anchored = anchored
+                info.Part1 = part1
+            end)
+            physics.Head = hitbox
+            physics.Info = info
+        end
+
+        local function callback()
+            hitbox.CFrame = utility.CF(physics.Pin.Position)
+        end
+
+        pcall(callback)
+        return physics.Pin
+    end
+
+    function helpers.positionBelowBarrier(now)
+        local barrier = helpers.lowestBarrier(now)
+
+        if not barrier then
+            return nil
+        end
+
+        local root = api.Body.Root()
+
+        if not root then
+            return nil
+        end
+
+        local bottom = barrier.Position.Y - barrier.Size.Y * 0.5
+        local rootHalfDepth = root.Size.Z * 0.5
+        return utility.CF(utility.Vec3(barrier.Position.X, bottom - rootHalfDepth - 0.05, barrier.Position.Z)) * placement.Tilt
+    end
+
+    function helpers.positionBelowMap()
+        if not state.RealCF then
+            return nil
+        end
+
+        local position = state.RealCF.Position
+        local raycastResult = services.Workspace:Raycast(position, Vector3.new(0, -8999999488, 0), placementRaycastParams)
+
+        if raycastResult then
+            return utility.CF(utility.Vec3(position.X, raycastResult.Position.Y - 1.5, position.Z)) * placement.Tilt
+        end
+
+        return nil
+    end
+
+    function helpers.randomVoidPosition()
+        local function randomAxisCoordinate()
+            return (utility.Random(0, 1) == 0 and -1 or 1) * utility.Random(cache.voidDistanceMin, cache.voidDistanceMax)
+        end
+
+        return utility.CF(randomAxisCoordinate(), utility.Random(cache.voidDistanceMin, cache.voidDistanceMax), (randomAxisCoordinate()))
+    end
+
+    function helpers.refreshMapList(now)
+        if now - state.MapStamp < 2 then
+            return
+        end
+
+        state.MapStamp = now
+        utility.Clear(state.Maps)
+
+        for index = 1, #mapNames do
+            local child = services.Workspace:FindFirstChild(mapNames[index])
+
+            if child then
+                state.Maps[#state.Maps + 1] = child
+            end
+        end
+    end
+
+    function helpers.refreshRaycastFilter(now)
+        if now - state.FilterStamp < 0.5 then
+            return
+        end
+
+        state.FilterStamp = now
+        utility.Clear(state.Filter)
+        local players = services.Players:GetPlayers()
+
+        for index = 1, #players do
+            local character = players[index].Character
+
+            if character then
+                state.Filter[#state.Filter + 1] = character
+            end
+        end
+
+        for index2 = 1, #state.Maps do
+            local barriers = state.Maps[index2]:FindFirstChild("Barriers")
+
+            if not barriers then
+                continue
+            end
+
+            for _, entry in ipairs(barriers:GetChildren()) do
+                state.Filter[#state.Filter + 1] = entry
+            end
+        end
+
+        placementRaycastParams.FilterDescendantsInstances = state.Filter
+    end
+
+    function helpers.refreshReplicationMode()
+        local enabled = api.Option.On("combat.ragebot.enabled")
+
+        if enabled then
+            local underground = api.Option.On("combat.ragebot.underground")
+            local inside
+
+            if underground then
+                inside = not underground
+            else
+                inside = not (api.Option.Value("combat.ragebot.strategy") or {}).Hide
+            end
+
+            enabled = inside and "Inside" or "Base"
+        end
+
+        helpers.setReplicationMode(enabled)
+    end
+
+    function helpers.releasePhysicsOverrides()
+        if physics.Head then
+            helpers.restorePinnedHitbox()
+        end
+
+        if physics.Ref then
+            physics.Ref = false
+            local root = api.Body.Root()
+
+            if root then
+                helpers.setReplicationRoot(root, services.Workspace.Terrain)
+            end
+        end
+
+        physics.Defense = nil
+        utility.Clear(physics.Locks)
+        attack.Action = nil
+    end
+
+    function helpers.releaseTargetJoints(part, character)
+        local jointState = releasedJointStates[part]
+        local firstRelease = jointState == nil
+        local cframe
+
+        if firstRelease then
+            local joints = helpers.targetJoints(part, character)
+            jointState = { States = {}, Relative = {}, Count = 0, Joints = joints }
+            jointState.Anchored = part.Anchored
+            cframe = part.CFrame
+
+            for index = 1, #joints do
+                local jointInstance = joints[index]
+
+                if jointInstance:IsA("JointInstance") then
+                    continue
+                end
+
+                local part1 = jointInstance.Part0 == part and jointInstance.Part1 or jointInstance.Part0
+
+                if part1 then
+                    jointState.Relative[index] = part1.CFrame:ToObjectSpace(cframe)
+                end
+            end
+
+            releasedJointStates[part] = jointState
+        else
+            jointState.Count += 1
+            cframe = helpers.restoreJointTransform(part, jointState) or part.CFrame
+        end
+
+        api.Elevated(function()
+            if firstRelease then
+                for index2 = 1, #jointState.Joints do
+                    jointState.States[index2] = jointState.Joints[index2].Enabled
+                    jointState.Joints[index2].Enabled = false
+                end
+            end
+
+            part.Anchored = true
+            part.CFrame = cframe
+        end)
+        local flag = false
+
+        local function callback()
+            if flag then
+                return
+            end
+
+            flag = true
+            jointState.Count -= 1
+
+            if jointState.Count > 0 or releasedJointStates[part] ~= jointState then
+                return
+            end
+
+            releasedJointStates[part] = nil
+            api.Elevated(function()
+                part.Anchored = jointState.Anchored
+
+                for index3 = 1, #jointState.Joints do
+                    local joint = jointState.Joints[index3]
+
+                    if joint.Parent then
+                        joint.Enabled = jointState.States[index3]
+                    end
+                end
+            end)
+        end
+
+        return callback, cframe
+    end
+
+    function helpers.requiresVoidPauses()
+        for index = 1, #state.Maps do
+            if voidPauseMaps[state.Maps[index].Name] then
+                return true
+            end
+        end
+
+        return false
+    end
+
+    function helpers.resetWeaponState()
+        helpers.stopTransport()
+        helpers.clearAttachmentCaches()
+        helpers.releasePhysicsOverrides()
+        state.Await = nil
+        attack.Pinned = nil
+        state.Attached = false
+        state.Applied = false
+        state.TargetID = nil
+        state.Weapon = ""
+        state.Ammo = nil
+        state.AmmoReady = false
+        state.Empty = false
+        state.Reloading = false
+        state.ReloadTimer = 0
+    end
+
+    function helpers.resolveReplicationFlag(name)
+        if replication.Saved[name] == nil then
+            replication.Saved[name] = false
+
+            for _, entry in ipairs(replicationFlagPrefixes) do
+                local flagName = entry .. name
+                local getfflag = getfflag
+                local success, result = pcall(getfflag, flagName)
+
+                if not (success and result ~= nil and tostring(result) ~= "") then
+                    continue
+                end
+
+                local saved = replication.Saved
+                local names = replication.Names
+                saved[name] = tostring(result)
+                names[name] = flagName
+                break
+            end
+        end
+
+        return replication.Saved[name] and replication.Names[name] or nil
+    end
+
+    function helpers.restoreJointTransform(part, jointState)
+        for index = 1, #jointState.Joints do
+            local instance = jointState.Joints[index]
+
+            if not instance.Parent then
+                continue
+            end
+
+            if instance:IsA("JointInstance") then
+                local part0 = instance.Part0
+                local part1 = instance.Part1
+                local transform = instance:IsA("Motor6D") and instance.Transform or CFrame.identity
+
+                if part1 == part and part0 and part0.Parent then
+                    return part0.CFrame * instance.C0 * transform * instance.C1:Inverse()
+                end
+
+                if part0 == part and part1 and part1.Parent then
+                    return part1.CFrame * instance.C1 * transform:Inverse() * instance.C0:Inverse()
+                end
+            else
+                local part1 = instance.Part0 == part and instance.Part1 or instance.Part0
+                local relativeTransform = jointState.Relative[index]
+
+                if relativeTransform and part1 and part1.Parent then
+                    return part1.CFrame * relativeTransform
+                end
+            end
+        end
+
+        return nil
+    end
+
+    function helpers.restoreLocalPosition()
+        state.Applied = false
+        state.StickTo = nil
+        local root = api.Body.Root()
+
+        if root and state.StickRoot == root then
+            helpers.setPhysicsRoot(root, nil)
+        end
+
+        if not (root and state.RealCF) then
+            return
+        end
+
+        root.CFrame = state.RealCF
+        root.AssemblyLinearVelocity = utility.Zero
+        root.AssemblyAngularVelocity = utility.Zero
+    end
+
+    function helpers.restorePinnedHitbox()
+        local head = physics.Head
+        local info = physics.Info
+        physics.Head = nil
+        physics.Info = nil
+
+        if not (head and info and head.Parent) then
+            return
+        end
+
+        pcall(function()
+            local cframe = info.CFrame
+
+            if info.Anchor and info.Anchor.Parent and info.Offset then
+                cframe = info.Anchor.CFrame * info.Offset
+            end
+
+            if cframe then
+                head.CFrame = cframe
+            end
+
+            if info.Weld and info.Part1 then
+                info.Weld.Part1 = info.Part1
+            end
+
+            if info.Anchored ~= nil then
+                head.Anchored = info.Anchored
+            end
+        end)
+    end
+
+    function helpers.setPhysicsRoot(root, replicationRoot)
+        if not setScriptable then
+            return false
+        end
+
+        if state.StickRoot ~= root then
+            if not pcall(setScriptable, root, "PhysicsRepRootPart", true) then
+                return false
+            end
+
+            state.StickRoot = root
+        end
+
+        return pcall(function()
+            root.PhysicsRepRootPart = replicationRoot
+        end)
+    end
+
+    function helpers.setReplicationMode(mode)
+        local active2 = mode or false
+
+        if active2 == replication.Active then
+            return
+        end
+
+        local active = replication.Active
+        replication.Active = active2
+        local nextProfile = not active2 and {} or replicationProfiles[active2] or {}
+
+        local function callback()
+            local Workspace = services.Workspace
+
+            if active2 == "Inside" then
+                if replication.Fallen == nil then
+                    replication.Fallen = Workspace.FallenPartsDestroyHeight
+                end
+
+                Workspace.FallenPartsDestroyHeight = -(0 / 0)
+            elseif replication.Fallen ~= nil then
+                Workspace.FallenPartsDestroyHeight = replication.Fallen
+                replication.Fallen = nil
+            end
+        end
+
+        pcall(callback)
+        if active then
+            for index in next, replicationProfiles[active] do
+                local savedValue = replication.Saved[index]
+
+                if nextProfile[index] or not savedValue then
+                    continue
+                end
+
+                local setfflag = setfflag
+                local name = replication.Names[index]
+                pcall(setfflag, name, savedValue)
+            end
+        end
+
+        for index2, entry in next, nextProfile do
+            local flagName = helpers.resolveReplicationFlag(index2)
+
+            if not flagName then
+                continue
+            end
+
+            local setfflag = setfflag
+            pcall(setfflag, flagName, entry)
+        end
+    end
+
+    function helpers.setReplicationRoot(root, replicationReference)
+        if not setHiddenProperty then
+            return false
+        end
+
+        local previousIdentity = utility.GetIdentity and utility.GetIdentity()
+
+        if utility.SetIdentity then
+            local setIdentity = utility.SetIdentity
+            pcall(setIdentity, 8)
+        end
+
+        local replicationReference2
+
+        if cache.objectReferenceFactory and cache.objectReferenceFactory.new then
+            replicationReference2 = cache.objectReferenceFactory.new(replicationReference) or replicationReference
+        else
+            replicationReference2 = replicationReference
+        end
+
+        local success, result = pcall(setHiddenProperty, root, "PhysicsRepRootRef", replicationReference2)
+
+        if utility.SetIdentity and previousIdentity then
+            local setIdentity = utility.SetIdentity
+            pcall(setIdentity, previousIdentity)
+        end
+
+        local applied = success and result ~= false
+
+        if applied then
+            physics.Ref = replicationReference ~= services.Workspace.Terrain
+        end
+
+        return applied
+    end
+
+    function helpers.stopTransport()
+        attack.Active = false
+        state.Void = false
+
+        if state.ServerCF then
+            state.ServerCF = nil
+            helpers.restoreLocalPosition()
+        end
+    end
+
+    function helpers.targetJoints(part, character)
+        local cachedJoints = jointCache[part]
+
+        if cachedJoints then
+            for index = 1, #cachedJoints do
+                if cachedJoints[index].Parent then
+                    continue
+                end
+
+                cachedJoints = nil
+                break
+            end
+
+            if cachedJoints then
+                return cachedJoints
+            end
+        end
+
+        local descendants = {}
+
+        if character then
+            for _, entry in ipairs(character:GetDescendants()) do
+                if not (entry:IsA("JointInstance") or entry:IsA("WeldConstraint")) then
+                    continue
+                end
+
+                if entry.Part0 == part then
+                    descendants[#descendants + 1] = entry
+                elseif entry.Part1 == part then
+                    descendants[#descendants + 1] = entry
+                end
+            end
+        end
+
+        jointCache[part] = descendants
+        return descendants
+    end
+
+    -- Configuration and main update.
+
+    function helpers.hasServerPosition()
+        return state.ServerCF ~= nil and api.Option.On("combat.ragebot.enabled") and api.Match.Active()
+    end
+
+    function helpers.isEnabled()
+        return api.Option.On("combat.ragebot.enabled") or api.Option.On("combat.ragebot.underground")
+    end
+
+    function helpers.isHiding()
+        if not (state.ServerCF ~= nil and api.Match.Active() and api.Body.Alive()) then
+            return false
+        end
+
+        if api.Option.On("combat.ragebot.underground") then
+            return true
+        end
+
+        return api.Option.On("combat.ragebot.enabled")
+        and (api.Option.Value("combat.ragebot.strategy") or {}).Hide == true
+    end
+
+    function helpers.isUnderground()
+        return state.ServerCF ~= nil
+        and api.Option.On("combat.ragebot.underground")
+        and api.Match.Active()
+        and api.Body.Alive()
+    end
+
+    function helpers.recentKnifeRoot()
+        local knifeRoot = state.KnifeRoot
+
+        if
+        knifeRoot
+        and knifeRoot.Parent
+        and utility.Clock() - (state.KnifeAt or 0) < 0.5
+        and api.Option.On("combat.ragebot.enabled")
+        then
+            return knifeRoot
+        end
+
+        return nil
+    end
+
+    function helpers.refreshHitScanLabel()
+        local combatragebothitscan = controls["combat.ragebot.hitscan"]
+
+        if not (combatragebothitscan and combatragebothitscan.SetLabel) then
+            return
+        end
+
+        local items = api.Fighter.Items()
+        local meleeItem = items and items[3]
+        combatragebothitscan:SetLabel(
+        3,
+        type(meleeItem) == "table" and utility.Get(meleeItem, "Name") == "Knife" and "Knife" or "Melee"
+        )
+    end
+
+    function helpers.refreshHitScanOrder()
+        local localFighter = api.Fighter.Local()
+        local items = api.Fighter.Items()
+
+        if not (localFighter and items) then
+            return
+        end
+
+        local combatragebothitscan = controls["combat.ragebot.hitscan"]
+
+        if combatragebothitscan and combatragebothitscan.Manual then
+            return
+        end
+
+        local order = combatragebothitscan and combatragebothitscan.Order or defaultHitScanOrder
+        local loadedSlot = nil
+        local reloadableSlot = nil
+        local selectedItem = nil
+        local selectedSlot = nil
+
+        for index = 1, #order do
+            local slot = order[index]
+            local item = items[slot]
+
+            if slot == 3 then
+                local ammo
+
+                if loadedSlot then
+                    ammo = not loadedSlot
+                else
+                    ammo = not reloadableSlot
+                end
+
+                if not ammo or type(item) ~= "table" then
+                    break
+                end
+
+                selectedItem = item
+                selectedSlot = 3
+                break
+            elseif type(item) == "table" then
+                local ammo2, reserve = helpers.readItemAmmo(item)
+
+                if not loadedSlot and ammo2 > 0 then
+                    loadedSlot = slot
+                end
+
+                if not reloadableSlot and ammo2 + reserve > 0 then
+                    reloadableSlot = slot
+                end
+            end
+        end
+
+        if not selectedItem then
+            local slot2 = loadedSlot or reloadableSlot
+
+            if slot2 then
+                selectedItem = items[slot2]
+                selectedSlot = slot2
+            else
+                for index2 = 1, #order do
+                    local item = items[order[index2]]
+
+                    if type(item) ~= "table" then
+                        continue
+                    end
+
+                    selectedSlot = order[index2]
+                    selectedItem = item
+                    break
+                end
+            end
+        end
+
+        if not selectedItem or not selectedSlot or utility.Get(selectedItem, "IsEquipped") then
+            return
+        end
+
+        local clientFighter = utility.Get(selectedItem, "ClientFighter") or utility.Get(localFighter, "ClientFighter") or localFighter
+
+        if clientFighter and type(clientFighter.EquipItem) == "function" and not state.Equipping then
+            state.Equipping = true
+            task.spawn(function()
+                local equipItem = clientFighter.EquipItem
+                pcall(equipItem, clientFighter, selectedSlot)
+                state.Equipping = false
+            end)
+        end
+    end
+
+    function helpers.refreshPriorityChoices()
+        local teamID = localPlayer:GetAttribute("TeamID")
+        local names = { "--" }
+
+        for _, entry in ipairs(services.Players:GetPlayers()) do
+            if entry == localPlayer then
+                continue
+            end
+
+            local teamID2 = entry:GetAttribute("TeamID")
+
+            if teamID == nil then
+                names[#names + 1] = entry.Name
+            elseif teamID2 == nil then
+                names[#names + 1] = entry.Name
+            elseif teamID ~= teamID2 then
+                names[#names + 1] = entry.Name
+            end
+        end
+
+        utility.Sort(names, function(leftName, rightName)
+            return leftName == "--" or rightName ~= "--" and leftName < rightName
+        end)
+        local joined = table.concat(names, "\0")
+
+        if joined == cache.selectedPriority then
+            return
+        end
+
+        cache.selectedPriority = joined
+        controls["combat.ragebot.priority"]:SetValues(names)
+    end
+
+    function helpers.cancelAttack(clearTarget)
+        helpers.clearAttachmentCaches()
+        state.Attached = false
+        if clearTarget then
+            state.TargetID = nil
+        end
+        helpers.enterVoid()
+    end
+
+    function helpers.refreshHostileMines(root, now, enabled)
+        helpers.bindTripmineTracking()
+        table.clear(state.Mines_)
+
+        local localFighter = api.Fighter.Local()
+        local teamId
+        local environmentId
+        if type(localFighter) == "table" then
+            if type(localFighter.Get) == "function" then
+                local ok, value = pcall(localFighter.Get, localFighter, "TeamID")
+                if ok then
+                    teamId = value
+                end
+            end
+            environmentId = api.Targets.EnvOf(localFighter)
+        end
+        if teamId == nil then
+            teamId = localPlayer:GetAttribute("TeamID")
+        end
+
+        local origin = state.RealCF and state.RealCF.Position or root and root.Position
+        local fighterController = gameModules.FighterController
+        for mine, placedAt in pairs(state.MineList) do
+            if not mine.Parent or not mine:IsDescendantOf(services.Workspace) then
+                state.MineList[mine] = nil
+                continue
+            end
+
+            local ownerId = mine:GetAttribute("PlacedByUserID")
+            local mineTeamId = mine:GetAttribute("TeamID")
+            local hostile = ownerId ~= localPlayer.UserId
+            and (teamId == nil or mineTeamId == nil or mineTeamId ~= teamId)
+
+            if hostile then
+                local owner = ownerId and services.Players:GetPlayerByUserId(ownerId)
+                local ownerFighter
+                if owner and fighterController and type(fighterController.GetFighter) == "function" then
+                    local ok, value = pcall(fighterController.GetFighter, fighterController, owner)
+                    if ok and type(value) == "table" then
+                        ownerFighter = value
+                    end
+                end
+
+                if ownerFighter and environmentId ~= nil then
+                    local ownerEnvironment = api.Targets.EnvOf(ownerFighter)
+                    if ownerEnvironment ~= nil and ownerEnvironment ~= environmentId then
+                        hostile = false
+                    end
+                elseif origin then
+                    local ok, transform = pcall(mine.GetPivot, mine)
+                    if ok and (transform.Position - origin).Magnitude > 2000 then
+                        hostile = false
+                    end
+                end
+            end
+
+            if hostile then
+                local hitbox = mine:FindFirstChild("Hitbox")
+                local delay = tonumber(mine:GetAttribute("HitboxDelay")) or 0
+                if hitbox and now - (placedAt + delay) < 4 then
+                    state.Mines_[#state.Mines_ + 1] = hitbox
+                end
+            end
+        end
+
+        state.Mines = #state.Mines_ > 0
+        if enabled and root and state.Mines and utility.Touch then
+            for _, hitbox in ipairs(state.Mines_) do
+                if hitbox.Parent then
+                    pcall(utility.Touch, root, hitbox, 1)
+                    pcall(utility.Touch, root, hitbox, 0)
+                end
+            end
+        end
+    end
+
+    function helpers.prepareUndergroundAttack(targets, weaponName, weaponId, deltaTime, now)
+        helpers.refreshMapList(now)
+        helpers.refreshRaycastFilter(now)
+
+        if helpers.requiresVoidPauses() then
+            state.KickTimer -= deltaTime
+            if state.KickTimer <= 0 then
+                state.KickActive = not state.KickActive
+                state.KickTimer = state.KickActive and 1 or 2
+            end
+            if state.KickActive then
+                helpers.cancelAttack(false)
+                return
+            end
+        else
+            state.KickTimer = 2
+            state.KickActive = false
+        end
+
+        state.Void = false
+        local belowMap = helpers.positionBelowMap()
+        if not belowMap then
+            attack.Active = false
+            state.Attached = false
+            if state.ServerCF then
+                state.ServerCF = nil
+                helpers.restoreLocalPosition()
+            end
+            return
+        end
+        state.ServerCF = belowMap
+
+        local target, unrestricted = helpers.selectUndergroundTarget(targets)
+        if not target then
+            attack.Active = false
+            attack.Pinned = nil
+            state.TargetID = nil
+            return
+        end
+
+        local hitbox = target.Character and target.Character:FindFirstChild("HitboxHead")
+        or target.HitboxHead
+        if not hitbox or not hitbox.Parent then
+            attack.Active = false
+            attack.Pinned = nil
+            return
+        end
+
+        helpers.clearAttachmentCaches()
+        local heavyAttack = weaponRules.Melee[weaponName] and weaponName == "Knife"
+        if heavyAttack then
+            state.KnifeRoot = target.Root
+            state.KnifeAt = utility.Clock()
+            helpers.clearWeaponCooldown("Knife")
+            if not helpers.weaponCooldownElapsed("Knife") then
+                state.TargetID = target.ID
+                attack.Active = false
+                return
+            end
+        end
+
+        state.TargetID = target.ID
+        attack.Active = true
+        attack.ID = weaponId
+        attack.Strafe = "Under"
+        attack.Free = unrestricted == true
+        attack.Entry = target
+        attack.Melee = weaponRules.Melee[weaponName] == true
+        attack.Under = true
+        attack.Pinned = hitbox
+        attack.Below = false
+        attack.Heavy = heavyAttack == true
+        attack.Fan = weaponName == "Revolver"
+        attack.Raycast = helpers.weaponUsesRaycast(weaponName)
+    end
+
+    function helpers.prepareAttachedAttack(targets, weaponName, weaponId, now)
+        local target = helpers.selectPriorityTarget(targets)
+        if not target then
+            helpers.cancelAttack(true)
+            return
+        end
+        if not target.Root.Parent or target.Humanoid.Health <= 0 then
+            api.Body.Forget(target.Player)
+            return
+        end
+
+        state.Void = false
+        if target.ID ~= state.TargetID or not state.Attached then
+            helpers.clearAttachmentCaches()
+            state.TargetID = target.ID
+            state.TeleportAt = now
+            state.Attached = true
+        end
+
+        local strategy = (api.Option.Value("combat.ragebot.strategy") or {}).Hide and "Hide" or "Inside"
+        if weaponName == "Knife" then
+            state.KnifeRoot = target.Root
+            state.KnifeAt = utility.Clock()
+        end
+
+        local cooldownReady = (weaponName ~= "Knife" and weaponName ~= "Sniper")
+        or helpers.isWaitingForHit(weaponName)
+        or helpers.weaponCooldownElapsed(weaponName, 0.034)
+        local shotReady = weaponRules.Melee[weaponName] or weaponName == "Sniper"
+        or not (utility.Clock() < (state.NextShot or 0) - 0.1
+        and helpers.weaponShotInterval() >= 0.25)
+        if not cooldownReady or not shotReady then
+            helpers.cancelAttack(false)
+            return
+        end
+
+        local hitbox = helpers.targetHeadHitbox(target)
+        if not hitbox or not target.Root or not target.Root.Parent then
+            helpers.cancelAttack(false)
+            return
+        end
+
+        attack.Pinned = hitbox
+        local below = weaponName ~= "Knife" and helpers.shouldAttackFromBelow(target)
+        local offset = placement.InsideOffset
+        if strategy == "Hide" then
+            helpers.refreshRaycastFilter(now)
+            local position = target.Root.Position
+            local depth = -placement.HideDepth
+            local surface = services.Workspace:Raycast(position, placement.HideRay, placementRaycastParams)
+            if surface then
+                depth = utility.Max(surface.Position.Y - placement.Clearance - position.Y,
+                -placement.HideDepth)
+            end
+            offset = utility.CF(0, depth, 0) * placement.Tilt
+        end
+        if weaponName == "Knife" then
+            offset = placement.KnifeOffset
+        end
+
+        state.ServerCF = target.Root.CFrame * offset
+        state.StickTo = target.Root
+        state.StickOffset = offset
+
+        if weaponRules.HoldReload[weaponName] and (state.Empty or state.Reloading) then
+            attack.Active = false
+            return
+        end
+        if weaponName == "Knife" then
+            local knifeHitbox = helpers.targetHeadHitbox(target)
+            if not knifeHitbox then
+                state.StickTo = nil
+                helpers.enterVoid()
+                return
+            end
+            attack.Pinned = knifeHitbox
+        end
+
+        attack.Active = true
+        attack.ID = weaponId
+        attack.Strafe = strategy
+        attack.Free = false
+        attack.Entry = target
+        attack.Melee = weaponRules.Melee[weaponName] == true
+        attack.Under = false
+        attack.Below = below == true
+        attack.Heavy = weaponName == "Knife"
+        attack.Fan = weaponName == "Revolver"
+        attack.Raycast = helpers.weaponUsesRaycast(weaponName)
+    end
+
+    function helpers.update(deltaTime, now)
+        state.StickTo = nil
+        local enabled = api.Option.On("combat.ragebot.enabled")
+        local underground = api.Option.On("combat.ragebot.underground")
+        local inside = enabled and not underground
+        and not (api.Option.Value("combat.ragebot.strategy") or {}).Hide
+        if not inside then
+            helpers.releasePhysicsOverrides()
+        end
+
+        if not enabled and not underground then
+            state.Mines = false
+            state.Shielded = false
+            state.KickTimer = 2
+            state.KickActive = false
+            cache.voidPauseRemaining = 2
+            cache.voidPauseActive = false
+            helpers.stopTransport()
+            return
+        end
+
+        local root = api.Body.Root()
+        helpers.refreshHostileMines(root, now, enabled)
+        helpers.refreshWeaponState(deltaTime)
+        helpers.bindHitAcknowledgements()
+        local weaponId = api.Fighter.ObjectID()
+
+        if not api.Body.Alive() then
+            helpers.resetWeaponState()
+            return
+        end
+        if not root then
+            helpers.stopTransport()
+            return
+        end
+        if not api.Match.Active() then
+            helpers.resetWeaponState()
+            return
+        end
+        if not enabled then
+            helpers.clearAttachmentCaches()
+            state.Attached = false
+            state.TargetID = nil
+            state.Void = false
+            attack.Active = false
+            local belowMap = helpers.positionBelowMap()
+            if belowMap then
+                state.ServerCF = belowMap
+            elseif state.ServerCF then
+                state.ServerCF = nil
+                helpers.restoreLocalPosition()
+            end
+            return
+        end
+
+        helpers.refreshHitScanOrder()
+        local weaponName = api.Fighter.WeaponName()
+        if not ((weaponName == state.Weapon or state.Weapon == "")
+        and not (utility.Clock() < state.Settle)) then
+            helpers.releasePhysicsOverrides()
+            helpers.cancelAttack(false)
+            return
+        end
+
+        local targets = helpers.collectEnemies()
+        if #targets == 0 then
+            helpers.cancelAttack(true)
+            return
+        end
+        if api.Option.On("combat.ragebot.health_save") then
+            local ownHealth, enemyHealth = api.Targets.TeamHealth()
+            if enemyHealth < ownHealth then
+                helpers.releasePhysicsOverrides()
+                helpers.cancelAttack(true)
+                return
+            end
+        end
+        if not weaponId or weaponName == "" then
+            helpers.cancelAttack(false)
+            return
+        end
+
+        if inside then
+            if acknowledgedWeapons[weaponName] then
+                helpers.releasePhysicsOverrides()
+            else
+                helpers.prepareDirectAttack(targets, weaponName, weaponId, deltaTime, root)
+                return
+            end
+        end
+
+        if state.Mines or weaponRules.Utility[weaponName]
+        or (state.Shielded and not (underground or helpers.canBypassTargetDeflection(weaponName))) then
+            helpers.cancelAttack(true)
+            return
+        end
+        if state.Empty or state.Reloading then
+            if state.Empty and not state.Reloading then
+                helpers.requestReload()
+            end
+            helpers.cancelAttack(false)
+            return
+        end
+
+        if underground then
+            helpers.prepareUndergroundAttack(targets, weaponName, weaponId, deltaTime, now)
+        else
+            helpers.prepareAttachedAttack(targets, weaponName, weaponId, now)
+        end
+    end
+
+    -- Bind shared operations after constructing their implementations.
+    weaponRules.IsDeflecting = helpers.targetIsDeflecting
+    weaponRules.Loosen = helpers.releaseTargetJoints
+    weaponRules.MapParams = helpers.mapRaycastParameters
+    weaponRules.Shoot = helpers.sendWeaponShot
+    network.Encode = helpers.encodeCFrame
+    network.MeleeSpot = helpers.encodeMeleePosition
+
+    -- Public lifecycle. The host calls these in its existing game-loop phases.
+    local controller = { State = state, Attack = attack, Options = options }
+    function controller:SetOption(name, value)
+        assert(Ragebot.DefaultOptions[name] ~= nil, "Unknown Ragebot option: " .. tostring(name))
+        options[name] = value
+    end
+    function controller:SetHitScanOrder(order, manual)
+        assert(type(order) == "table" and #order == 3, "Expected a three-slot weapon order")
+        local seen = {}
+        for _, slot in ipairs(order) do
+            assert(slot == 1 or slot == 2 or slot == 3, "Invalid weapon slot")
+            assert(not seen[slot], "Duplicate weapon slot")
+            seen[slot] = true
+        end
+        local scan = controls["combat.ragebot.hitscan"]
+        scan.Order = table.clone(order)
+        scan.Manual = manual == true
+    end
+    function controller:Update(deltaTime, now)
+        helpers.refreshReplicationMode()
+        helpers.update(deltaTime, now or utility.Clock())
+    end
+    function controller:ApplyPosition()
+        helpers.applyServerPosition()
+    end
+    function controller:RestorePosition()
+        helpers.restoreLocalPosition()
+    end
+    function controller:Reset()
+        helpers.resetWeaponState()
+        helpers.stopTransport()
+        helpers.refreshReplicationMode()
+    end
+    function controller:Disable()
+        options["combat.ragebot.enabled"] = false
+        options["combat.ragebot.underground"] = false
+        self:Reset()
+    end
+    controller.RefreshPriorityChoices = helpers.refreshPriorityChoices
+    function controller:RefreshHitScan()
+        helpers.refreshHitScanLabel()
+        helpers.refreshHitScanOrder()
+    end
+    controller.IsEnabled = helpers.isEnabled
+    controller.IsHiding = helpers.isHiding
+    controller.IsUnderground = helpers.isUnderground
+    controller.HasServerPosition = helpers.hasServerPosition
+    controller.RecentKnifeRoot = helpers.recentKnifeRoot
+    return controller
+end
+
+return Ragebot
